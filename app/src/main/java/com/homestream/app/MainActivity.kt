@@ -53,6 +53,12 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun shell() {
+        // Restored Cast fragments also need a fresh XML inflation pass.
+        if (!supportFragmentManager.isStateSaved) {
+            supportFragmentManager.findFragmentByTag("cast-mini")?.let {
+                supportFragmentManager.beginTransaction().remove(it).commitNow()
+            }
+        }
         root = column().apply { setBackgroundColor(INK) }
         ViewCompat.setOnApplyWindowInsetsListener(root) { view, insets ->
             val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
@@ -61,11 +67,7 @@ class MainActivity : AppCompatActivity() {
         content = column().apply { setPadding(0, 0, 0, dp(40)) }
         if (isTelevision()) televisionShell() else phoneShell()
         setContentView(root)
-        if (castContext(this) != null) {
-            supportFragmentManager.findFragmentByTag("cast-mini")?.let { supportFragmentManager.beginTransaction().remove(it).commitNow() }
-            supportFragmentManager.beginTransaction().replace(R.id.cast_mini,
-                com.google.android.gms.cast.framework.media.widget.MiniControllerFragment(), "cast-mini").commitNow()
-        }
+
     }
 
     private fun phoneShell() {
@@ -89,7 +91,9 @@ class MainActivity : AppCompatActivity() {
         })
         root.addView(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(categories) })
         root.addView(ScrollView(this).apply { clipChildren = false; addView(content) }, LinearLayout.LayoutParams(-1, 0, 1f))
-        root.addView(androidx.fragment.app.FragmentContainerView(this).apply { id = R.id.cast_mini }, LinearLayout.LayoutParams(-1, -2))
+        val miniController = if (castContext(this) != null) castMiniControllerView(root)
+            else FrameLayout(this).apply { id = R.id.cast_mini }
+        root.addView(miniController, LinearLayout.LayoutParams(-1, -2))
         val bottom = LinearLayout(this).apply {
             id = R.id.phone_bottom_navigation; gravity = Gravity.CENTER
             setBackgroundColor(0xFF141414.toInt()); setPadding(dp(12), dp(5), dp(12), dp(5))

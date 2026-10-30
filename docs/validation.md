@@ -5,7 +5,7 @@ The standalone app built successfully using JDK 17 and Android SDK 35.
 | Check | Result |
 | --- | --- |
 | `assembleDebug` | Passed; installable debug APK generated |
-| `testDebugUnitTest` | 13 tests passed, 0 failures |
+| `testDebugUnitTest` | 15 tests passed, 0 failures |
 | `lintDebug` | Passed, 0 errors; advisory dependency/style warnings remain |
 | Pairing HTTP client | Versioned URLs, selected profile, actionable 401, no redirect credential forwarding |
 | Progress payload | Correct 64-bit ticks, selected profile, paused/stopped fields |
@@ -35,3 +35,19 @@ They verify the actual layout code, not design mockups. The local preview run
 used public artwork already referenced by HomeStream's demo metadata; no artwork
 is bundled into the APK or source repository. CI uses an offline placeholder.
 The preview phone lacks Google Play services, so its Cast button is absent.
+
+## 1.0.1 startup crash regression
+
+A Pixel 8a running Android 17 build CP3A.261005.005 was reported to close
+immediately. Local reproduction found that directly constructing the Google
+Cast MiniControllerFragment skipped its `onInflate` style/button initialization
+and threw a NullPointerException while creating the controller view. Earlier
+phone launch tests skipped this branch because Google Play services was absent.
+
+The controller now uses the SDK's XML inflation lifecycle. Two additional tests
+create/rebuild the real Cast controller UI and recreate its hosting Activity;
+both pass. The original programmatic construction failed the regression test.
+Version 1.0.1 (version code 2) passes APK assembly, all 15 tests and Android lint.
+Its signing certificate matches 1.0.0, allowing installation as an update.
+The reported Pixel/Android 17 firmware is not available locally for direct
+hardware verification.

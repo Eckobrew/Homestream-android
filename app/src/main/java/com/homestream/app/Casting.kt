@@ -1,6 +1,10 @@
 package com.homestream.app
 
 import android.content.Context
+import android.view.View
+import android.view.ViewGroup
+import android.widget.FrameLayout
+import androidx.appcompat.app.AppCompatActivity
 import androidx.mediarouter.app.MediaRouteButton
 import com.google.android.gms.common.ConnectionResult
 import com.google.android.gms.common.GoogleApiAvailability
@@ -34,4 +38,12 @@ fun castButton(context: Context): MediaRouteButton? {
         setBackgroundColor(0xFF202020.toInt())
         CastButtonFactory.setUpMediaRouteButton(context, this)
     }
+}
+
+/** Use the SDK's XML inflation lifecycle, including when rebuilding browse screens. */
+internal fun AppCompatActivity.castMiniControllerView(parent: ViewGroup): View {
+    val manager = supportFragmentManager
+    if (manager.isStateSaved) return FrameLayout(this).apply { id = R.id.cast_mini }
+    manager.findFragmentByTag("cast-mini")?.let { manager.beginTransaction().remove(it).commitNow() }
+    return layoutInflater.inflate(R.layout.homestream_cast_mini_controller, parent, false)
 }
