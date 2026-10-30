@@ -43,10 +43,26 @@ process-filtered crash buffer contained no entries after launch.
 
 This verifies the reported startup crash is fixed on the physical Pixel, including
 initialization of the phone Cast UI with Google Play services present. The app
-was not reinstalled and its existing settings were preserved. The phone locked
-before further form and Cast chooser interaction could be verified.
+was not reinstalled and its existing settings were preserved.
 
-Live server pairing, playback, Cast discovery/handoff and actual Android TV
-remote operation remain unverified. The mobile API PR has not been merged or
-deployed. Complete the remaining checklist before a production release.
+## Live pairing and browsing — 30 October 2026
+
+Using the user's supplied household token, the running server reported API v1
+and Cast support. On the same Pixel, an empty server URL correctly showed field
+validation. Valid HTTPS URL/token pairing succeeded, the live home feed loaded,
+library search returned the expected title, and the Movies category loaded.
+No playback, requests or server configuration changes were made by these checks.
+
+Several Jellyfin posters remain blank. Inspecting the existing debug app's Coil
+error objects showed bitmap decode failures. Its cached responses for several
+Jellyfin images had `content-type: image/jpeg` but `content-length: 0` and empty
+bodies; a public CDN image had valid JPEG data. Phone HTTPS connectivity worked.
+The exact failed Jellyfin image also returned HTTP 200 with an empty body on the
+Mac, including at a smaller image size and with different client identifiers.
+Investigate missing/empty artwork responses on the server before attributing
+these placeholders to the Android decoder. No TLS checks were weakened.
+
+Playback, Cast discovery/handoff and actual Android TV remote operation remain
+unverified. The mobile API PR remains open; this development session did not
+merge it or deploy the server. Complete the remaining checklist before a release.
 This project does not imply certification by Netflix, Google or a TV manufacturer.
