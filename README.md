@@ -23,8 +23,8 @@ hero and large landscape rows. Both keep HomeStream branding. This is a native K
 ## Backend setup
 
 The stock HomeStream repository needs the additional `/api/mobile/v1` API routes.
-Those changes are maintained separately in the local HomeStream checkout on
-`feat/mobile-api`. This Android repository has no dependency on the web source,
+Those changes are proposed in [HomeStream PR #1](https://github.com/Eckobrew/HomeStream/pull/1)
+on `feat/mobile-api`. This Android repository has no dependency on the web source,
 Node, npm, a shared filesystem or direct Jellyfin administrator configuration.
 
 1. Apply the mobile API changes to your HomeStream server.
@@ -44,8 +44,13 @@ The app disables backup and does not log tokens or stream URLs.
 
 ## Build
 
-Requires Android Studio or JDK 17, Android SDK Platform 35 and Build Tools 35.0.0.
+Requires JDK 17, Android SDK Platform 35 and Build Tools 35.0.0.
 Android 8.0/API 26 or newer is supported on phones and TVs.
+
+In Android Studio, select JDK 17 under Settings → Build, Execution, Deployment →
+Build Tools → Gradle → Gradle JDK (use Download JDK if needed). Recent Studio
+versions can bundle Java 25, which this project's Gradle 8.11.1 does not support.
+For terminal builds, point `JAVA_HOME` at the same JDK 17 installation.
 
 ```sh
 # Set ANDROID_HOME to your Android SDK, or create local.properties with sdk.dir.
