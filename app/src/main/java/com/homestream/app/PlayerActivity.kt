@@ -4,6 +4,7 @@ import android.content.pm.ActivityInfo
 import android.content.res.ColorStateList
 import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
+import android.media.MediaCodecList
 import android.net.Uri
 import android.os.Bundle
 import android.view.Gravity
@@ -20,10 +21,13 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.lifecycleScope
+import androidx.media3.common.AudioAttributes
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.Tracks
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
 import com.google.android.gms.cast.MediaInfo
@@ -50,6 +54,7 @@ class PlayerActivity : AppCompatActivity() {
     private var currentPlaybackId = ""
     private var prepared = false
     private var transcode = false
+    private var modeBadge: TextView? = null
     private var castLoading = false
     private var wantsPlay = true
     private var timer: Job? = null
@@ -81,6 +86,29 @@ class PlayerActivity : AppCompatActivity() {
         override fun onSessionStarting(session: CastSession) {}
         override fun onSessionEnding(session: CastSession) { position = remote?.approximateStreamPosition ?: position }
         override fun onSessionResuming(session: CastSession, id: String) {}
+    }
+
+    private fun updateModeBadge() {
+        modeBadge?.text = if (transcode) "HLS" else "DIRECT"
+        modeBadge?.background = rounded(if (transcode) 0x66E50914.toInt() else 0x44FFFFFF.toInt(), radius = dp(14).toFloat())
+    }
+
+    private fun getDeviceSupportedAudioCodecs(): String {
+        val codecs = mutableSetOf("aac", "mp3", "opus", "flac", "vorbis")
+        try {
+            val codecInfos = MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos
+            for (info in codecInfos) {
+                if (info.isEncoder) continue
+                for (type in info.supportedTypes) {
+                    when (type.lowercase()) {
+                        "audio/ac3" -> codecs.add("ac3")
+                        "audio/eac3", "audio/eac3-joc" -> codecs.add("eac3")
+                        "audio/vnd.dts", "audio/dts" -> codecs.add("dts")
+                    }
+                }
+            }
+        } catch (_: Exception) {}
+        return codecs.joinToString(",")
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -150,6 +178,28 @@ class PlayerActivity : AppCompatActivity() {
         }
         bar.addView(titleCol, LinearLayout.LayoutParams(0, -2, 1f))
 
+        // Stream format toggle badge (Direct vs Transcode)
+        if (!media.isDownload) {
+            val badge = TextView(this).apply {
+                text = if (transcode) "HLS" else "DIRECT"
+                textSize = 11f
+                typeface = android.graphics.Typeface.DEFAULT_BOLD
+                setTextColor(Color.WHITE)
+                background = rounded(if (transcode) 0x66E50914.toInt() else 0x44000000.toInt(), radius = dp(14).toFloat())
+                setPadding(dp(12), dp(8), dp(12), dp(8))
+                isClickable = true
+                isFocusable = true
+                setOnClickListener {
+                    transcode = !transcode
+                    updateModeBadge()
+                    showMessage(if (transcode) "Switching to compatible HLS transcode…" else "Switching to direct play…")
+                    startLocal()
+                }
+            }
+            modeBadge = badge
+            bar.addView(badge, LinearLayout.LayoutParams(-2, -2).apply { marginEnd = dp(8) })
+        }
+
         // Sleek circular Cast button
         if (!media.isDownload) {
             val castBtn = castButton(this)
@@ -159,7 +209,7 @@ class PlayerActivity : AppCompatActivity() {
                     isClickable = true
                     addView(castBtn, FrameLayout.LayoutParams(dp(24), dp(24), Gravity.CENTER))
                 }
-                bar.addView(castContainer, LinearLayout.LayoutParams(dp(40), dp(40)).apply { marginStart = dp(12) })
+                bar.addView(castContainer, LinearLayout.LayoutParams(dp(40), dp(40)))
             }
         }
         overlay.addView(bar)
@@ -243,11 +293,24 @@ class PlayerActivity : AppCompatActivity() {
                     return@launch
                 }
 
+                updateModeBadge()
+                val audioCodecs = getDeviceSupportedAudioCodecs()
                 val stream = if (media.isDownload) JSONObject().put("streamUrl", media.downloadUrl)
-                    else api.call("playback", mapOf("itemId" to targetId, "forceTranscode" to transcode.toString(), "canPlayHevc" to "true"))
+                    else api.call("playback", mapOf(
+                        "itemId" to targetId,
+                        "forceTranscode" to transcode.toString(),
+                        "canPlayHevc" to "true",
+                        "audioCodecs" to audioCodecs
+                    ))
                 val url = stream.optString("streamUrl")
                 if (url.isBlank()) error("No playable stream returned by Jellyfin.")
                 currentPlaybackId = targetId
+                val isTranscodingStream = stream.optBoolean("isTranscoding") || url.contains(".m3u8")
+                if (isTranscodingStream && !transcode) {
+                    transcode = true
+                    updateModeBadge()
+                }
+
                 val token = ServerSettings(this@PlayerActivity).token
                 val rawUri = api.absolute(url)
                 val isHomeStreamInternal = url.startsWith("/api/") || rawUri.contains("/api/stream/")
@@ -260,7 +323,7 @@ class PlayerActivity : AppCompatActivity() {
                 val tracks = if (media.isDownload) emptyList() else subtitleItems(targetId)
                 val item = MediaItem.Builder().setUri(playUri).setMediaId(targetId)
                     .setSubtitleConfigurations(tracks).apply {
-                        if (stream.optBoolean("isTranscoding") || url.contains(".m3u8")) setMimeType(MimeTypes.APPLICATION_M3U8)
+                        if (isTranscodingStream) setMimeType(MimeTypes.APPLICATION_M3U8)
                     }.build()
                 releaseLocal()
 
@@ -277,8 +340,14 @@ class PlayerActivity : AppCompatActivity() {
                 val mediaSourceFactory = androidx.media3.exoplayer.source.DefaultMediaSourceFactory(this@PlayerActivity)
                     .setDataSourceFactory(httpFactory)
 
+                val audioAttributes = AudioAttributes.Builder()
+                    .setUsage(C.USAGE_MEDIA)
+                    .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
+                    .build()
+
                 player = ExoPlayer.Builder(this@PlayerActivity)
                     .setMediaSourceFactory(mediaSourceFactory)
+                    .setAudioAttributes(audioAttributes, /* handleAudioFocus= */ true)
                     .build().also { exo ->
                     playerView.player = exo
                     exo.addListener(object : Player.Listener {
@@ -286,19 +355,36 @@ class PlayerActivity : AppCompatActivity() {
                             if (state == Player.STATE_READY) { prepared = true; clearMessages() }
                             if (state == Player.STATE_ENDED) { position = exo.duration.coerceAtLeast(0); report(true) }
                         }
+                        override fun onTracksChanged(tracks: Tracks) {
+                            // Detect if media file has audio tracks, but none are supported by hardware/software decoders
+                            val audioGroups = tracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }
+                            if (audioGroups.isNotEmpty()) {
+                                val anySupported = audioGroups.any { it.isSupported }
+                                if (!anySupported && !transcode && !media.isDownload) {
+                                    android.util.Log.w("HomeStream", "Audio format not supported by device decoder. Triggering server transcode fallback.")
+                                    transcode = true
+                                    updateModeBadge()
+                                    showMessage("Audio format not supported by device. Switching to server transcode…")
+                                    startLocal()
+                                }
+                            }
+                        }
                         override fun onPlayerError(error: PlaybackException) {
+                            android.util.Log.e("HomeStream", "Playback error encountered: ${error.errorCodeName} (${error.errorCode})", error)
                             position = exo.currentPosition
                             if (!transcode && !media.isDownload) {
                                 transcode = true
+                                updateModeBadge()
+                                showMessage("Playback issue (${error.errorCodeName}). Switching to compatible transcoding…")
                                 startLocal()
                                 return
                             }
                             clearMessages()
-                            showMessage("Playback failed. Check that this device can reach Jellyfin.")
+                            showMessage("Playback failed (${error.errorCodeName}). Check that this device can reach Jellyfin.")
                             if (media.isDownload) {
                                 showMessage("In-progress downloads may buffer or be unseekable. Wait for more data and retry.")
                                 overlay.addView(action("Retry") { startLocal() })
-                            } else overlay.addView(action("Retry with compatible HLS") { transcode = true; startLocal() })
+                            } else overlay.addView(action("Retry with compatible HLS") { transcode = true; updateModeBadge(); startLocal() })
                         }
                     })
                     exo.setMediaItem(item); exo.seekTo(position); exo.prepare(); exo.playWhenReady = wantsPlay
