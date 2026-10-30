@@ -39,6 +39,9 @@ class MainActivityTest {
             assertNotNull(inputs[0].error)
             assertTrue(dialog.isShowing)
             assertFalse(controller.get().isFinishing)
+            assertNotNull(controller.get().findViewById<View>(R.id.phone_header))
+            assertNotNull(controller.get().findViewById<View>(R.id.phone_bottom_navigation))
+            assertNull(controller.get().findViewById<View>(R.id.tv_navigation_rail))
             dialog.dismiss()
         }
     }
@@ -47,9 +50,11 @@ class MainActivityTest {
         shadowOf(manager).setCurrentModeType(Configuration.UI_MODE_TYPE_TELEVISION)
         Robolectric.buildActivity(MainActivity::class.java).setup().use { controller ->
             assertTrue(controller.get().isTelevision())
+            assertNotNull(controller.get().findViewById<View>(R.id.tv_navigation_rail))
+            assertNull(controller.get().findViewById<View>(R.id.phone_bottom_navigation))
             val buttons = descendants(controller.get().window.decorView).filterIsInstance<Button>()
             for (title in listOf("Home", "Movies", "TV Shows", "Search", "Profiles", "Settings")) {
-                val button = buttons.first { it.text.toString() == title }
+                val button = buttons.first { it.contentDescription?.toString() == title }
                 assertTrue("$title must be reachable by D-pad", button.isFocusable)
                 assertTrue("$title must support remote activation", button.isClickable)
             }
