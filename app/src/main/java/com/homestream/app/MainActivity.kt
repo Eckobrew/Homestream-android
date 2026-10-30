@@ -182,16 +182,20 @@ class MainActivity : AppCompatActivity() {
         mainContainer.addView(ScrollView(this).apply { clipChildren = false; addView(content) },
             LinearLayout.LayoutParams(-1, 0, 1f))
 
-        // Cast mini controller if cast is active
+        // Cast mini controller if cast is active - docked above floating navigation pill
         if (castContext(this) != null) {
             val miniController = castMiniControllerView(mainContainer)
-            mainContainer.addView(miniController, LinearLayout.LayoutParams(-1, -2))
+            mainContainer.addView(miniController, LinearLayout.LayoutParams(-1, -2).apply {
+                bottomMargin = dp(76)
+            })
         }
 
-        // 4. Floating Pill Bottom Navigation Bar (Home, TV Shows, Movies, Requests, Search)
+        // 4. Extended Floating Pill Bottom Navigation Bar (Home, TV Shows, Movies, Requests, Search)
         val floatingNav = createFloatingBottomNav()
-        root.addView(floatingNav, FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply {
-            bottomMargin = dp(16)
+        root.addView(floatingNav, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM).apply {
+            marginStart = dp(12)
+            marginEnd = dp(12)
+            bottomMargin = dp(14)
         })
     }
 
@@ -204,7 +208,7 @@ class MainActivity : AppCompatActivity() {
                 setStroke(dp(1), 0x33FFFFFF.toInt())
             }
             elevation = dp(10).toFloat()
-            setPadding(dp(8), dp(4), dp(8), dp(4))
+            setPadding(dp(4), dp(4), dp(4), dp(4))
         }
 
         val navTabs = listOf(
@@ -219,7 +223,7 @@ class MainActivity : AppCompatActivity() {
             val isActive = (tabKey == "search" && screen == "search") || (tabKey != "search" && currentTab == tabKey && screen != "search")
             val item = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER
-                setPadding(dp(12), dp(6), dp(12), dp(6))
+                setPadding(dp(2), dp(6), dp(2), dp(6))
                 isClickable = true; isFocusable = true
                 background = GradientDrawable().apply {
                     setColor(if (isActive) 0x22FFFFFF.toInt() else Color.TRANSPARENT)
@@ -237,13 +241,15 @@ class MainActivity : AppCompatActivity() {
             item.addView(img, LinearLayout.LayoutParams(dp(20), dp(20)))
 
             val txt = TextView(this).apply {
-                text = title; textSize = 9.5f; typeface = android.graphics.Typeface.DEFAULT_BOLD
+                text = title; textSize = 10f; typeface = android.graphics.Typeface.DEFAULT_BOLD
                 setTextColor(if (isActive) Color.WHITE else MUTED)
                 setPadding(0, dp(2), 0, 0)
+                isSingleLine = true
+                gravity = Gravity.CENTER
             }
             item.addView(txt)
 
-            pill.addView(item)
+            pill.addView(item, LinearLayout.LayoutParams(0, -2, 1f))
         }
 
         return pill
@@ -472,6 +478,7 @@ class MainActivity : AppCompatActivity() {
     // Top Tabs Loading: Home, TV Shows, Movies, Requests
     // -----------------------------------------------------------------------------------------
     private fun loadTab(tab: String) {
+        heroRotationJob?.cancel()
         currentTab = tab
         screen = tab
         fetch("home") { data ->
@@ -604,6 +611,9 @@ class MainActivity : AppCompatActivity() {
             heroRotationJob = lifecycleScope.launch {
                 while (isActive) {
                     delay(7000)
+                    if (screen != "home" || content.findViewById<View>(R.id.featured_card) == null) {
+                        break
+                    }
                     if (heroItems.isNotEmpty()) {
                         currentHeroIndex = (currentHeroIndex + 1) % heroItems.size
                         val nextItem = heroItems[currentHeroIndex]
@@ -640,6 +650,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun hero(item: Media, showActions: Boolean = true) {
+        if (screen != "home") return
         content.findViewById<View>(R.id.featured_card)?.let { content.removeView(it) }
         if (isTelevision()) televisionHero(item, showActions) else phoneHero(item, showActions)
     }
@@ -707,14 +718,25 @@ class MainActivity : AppCompatActivity() {
         if (showActions) {
             val btnRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
 
-            // White Play Button
+            val canPlay = item.isAvailableForPlayback
+            val isReq = item.isRequested
             val playBtn = Button(this).apply {
-                text = "▶  Play"; textSize = 13.5f; typeface = android.graphics.Typeface.DEFAULT_BOLD
-                setTextColor(Color.BLACK); isAllCaps = false
-                background = rounded(Color.WHITE, radius = dp(8).toFloat())
+                text = if (canPlay) (if (item.resumeMs > 0) "▶  Resume" else "▶  Play") else (if (isReq) "⌛  Requested" else "⬇  Request")
+                textSize = 13.5f; typeface = android.graphics.Typeface.DEFAULT_BOLD
+                setTextColor(if (canPlay) Color.BLACK else Color.WHITE); isAllCaps = false
+                background = rounded(if (canPlay) Color.WHITE else if (isReq) 0x66E50914.toInt() else RED, radius = dp(8).toFloat())
                 minHeight = dp(40); minimumHeight = dp(40)
                 setPadding(dp(16), 0, dp(16), 0)
-                setOnClickListener { play(item) }
+                setOnClickListener {
+                    if (item.isAvailableForPlayback) {
+                        play(item)
+                    } else {
+                        requestMediaTitle(item) {
+                            text = "⌛  Requested"
+                            background = rounded(0x66E50914.toInt(), radius = dp(8).toFloat())
+                        }
+                    }
+                }
             }
             btnRow.addView(playBtn, LinearLayout.LayoutParams(-2, dp(40)).apply { marginEnd = dp(10) })
 
@@ -868,6 +890,7 @@ class MainActivity : AppCompatActivity() {
     // Full Netflix Media Details Modal / Screen
     // -----------------------------------------------------------------------------------------
     private fun details(item: Media) {
+        heroRotationJob?.cancel()
         lastDetails = item
         screen = "details"
         fetch("media/${android.net.Uri.encode(item.id)}") { data ->
@@ -940,15 +963,26 @@ class MainActivity : AppCompatActivity() {
             if (duration > 0) badges.addView(TextView(this).apply { text = "  •  ${duration}m"; textSize = 11.5f; setTextColor(MUTED) })
             metaSection.addView(badges)
 
-            // Primary Play / Resume Button
+            // Primary Play / Resume / Request Button
             val playBtn = Button(this).apply {
+                val canPlay = full.isAvailableForPlayback
                 val resume = full.resumeMs > 0
-                text = if (resume) "▶  Resume" else "▶  Play"
+                val isReq = full.isRequested
+                text = if (canPlay) (if (resume) "▶  Resume" else "▶  Play") else (if (isReq) "⌛  Requested" else "⬇  Request to Download")
                 textSize = 14f; typeface = android.graphics.Typeface.DEFAULT_BOLD
-                setTextColor(Color.BLACK); isAllCaps = false
-                background = rounded(Color.WHITE, radius = dp(8).toFloat())
+                setTextColor(if (canPlay) Color.BLACK else Color.WHITE); isAllCaps = false
+                background = rounded(if (canPlay) Color.WHITE else if (isReq) 0x66E50914.toInt() else RED, radius = dp(8).toFloat())
                 minHeight = dp(46); minimumHeight = dp(46)
-                setOnClickListener { play(full) }
+                setOnClickListener {
+                    if (full.isAvailableForPlayback) {
+                        play(full)
+                    } else {
+                        requestMediaTitle(full) {
+                            text = "⌛  Requested"
+                            background = rounded(0x66E50914.toInt(), radius = dp(8).toFloat())
+                        }
+                    }
+                }
             }
             metaSection.addView(playBtn, LinearLayout.LayoutParams(-1, dp(46)).apply { bottomMargin = dp(8) })
 
@@ -1104,11 +1138,25 @@ class MainActivity : AppCompatActivity() {
             }
 
             episodes.forEach { ep ->
+                val canPlayEp = ep.isAvailableForPlayback
                 val epCard = column().apply {
                     background = rounded(0x11FFFFFF.toInt(), radius = dp(8).toFloat())
                     setPadding(dp(10), dp(10), dp(10), dp(10))
                     focusableCard()
-                    setOnClickListener { play(ep) }
+                    setOnClickListener {
+                        if (canPlayEp) {
+                            play(ep)
+                        } else {
+                            AlertDialog.Builder(this@MainActivity)
+                                .setTitle(ep.title)
+                                .setMessage("This episode has not been downloaded yet. Would you like to request it?")
+                                .setPositiveButton("Request Download") { _, _ ->
+                                    requestMediaTitle(full)
+                                }
+                                .setNegativeButton("Cancel", null)
+                                .show()
+                        }
+                    }
                 }
 
                 val topRow = LinearLayout(this).apply {
@@ -1131,7 +1179,7 @@ class MainActivity : AppCompatActivity() {
 
                 // Play icon overlay
                 val playOverlay = ImageView(this).apply {
-                    setImageResource(R.drawable.ic_play_arrow)
+                    setImageResource(if (canPlayEp) R.drawable.ic_play_arrow else R.drawable.ic_download)
                     background = rounded(0x88000000.toInt(), radius = dp(14).toFloat())
                     setPadding(dp(4), dp(4), dp(4), dp(4))
                 }
@@ -1316,6 +1364,7 @@ class MainActivity : AppCompatActivity() {
     // In-Page Netflix Search (No AlertDialog)
     // -----------------------------------------------------------------------------------------
     private fun openSearch() {
+        heroRotationJob?.cancel()
         screen = "search"
         content.removeAllViews()
 
@@ -1512,6 +1561,30 @@ class MainActivity : AppCompatActivity() {
                         mediaRow("Continue Watching", row.mediaList("items"), isContinueWatching = true)
                     }
                 }
+            }
+        }
+    }
+
+    private fun requestMediaTitle(media: Media, onSuccess: (() -> Unit)? = null) {
+        val tmdb = if (media.tmdbId > 0) media.tmdbId else {
+            val strId = media.id.replace("^seerr-(?:movie-|tv-)?".toRegex(), "")
+            strId.toIntOrNull() ?: 0
+        }
+        if (tmdb <= 0) {
+            toast("Cannot request: TMDB ID not found for this title.")
+            return
+        }
+        lifecycleScope.launch {
+            try {
+                toast("Sending download request…")
+                val body = JSONObject()
+                    .put("mediaType", if (media.type == "Series" || media.type == "tv") "tv" else "movie")
+                    .put("mediaId", tmdb)
+                val res = api.call("request", body = body)
+                toast(res.optString("message", "Request sent successfully! It will download automatically."))
+                onSuccess?.invoke()
+            } catch (e: Exception) {
+                toast(e.message ?: "Request failed")
             }
         }
     }

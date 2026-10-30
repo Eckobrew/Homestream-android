@@ -265,6 +265,36 @@ class PlayerActivity : AppCompatActivity() {
             }
         }
     }
+    private fun showUnDownloadedUI(reason: String = "This title has not been downloaded yet.") {
+        clearMessages()
+        showMessage(reason)
+        overlay.addView(action("⬇  Request Download") {
+            lifecycleScope.launch {
+                try {
+                    showMessage("Sending request to download…")
+                    val tmdb = if (media.tmdbId > 0) media.tmdbId else {
+                        val strId = media.id.replace("^seerr-(?:movie-|tv-)?".toRegex(), "")
+                        strId.toIntOrNull() ?: 0
+                    }
+                    if (tmdb > 0) {
+                        api.call("request", body = JSONObject()
+                            .put("mediaId", tmdb)
+                            .put("mediaType", if (media.type == "Series" || media.type == "tv") "tv" else "movie"))
+                        clearMessages()
+                        showMessage("Download requested! It will download automatically.")
+                    } else {
+                        clearMessages()
+                        showMessage("Cannot request: TMDB ID not available.")
+                    }
+                } catch (e: Exception) {
+                    clearMessages()
+                    showMessage(e.message ?: "Request failed")
+                }
+            }
+        })
+        overlay.addView(action("←  Back to Browse") { finish() })
+    }
+
     private fun startLocal() {
         negotiation?.cancel(); clearMessages(); showMessage("Preparing playback…")
         negotiation = lifecycleScope.launch {
@@ -303,20 +333,8 @@ class PlayerActivity : AppCompatActivity() {
                     } catch (_: Exception) {}
                 }
 
-                if (targetId.startsWith("seerr-")) {
-                    clearMessages()
-                    showMessage("This title is not yet available in your Jellyfin collection.")
-                    overlay.addView(action("Request Media") {
-                        lifecycleScope.launch {
-                            try {
-                                showMessage("Requesting…")
-                                api.call("request", body = JSONObject().put("mediaId", media.tmdbId).put("mediaType", if (media.type == "Movie") "movie" else "tv"))
-                                clearMessages(); showMessage("Requested! It will be downloaded automatically.")
-                            } catch (e: Exception) {
-                                clearMessages(); showMessage(e.message ?: "Request failed")
-                            }
-                        }
-                    })
+                if (targetId.startsWith("seerr-") || media.isVirtual) {
+                    showUnDownloadedUI()
                     return@launch
                 }
 
@@ -330,7 +348,10 @@ class PlayerActivity : AppCompatActivity() {
                         "audioCodecs" to audioCodecs
                     ))
                 val url = stream.optString("streamUrl")
-                if (url.isBlank()) error("No playable stream returned by Jellyfin.")
+                if (url.isBlank()) {
+                    showUnDownloadedUI(stream.optString("error", "This title has not been downloaded yet."))
+                    return@launch
+                }
                 currentPlaybackId = targetId
                 val isTranscodingStream = stream.optBoolean("isTranscoding") || url.contains(".m3u8")
                 if (isTranscodingStream && !transcode) {
@@ -399,6 +420,10 @@ class PlayerActivity : AppCompatActivity() {
                         override fun onPlayerError(error: PlaybackException) {
                             android.util.Log.e("HomeStream", "Playback error encountered: ${error.errorCodeName} (${error.errorCode})", error)
                             position = exo.currentPosition
+                            if (error.errorCode == PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS) {
+                                showUnDownloadedUI("Media file has not been downloaded or is not available on Jellyfin.")
+                                return
+                            }
                             if (!transcode && !media.isDownload) {
                                 transcode = true
                                 updateModeBadge()
@@ -412,6 +437,7 @@ class PlayerActivity : AppCompatActivity() {
                                 showMessage("In-progress downloads may buffer or be unseekable. Wait for more data and retry.")
                                 overlay.addView(action("Retry") { startLocal() })
                             } else overlay.addView(action("Retry with compatible HLS") { transcode = true; updateModeBadge(); startLocal() })
+                            overlay.addView(action("←  Back to Browse") { finish() })
                         }
                     })
                     exo.setMediaItem(item); exo.seekTo(position); exo.prepare(); exo.playWhenReady = wantsPlay
@@ -419,8 +445,17 @@ class PlayerActivity : AppCompatActivity() {
                 playerView.requestFocus(); playerView.showController()
             } catch (_: kotlinx.coroutines.CancellationException) {
             } catch (e: Exception) {
-                clearMessages(); showMessage(e.message ?: "Playback could not start.")
-                overlay.addView(action("Retry") { startLocal() })
+                clearMessages()
+                val msg = e.message ?: "Playback could not start."
+                if (msg.contains("not been downloaded", ignoreCase = true) ||
+                    msg.contains("not available", ignoreCase = true) ||
+                    msg.contains("404") || msg.contains("400")) {
+                    showUnDownloadedUI(msg)
+                } else {
+                    showMessage(msg)
+                    overlay.addView(action("Retry") { startLocal() })
+                    overlay.addView(action("←  Back to Browse") { finish() })
+                }
             }
         }
     }
