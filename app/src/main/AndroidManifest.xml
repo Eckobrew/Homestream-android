@@ -19,6 +19,7 @@
         </activity>
         <activity android:name=".PlayerActivity" android:exported="false"
             android:supportsPictureInPicture="true"
+            android:screenOrientation="sensorLandscape"
             android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden" />
         <activity android:name=".CastControllerActivity" android:exported="false" />
     </application>

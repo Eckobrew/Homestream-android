@@ -1,5 +1,9 @@
 package com.homestream.app
 
+import android.content.pm.ActivityInfo
+import android.content.res.ColorStateList
+import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Bundle
 import android.view.Gravity
@@ -7,7 +11,9 @@ import android.view.KeyEvent
 import android.view.View
 import android.view.WindowManager
 import android.widget.FrameLayout
+import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
@@ -41,6 +47,7 @@ class PlayerActivity : AppCompatActivity() {
     private lateinit var overlay: LinearLayout
     private var player: ExoPlayer? = null
     private var position = 0L
+    private var currentPlaybackId = ""
     private var prepared = false
     private var transcode = false
     private var castLoading = false
@@ -57,7 +64,8 @@ class PlayerActivity : AppCompatActivity() {
     private val remoteCallback = object : RemoteMediaClient.Callback() {
         override fun onStatusUpdated() {
             remote?.let { client ->
-                if (client.mediaInfo?.customData?.optString("itemId") == media.playbackId) {
+                val activeId = if (currentPlaybackId.isNotBlank()) currentPlaybackId else media.playbackId
+                if (client.mediaInfo?.customData?.optString("itemId") == activeId) {
                     position = client.approximateStreamPosition
                 }
             }
@@ -77,7 +85,11 @@ class PlayerActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (!isTelevision()) {
+            requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+        }
         media = runCatching { Media(JSONObject(intent.getStringExtra("media") ?: "")) }.getOrElse { finish(); return }
+        currentPlaybackId = media.playbackId
         api = HomeStreamApi(ServerSettings(this))
         position = savedInstanceState?.getLong("position") ?: if (intent.getBooleanExtra("fromBeginning", false)) 0 else media.resumeMs
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -91,13 +103,65 @@ class PlayerActivity : AppCompatActivity() {
             controllerAutoShow = true; controllerShowTimeoutMs = if (isTelevision()) 6000 else 4000
         }
         frame.addView(playerView, FrameLayout.LayoutParams(-1, -1))
+
+        // Netflix-style top control overlay with soft vertical scrim gradient
         overlay = column().apply {
-            setPadding(dp(20), dp(20), dp(20), dp(12)); setBackgroundColor(0xBB080808.toInt())
+            background = GradientDrawable(
+                GradientDrawable.Orientation.TOP_BOTTOM,
+                intArrayOf(0xD9000000.toInt(), 0x90000000.toInt(), 0x00000000)
+            )
+            setPadding(dp(20), dp(16), dp(20), dp(32))
         }
-        val bar = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
-        bar.addView(action("‹ Back") { finish() })
-        bar.addView(label(media.title, 18f, true), LinearLayout.LayoutParams(0, -2, 1f))
-        if (!media.isDownload) castButton(this)?.let { bar.addView(it, LinearLayout.LayoutParams(dp(48), dp(48))) }
+
+        val bar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+
+        // Circular Netflix-style back button
+        val backBtn = FrameLayout(this).apply {
+            background = rounded(0x44000000, radius = dp(20).toFloat())
+            isClickable = true
+            isFocusable = true
+            addView(ImageView(this@PlayerActivity).apply {
+                setImageResource(R.drawable.ic_arrow_back)
+                imageTintList = ColorStateList.valueOf(Color.WHITE)
+            }, FrameLayout.LayoutParams(dp(22), dp(22), Gravity.CENTER))
+            setOnClickListener { finish() }
+        }
+        bar.addView(backBtn, LinearLayout.LayoutParams(dp(40), dp(40)).apply { marginEnd = dp(16) })
+
+        // Title column (shows series name in subtle tone, episode/movie title in bold)
+        val titleCol = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val seriesTitle = media.json.optString("seriesTitle").ifBlank { media.json.optString("seriesName") }
+        if (seriesTitle.isNotBlank() && seriesTitle != media.title) {
+            titleCol.addView(TextView(this).apply {
+                text = seriesTitle; textSize = 12.5f; setTextColor(0xB3FFFFFF.toInt())
+            })
+            titleCol.addView(TextView(this).apply {
+                text = media.title; textSize = 16.5f; typeface = android.graphics.Typeface.DEFAULT_BOLD
+                setTextColor(Color.WHITE); maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
+            })
+        } else {
+            titleCol.addView(TextView(this).apply {
+                text = media.title; textSize = 17.5f; typeface = android.graphics.Typeface.DEFAULT_BOLD
+                setTextColor(Color.WHITE); maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
+            })
+        }
+        bar.addView(titleCol, LinearLayout.LayoutParams(0, -2, 1f))
+
+        // Sleek circular Cast button
+        if (!media.isDownload) {
+            val castBtn = castButton(this)
+            if (castBtn != null) {
+                val castContainer = FrameLayout(this).apply {
+                    background = rounded(0x44000000, radius = dp(20).toFloat())
+                    isClickable = true
+                    addView(castBtn, FrameLayout.LayoutParams(dp(24), dp(24), Gravity.CENTER))
+                }
+                bar.addView(castContainer, LinearLayout.LayoutParams(dp(40), dp(40)).apply { marginStart = dp(12) })
+            }
+        }
         overlay.addView(bar)
         frame.addView(overlay, FrameLayout.LayoutParams(-1, -2, Gravity.TOP))
         playerView.setControllerVisibilityListener(PlayerView.ControllerVisibilityListener { visible ->
@@ -156,15 +220,17 @@ class PlayerActivity : AppCompatActivity() {
                     else api.call("playback", mapOf("itemId" to targetId, "forceTranscode" to transcode.toString()))
                 val url = stream.optString("streamUrl")
                 if (url.isBlank()) error("No playable stream returned by Jellyfin.")
+                currentPlaybackId = targetId
                 val token = ServerSettings(this@PlayerActivity).token
                 val rawUri = api.absolute(url)
-                val playUri = if (token.isNotBlank() && (url.startsWith("/api/") || !rawUri.contains("api_key="))) {
+                val isHomeStreamInternal = url.startsWith("/api/") || rawUri.contains("/api/stream/")
+                val playUri = if (token.isNotBlank() && isHomeStreamInternal && !rawUri.contains("token=")) {
                     Uri.parse(rawUri).buildUpon().appendQueryParameter("token", token).build()
                 } else {
                     Uri.parse(rawUri)
                 }
 
-                val tracks = if (media.isDownload) emptyList() else subtitleItems()
+                val tracks = if (media.isDownload) emptyList() else subtitleItems(targetId)
                 val item = MediaItem.Builder().setUri(playUri).setMediaId(targetId)
                     .setSubtitleConfigurations(tracks).apply {
                         if (stream.optBoolean("isTranscoding") || url.contains(".m3u8")) setMimeType(MimeTypes.APPLICATION_M3U8)
@@ -175,7 +241,9 @@ class PlayerActivity : AppCompatActivity() {
                     .setUserAgent("HomeStream-Android/1.0")
                     .setAllowCrossProtocolRedirects(true)
                     .apply {
-                        if (token.isNotBlank()) setDefaultRequestProperties(mapOf("Authorization" to "Bearer $token"))
+                        if (token.isNotBlank() && isHomeStreamInternal) {
+                            setDefaultRequestProperties(mapOf("Authorization" to "Bearer $token"))
+                        }
                     }
                 val mediaSourceFactory = androidx.media3.exoplayer.source.DefaultMediaSourceFactory(this@PlayerActivity)
                     .setDataSourceFactory(httpFactory)
@@ -214,8 +282,9 @@ class PlayerActivity : AppCompatActivity() {
             }
         }
     }
-    private suspend fun subtitleItems(): List<MediaItem.SubtitleConfiguration> = try {
-        api.call("subtitles", mapOf("itemId" to media.playbackId)).optJSONArray("subtitles")?.let { tracks ->
+    private suspend fun subtitleItems(targetId: String = ""): List<MediaItem.SubtitleConfiguration> = try {
+        val queryId = targetId.ifBlank { if (currentPlaybackId.isNotBlank()) currentPlaybackId else media.playbackId }
+        api.call("subtitles", mapOf("itemId" to queryId)).optJSONArray("subtitles")?.let { tracks ->
             (0 until tracks.length()).map { i ->
                 val track = tracks.getJSONObject(i)
                 // Use Jellyfin's absolute subtitle URL: the player/receiver has no pairing headers.
@@ -284,14 +353,14 @@ class PlayerActivity : AppCompatActivity() {
     private fun report(stopped: Boolean) {
         if (media.isDownload) return
         val client = remote
-        if (client != null && client.mediaInfo?.customData?.optString("itemId") != media.playbackId) return
+        val activeId = if (currentPlaybackId.isNotBlank()) currentPlaybackId else media.playbackId
+        if (client != null && client.mediaInfo?.customData?.optString("itemId") != activeId) return
         if (client != null) position = client.approximateStreamPosition else player?.let { position = it.currentPosition }
         val snapshot = position
         val paused = client?.isPaused ?: (player?.isPlaying == false)
         // A final report must survive Activity destruction (Back/rotation).
-        val id = media.playbackId
         (application as HomeStreamApplication).playbackReports.launch {
-            runCatching { api.progress(id, snapshot, paused, stopped) }
+            runCatching { api.progress(activeId, snapshot, paused, stopped) }
         }
     }
     private fun releaseLocal() { playerView.player = null; player?.release(); player = null; prepared = false }

@@ -35,7 +35,7 @@ fun castButton(context: Context): MediaRouteButton? {
     if (castContext(context) == null) return null
     return MediaRouteButton(context).apply {
         contentDescription = "Cast to a Chromecast device"
-        setBackgroundColor(0xFF202020.toInt())
+        background = null
         CastButtonFactory.setUpMediaRouteButton(context, this)
     }
 }
