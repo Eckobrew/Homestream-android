@@ -45,6 +45,24 @@ class MainActivityTest {
             dialog.dismiss()
         }
     }
+    @Test fun setupOffersExternalServerLoginOption() {
+        Robolectric.buildActivity(MainActivity::class.java).setup().use { controller ->
+            val dialog = ShadowDialog.getLatestDialog()
+            assertTrue(dialog.isShowing)
+            val allButtons = descendants(dialog.window!!.decorView).filterIsInstance<Button>()
+            val extButton = allButtons.firstOrNull { it.text.toString().contains("External Server") }
+            assertNotNull("Setup dialog must have an External Server option", extButton)
+            extButton!!.performClick()
+            val jellyfinDialog = ShadowDialog.getLatestDialog()
+            assertNotNull(jellyfinDialog)
+            assertTrue(jellyfinDialog.isShowing)
+            val extInputs = descendants(jellyfinDialog.window!!.decorView).filterIsInstance<EditText>()
+            // External URL, Username, Password
+            assertTrue(extInputs.size >= 3)
+            jellyfinDialog.dismiss()
+            dialog.dismiss()
+        }
+    }
     @Test fun televisionLaunchOffersRemoteFocusableNavigationWithoutTouch() {
         val manager = RuntimeEnvironment.getApplication().getSystemService(Context.UI_MODE_SERVICE) as UiModeManager
         shadowOf(manager).setCurrentModeType(Configuration.UI_MODE_TYPE_TELEVISION)

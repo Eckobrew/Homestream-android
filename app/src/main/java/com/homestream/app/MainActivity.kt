@@ -27,10 +27,12 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.lifecycleScope
 import coil.load
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import org.json.JSONObject
 
@@ -371,6 +373,55 @@ class MainActivity : AppCompatActivity() {
             btn.addView(badgePill("A–Z"))
             panel.addView(btn, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
         }
+
+        // Divider
+        panel.addView(View(this).apply {
+            setBackgroundColor(0x22FFFFFF.toInt())
+        }, LinearLayout.LayoutParams(-1, dp(1)).apply { setMargins(0, dp(12), 0, dp(16)) })
+
+        // Settings Section Header
+        panel.addView(TextView(this).apply {
+            text = "SETTINGS & CONNECTION"; textSize = 11f; typeface = android.graphics.Typeface.DEFAULT_BOLD
+            setTextColor(MUTED); setPadding(0, 0, 0, dp(10))
+        })
+
+        // Server Settings Button (with External URL configuration)
+        val settingsBtn = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+            background = rounded(0x18FFFFFF.toInt())
+            setPadding(dp(14), dp(12), dp(14), dp(12))
+            isClickable = true
+            setOnClickListener { closeSidebar(); openServerSettingsDialog() }
+        }
+        settingsBtn.addView(ImageView(this).apply {
+            setImageResource(R.drawable.nav_settings); imageTintList = ColorStateList.valueOf(Color.WHITE)
+        }, LinearLayout.LayoutParams(dp(20), dp(20)))
+        val settingsText = column().apply { setPadding(dp(12), 0, 0, 0); layoutParams = LinearLayout.LayoutParams(0, -2, 1f) }
+        settingsText.addView(label("Server Settings", 13.5f, true))
+        settingsText.addView(TextView(this).apply {
+            val mode = if (settings.localUrl.isNotBlank() && settings.externalUrl.isNotBlank()) "Dual URL (Local + Remote)"
+                else if (settings.externalUrl.isNotBlank()) "External URL" else "Local Server"
+            text = mode; textSize = 11f; setTextColor(MUTED)
+        })
+        settingsBtn.addView(settingsText)
+        panel.addView(settingsBtn, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
+
+        // Switch Profile Button
+        val profileBtn = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+            background = rounded(0x18FFFFFF.toInt())
+            setPadding(dp(14), dp(12), dp(14), dp(12))
+            isClickable = true
+            setOnClickListener { closeSidebar(); profiles() }
+        }
+        profileBtn.addView(ImageView(this).apply {
+            setImageResource(R.drawable.nav_profile); imageTintList = ColorStateList.valueOf(Color.WHITE)
+        }, LinearLayout.LayoutParams(dp(20), dp(20)))
+        val profText = column().apply { setPadding(dp(12), 0, 0, 0) }
+        profText.addView(label("Who's Watching?", 13.5f, true))
+        profText.addView(TextView(this).apply { text = "Switch user profile"; textSize = 11f; setTextColor(MUTED) })
+        profileBtn.addView(profText)
+        panel.addView(profileBtn, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
 
         drawer.addView(panel, FrameLayout.LayoutParams(panelWidth, -1, Gravity.START))
         root.addView(drawer, FrameLayout.LayoutParams(-1, -1))
@@ -1463,10 +1514,256 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun openServerSettingsDialog() {
+        val form = column().apply { setPadding(dp(20), dp(12), dp(20), dp(12)) }
+
+        form.addView(label("Connected Server", 16f, true).apply { setPadding(0, 0, 0, dp(6)) })
+
+        val currentLocal = settings.localUrl.ifBlank { settings.baseUrl }
+        val infoBox = column().apply {
+            background = rounded(0x18FFFFFF.toInt(), radius = dp(8).toFloat())
+            setPadding(dp(12), dp(10), dp(12), dp(10))
+        }
+        infoBox.addView(TextView(this).apply {
+            text = "Local Server: ${currentLocal.ifBlank { "Not configured" }}"; textSize = 12f; setTextColor(Color.WHITE)
+        })
+        val authStatus = if (settings.authType == "device") "Device Pairing Token (Keystore secured)"
+            else if (settings.authType == "jellyfin") "Jellyfin Account Authentication" else "Pre-shared Mobile Token"
+        infoBox.addView(TextView(this).apply {
+            text = "Authentication: $authStatus"; textSize = 11f; setTextColor(0xFF10B981.toInt()); setPadding(0, dp(4), 0, dp(2))
+        })
+        form.addView(infoBox, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(14) })
+
+        // External URL Field
+        form.addView(label("External Server URL (Remote Access)", 13.5f, true))
+        form.addView(TextView(this).apply {
+            text = "Set an external reverse proxy / domain (e.g. https://homeflix.example.com) to access your server remotely with your existing device authentication."; textSize = 11f; setTextColor(MUTED)
+            setPadding(0, dp(2), 0, dp(6))
+        })
+        val extInput = EditText(this).apply {
+            hint = "https://homeflix.example.com"
+            setText(settings.externalUrl)
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
+            isSingleLine = true
+        }
+        form.addView(extInput, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(14) })
+
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("Server & Remote Settings")
+            .setView(ScrollView(this).apply { addView(form) })
+            .setPositiveButton("Save External URL") { _, _ ->
+                val ext = extInput.text.toString().trim()
+                settings.updateExternalUrl(ext)
+                toast(if (ext.isNotBlank()) "External URL saved: $ext" else "External URL cleared")
+            }
+            .setNeutralButton("Switch Server") { _, _ -> setup() }
+            .setNegativeButton("Close", null)
+            .create()
+
+        dialog.show()
+    }
+
+    private fun openJellyfinLoginDialog() {
+        val form = column().apply { setPadding(dp(20), dp(10), dp(20), dp(10)) }
+
+        form.addView(label("External HomeStream URL", 13.5f, true))
+        val extUrlInput = EditText(this).apply {
+            hint = "https://homeflix.example.com"
+            setText(settings.externalUrl.ifBlank { if (settings.baseUrl.startsWith("https")) settings.baseUrl else "" })
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
+            isSingleLine = true
+        }
+        form.addView(extUrlInput, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(10) })
+
+        val usersBox = column().apply { visibility = View.GONE }
+        val usersLabel = label("Select User", 13.5f, true)
+        val usersContainer = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL; setPadding(0, dp(4), 0, dp(8))
+        }
+        val usersScroll = HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(usersContainer) }
+        usersBox.addView(usersLabel)
+        usersBox.addView(usersScroll)
+        form.addView(usersBox, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
+
+        val usernameInput = EditText(this).apply {
+            hint = "Jellyfin username"; isSingleLine = true
+        }
+        val passwordInput = EditText(this).apply {
+            hint = "Jellyfin password"; inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD; isSingleLine = true
+        }
+        form.addView(label("Username", 13.5f, true)); form.addView(usernameInput)
+        form.addView(label("Password", 13.5f, true)); form.addView(passwordInput)
+
+        // Helper function to fetch users from the entered URL
+        fun fetchJellyfinUsers(serverUrl: String) {
+            val clean = serverUrl.trim().trimEnd('/')
+            if (clean.isBlank()) return
+            lifecycleScope.launch(Dispatchers.IO) {
+                try {
+                    val u = java.net.URL("$clean/api/mobile/v1/auth/users")
+                    val conn = (u.openConnection() as java.net.HttpURLConnection).apply {
+                        connectTimeout = 4000; readTimeout = 4000
+                    }
+                    if (conn.responseCode == 200) {
+                        val respText = conn.inputStream.bufferedReader().use { it.readText() }
+                        val json = JSONObject(respText)
+                        val uArr = json.optJSONArray("users")
+                        if (uArr != null && uArr.length() > 0) {
+                            withContext(Dispatchers.Main) {
+                                usersContainer.removeAllViews()
+                                for (i in 0 until uArr.length()) {
+                                    val uObj = uArr.getJSONObject(i)
+                                    val uName = uObj.optString("name")
+                                    val uCard = LinearLayout(this@MainActivity).apply {
+                                        orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_HORIZONTAL
+                                        setPadding(dp(8), dp(4), dp(8), dp(4))
+                                        background = rounded(0x22FFFFFF.toInt(), radius = dp(8).toFloat())
+                                        isClickable = true
+                                        setOnClickListener {
+                                            usernameInput.setText(uName)
+                                            passwordInput.requestFocus()
+                                        }
+                                    }
+                                    val avatar = FrameLayout(this@MainActivity).apply {
+                                        background = rounded(RED, radius = dp(18).toFloat())
+                                        addView(TextView(this@MainActivity).apply {
+                                            this.text = uName.take(2).uppercase(); textSize = 12f; typeface = android.graphics.Typeface.DEFAULT_BOLD
+                                            setTextColor(Color.WHITE); gravity = Gravity.CENTER
+                                        }, FrameLayout.LayoutParams(-1, -1))
+                                    }
+                                    uCard.addView(avatar, LinearLayout.LayoutParams(dp(36), dp(36)))
+                                    uCard.addView(TextView(this@MainActivity).apply {
+                                        this.text = uName; textSize = 11f; setTextColor(Color.WHITE); setPadding(0, dp(2), 0, 0)
+                                    })
+                                    usersContainer.addView(uCard, LinearLayout.LayoutParams(-2, -2).apply { marginEnd = dp(8) })
+                                }
+                                usersBox.visibility = View.VISIBLE
+                                if (usernameInput.text.isBlank() && uArr.length() > 0) {
+                                    usernameInput.setText(uArr.getJSONObject(0).optString("name"))
+                                }
+                            }
+                        }
+                    }
+                } catch (_: Exception) {}
+            }
+        }
+
+        extUrlInput.addTextChangedListener(object : TextWatcher {
+            override fun afterTextChanged(s: Editable?) { fetchJellyfinUsers(s.toString()) }
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+        })
+        if (extUrlInput.text.isNotBlank()) fetchJellyfinUsers(extUrlInput.text.toString())
+
+        val jDialog = AlertDialog.Builder(this)
+            .setTitle("Jellyfin Sign In")
+            .setView(ScrollView(this).apply { addView(form) })
+            .setPositiveButton("Sign In", null)
+            .setNegativeButton("Cancel", null)
+            .create()
+
+        jDialog.setOnShowListener {
+            val signBtn = jDialog.getButton(AlertDialog.BUTTON_POSITIVE)
+            signBtn.setOnClickListener {
+                val cleanUrl = extUrlInput.text.toString().trim().trimEnd('/')
+                val username = usernameInput.text.toString().trim()
+                val password = passwordInput.text.toString()
+
+                if (cleanUrl.isBlank()) { extUrlInput.error = "Enter server URL"; return@setOnClickListener }
+                if (username.isBlank()) { usernameInput.error = "Enter username"; return@setOnClickListener }
+
+                signBtn.isEnabled = false; signBtn.text = "Signing in…"
+                val devId = runCatching {
+                    android.provider.Settings.Secure.getString(contentResolver, android.provider.Settings.Secure.ANDROID_ID)
+                }.getOrNull() ?: java.util.UUID.randomUUID().toString()
+                val devName = "${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}".trim()
+
+                lifecycleScope.launch(Dispatchers.IO) {
+                    try {
+                        val u = java.net.URL("$cleanUrl/api/mobile/v1/auth/login")
+                        val conn = (u.openConnection() as java.net.HttpURLConnection).apply {
+                            connectTimeout = 8000; readTimeout = 8000
+                            requestMethod = "POST"
+                            doOutput = true
+                            setRequestProperty("Content-Type", "application/json")
+                        }
+                        val body = JSONObject().put("username", username).put("password", password)
+                            .put("deviceName", devName).put("deviceId", devId)
+                        conn.outputStream.bufferedWriter().use { it.write(body.toString()) }
+
+                        if (conn.responseCode == 200) {
+                            val text = conn.inputStream.bufferedReader().use { it.readText() }
+                            val resp = JSONObject(text)
+                            val token = resp.optString("token")
+                            val userObj = resp.optJSONObject("user")
+                            withContext(Dispatchers.Main) {
+                                settings.saveServer(local = "", external = cleanUrl, token = token, type = "jellyfin", name = userObj?.optString("name", username) ?: username)
+                                userObj?.optString("id")?.let { if (it.isNotBlank()) settings.profile = it }
+                                toast("Signed in as $username!")
+                                jDialog.dismiss()
+                                loadTab("home")
+                            }
+                        } else {
+                            val errText = conn.errorStream?.bufferedReader()?.use { it.readText() }.orEmpty()
+                            val errJson = runCatching { JSONObject(errText) }.getOrNull()
+                            val msg = errJson?.optString("error") ?: "Authentication failed (${conn.responseCode})"
+                            withContext(Dispatchers.Main) {
+                                passwordInput.error = msg
+                                signBtn.isEnabled = true; signBtn.text = "Sign In"
+                            }
+                        }
+                    } catch (e: Exception) {
+                        withContext(Dispatchers.Main) {
+                            passwordInput.error = e.message ?: "Connection error"
+                            signBtn.isEnabled = true; signBtn.text = "Sign In"
+                        }
+                    }
+                }
+            }
+        }
+        jDialog.show()
+    }
+
     private fun setup() {
         val first = settings.baseUrl.isBlank()
         if (first) { shell(); heading("Your cinema. Your collection."); message("Connect to your HomeStream server to begin.") }
-        val form = column().apply { setPadding(dp(24), dp(8), dp(24), dp(8)) }
+        val form = column().apply { setPadding(dp(20), dp(8), dp(20), dp(8)) }
+
+        // 1. Local Auto-Discovery Section
+        val discoverySection = column().apply {
+            background = rounded(0x15FFFFFF.toInt(), radius = dp(8).toFloat())
+            setPadding(dp(12), dp(10), dp(12), dp(10))
+        }
+        val discTitleRow = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
+        discTitleRow.addView(TextView(this).apply {
+            text = "LOCAL SERVERS DISCOVERED"; textSize = 11f; typeface = android.graphics.Typeface.DEFAULT_BOLD
+            setTextColor(RED); layoutParams = LinearLayout.LayoutParams(0, -2, 1f)
+        })
+        val scanStatus = TextView(this).apply {
+            text = "🔍 Scanning network…"; textSize = 10.5f; setTextColor(MUTED)
+        }
+        discTitleRow.addView(scanStatus)
+        discoverySection.addView(discTitleRow, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
+
+        val discoveredServersContainer = column()
+        discoverySection.addView(discoveredServersContainer)
+        form.addView(discoverySection, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(12) })
+
+        // 2. Remote / External Server Option (Jellyfin Auth)
+        val jellyfinRemoteBtn = Button(this).apply {
+            text = "🌐 Connect External Server (Jellyfin Sign In)"; textSize = 12.5f
+            setTextColor(Color.WHITE); isAllCaps = false
+            background = rounded(0x28FFFFFF.toInt(), radius = dp(8).toFloat())
+            minHeight = dp(40); minimumHeight = dp(40)
+            setOnClickListener { openJellyfinLoginDialog() }
+        }
+        form.addView(jellyfinRemoteBtn, LinearLayout.LayoutParams(-1, dp(40)).apply { bottomMargin = dp(14) })
+
+        // 3. Manual Server Setup (Preserving test compatibility & direct pairing token)
+        form.addView(TextView(this).apply {
+            text = "MANUAL SERVER CONNECTION"; textSize = 11f; typeface = android.graphics.Typeface.DEFAULT_BOLD
+            setTextColor(MUTED); setPadding(0, 0, 0, dp(4))
+        })
         val url = EditText(this).apply {
             hint = "https://homestream.example.com"; setText(settings.baseUrl)
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI; isSingleLine = true
@@ -1475,12 +1772,98 @@ class MainActivity : AppCompatActivity() {
             hint = "Server pairing token"; setText(settings.token)
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD; isSingleLine = true
         }
-        form.addView(label("HomeStream server URL", 14f)); form.addView(url)
-        form.addView(label("HOMESTREAM_MOBILE_TOKEN", 14f)); form.addView(token)
-        form.addView(label("Use HTTPS. Set the pairing token on your HomeStream server first.", 12f).apply { setTextColor(MUTED) })
-        val dialog = AlertDialog.Builder(this).setTitle("Connect HomeStream").setView(form)
-            .setPositiveButton("Connect", null).setNegativeButton(if (first) "Close" else "Cancel") { _, _ -> if (first) finish() }
-            .apply { if (!first) setNeutralButton("Disconnect") { _, _ -> settings.clear(); setup() } }.create()
+        form.addView(label("HomeStream server URL", 13f)); form.addView(url)
+        form.addView(label("HOMESTREAM_MOBILE_TOKEN", 13f)); form.addView(token)
+        form.addView(label("Set pairing token or connect via auto-discovered local server above.", 11.5f).apply { setTextColor(MUTED) })
+
+        var discoveryJob: Job? = null
+        val dialog = AlertDialog.Builder(this).setTitle("Connect HomeStream")
+            .setView(ScrollView(this).apply { addView(form) })
+            .setPositiveButton("Connect", null).setNegativeButton(if (first) "Close" else "Cancel") { _, _ ->
+                discoveryJob?.cancel()
+                if (first) finish()
+            }
+            .apply { if (!first) setNeutralButton("Disconnect") { _, _ -> discoveryJob?.cancel(); settings.clear(); setup() } }.create()
+
+        dialog.setOnDismissListener { discoveryJob?.cancel() }
+
+        // Start Discovery
+        val foundServers = mutableListOf<DiscoveredServer>()
+        discoveryJob = NetworkDiscovery.startDiscovery(lifecycleScope) { s ->
+            runOnUiThread {
+                if (foundServers.any { it.url == s.url }) return@runOnUiThread
+                foundServers.add(s)
+                scanStatus.text = "✓ Found (${foundServers.size})"
+
+                val sCard = LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+                    background = rounded(0x22FFFFFF.toInt(), radius = dp(6).toFloat())
+                    setPadding(dp(10), dp(8), dp(10), dp(8))
+                    isClickable = true
+                }
+                val info = column().apply { layoutParams = LinearLayout.LayoutParams(0, -2, 1f) }
+                info.addView(label(s.name, 13f, true))
+                info.addView(TextView(this@MainActivity).apply { text = s.url; textSize = 11f; setTextColor(MUTED) })
+                sCard.addView(info)
+
+                val pairBtn = Button(this@MainActivity).apply {
+                    text = "Pair"; textSize = 11.5f; setTextColor(Color.BLACK); isAllCaps = false
+                    background = rounded(Color.WHITE, radius = dp(6).toFloat())
+                    minHeight = dp(32); minimumHeight = dp(32)
+                    setPadding(dp(12), 0, dp(12), 0)
+                    setOnClickListener {
+                        discoveryJob?.cancel()
+                        isEnabled = false; text = "Pairing…"
+                        val devId = runCatching {
+                            android.provider.Settings.Secure.getString(contentResolver, android.provider.Settings.Secure.ANDROID_ID)
+                        }.getOrNull() ?: java.util.UUID.randomUUID().toString()
+                        val devName = "${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}".trim()
+
+                        lifecycleScope.launch(Dispatchers.IO) {
+                            try {
+                                val u = java.net.URL("${s.url}/api/mobile/v1/auth/pair")
+                                val conn = (u.openConnection() as java.net.HttpURLConnection).apply {
+                                    connectTimeout = 5000; readTimeout = 5000
+                                    requestMethod = "POST"
+                                    doOutput = true
+                                    setRequestProperty("Content-Type", "application/json")
+                                }
+                                val reqBody = JSONObject().put("deviceId", devId).put("deviceName", devName).put("client", "android")
+                                conn.outputStream.bufferedWriter().use { it.write(reqBody.toString()) }
+
+                                if (conn.responseCode == 200) {
+                                    val respText = conn.inputStream.bufferedReader().use { it.readText() }
+                                    val respJson = JSONObject(respText)
+                                    val pairedToken = respJson.optString("token")
+                                    if (pairedToken.isNotBlank()) {
+                                        withContext(Dispatchers.Main) {
+                                            settings.saveServer(local = s.url, external = "", token = pairedToken, type = "device", name = s.name)
+                                            toast("Successfully paired with ${s.name}!")
+                                            dialog.dismiss()
+                                            loadTab("home")
+                                        }
+                                    }
+                                } else {
+                                    withContext(Dispatchers.Main) {
+                                        toast("Local pairing rejected (${conn.responseCode}). Try manual setup.")
+                                        isEnabled = true; text = "Pair"
+                                    }
+                                }
+                            } catch (e: Exception) {
+                                withContext(Dispatchers.Main) {
+                                    toast(e.message ?: "Pairing connection failed")
+                                    isEnabled = true; text = "Pair"
+                                }
+                            }
+                        }
+                    }
+                }
+                sCard.addView(pairBtn, LinearLayout.LayoutParams(-2, dp(32)))
+
+                discoveredServersContainer.addView(sCard, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(6) })
+            }
+        }
+
         dialog.setOnShowListener {
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
                 val parsed = url.text.toString().trim().toHttpUrlOrNull()
@@ -1501,6 +1884,7 @@ class MainActivity : AppCompatActivity() {
                         val capabilities = HomeStreamApi(candidate).call("capabilities")
                         check(capabilities.optInt("apiVersion") == 1) { "This server requires a different app version." }
                         if (dialog.isShowing) {
+                            discoveryJob?.cancel()
                             settings.save(candidate.baseUrl, pairingToken); dialog.dismiss(); loadTab("home")
                         }
                     } catch (e: Exception) {
