@@ -24,8 +24,16 @@ fun Context.label(value: String, size: Float = 16f, bold: Boolean = false) = Tex
     text = value; textSize = size; setTextColor(Color.WHITE)
     if (bold) setTypeface(typeface, Typeface.BOLD)
 }
-fun rounded(color: Int, stroke: Int = Color.TRANSPARENT) = GradientDrawable().apply {
-    setColor(color); cornerRadius = 10f; setStroke(4, stroke)
+fun rounded(color: Int, stroke: Int = Color.TRANSPARENT, radius: Float = 10f) = GradientDrawable().apply {
+    setColor(color); cornerRadius = radius; setStroke(4, stroke)
+}
+fun Context.badgePill(value: String) = TextView(this).apply {
+    text = value; textSize = 11f; setTextColor(Color.WHITE)
+    background = GradientDrawable().apply {
+        setColor(0x33FFFFFF.toInt()); cornerRadius = 6f
+        setStroke(1, 0x66FFFFFF.toInt())
+    }
+    setPadding(dp(6), dp(2), dp(6), dp(2))
 }
 fun View.focusableCard(color: Int = 0xFF202020.toInt()) {
     isFocusable = true; isClickable = true

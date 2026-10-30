@@ -128,17 +128,61 @@ class PlayerActivity : AppCompatActivity() {
         negotiation?.cancel(); clearMessages(); showMessage("Preparing playback…")
         negotiation = lifecycleScope.launch {
             try {
+                var targetId = media.playbackId
+                if (media.type == "Series" && !media.isDownload) {
+                    try {
+                        val details = api.call("media/${android.net.Uri.encode(media.id)}")
+                        val itemObj = details.optJSONObject("item")
+                        val epId = itemObj?.optString("playableEpisodeId") ?: ""
+                        if (epId.isNotBlank()) {
+                            targetId = epId
+                        } else {
+                            val seasons = itemObj?.optJSONArray("seasons")
+                            if (seasons != null && seasons.length() > 0) {
+                                for (sIdx in 0 until seasons.length()) {
+                                    val sObj = seasons.getJSONObject(sIdx)
+                                    val eps = sObj.optJSONArray("episodes")
+                                    if (eps != null && eps.length() > 0) {
+                                        targetId = eps.getJSONObject(0).optString("id", targetId)
+                                        break
+                                    }
+                                }
+                            }
+                        }
+                    } catch (_: Exception) {}
+                }
+
                 val stream = if (media.isDownload) JSONObject().put("streamUrl", media.downloadUrl)
-                    else api.call("playback", mapOf("itemId" to media.playbackId, "forceTranscode" to transcode.toString()))
+                    else api.call("playback", mapOf("itemId" to targetId, "forceTranscode" to transcode.toString()))
                 val url = stream.optString("streamUrl")
                 if (url.isBlank()) error("No playable stream returned by Jellyfin.")
+                val token = ServerSettings(this@PlayerActivity).token
+                val rawUri = api.absolute(url)
+                val playUri = if (token.isNotBlank() && (url.startsWith("/api/") || !rawUri.contains("api_key="))) {
+                    Uri.parse(rawUri).buildUpon().appendQueryParameter("token", token).build()
+                } else {
+                    Uri.parse(rawUri)
+                }
+
                 val tracks = if (media.isDownload) emptyList() else subtitleItems()
-                val item = MediaItem.Builder().setUri(api.absolute(url)).setMediaId(media.playbackId)
+                val item = MediaItem.Builder().setUri(playUri).setMediaId(targetId)
                     .setSubtitleConfigurations(tracks).apply {
-                        if (stream.optBoolean("isTranscoding")) setMimeType(MimeTypes.APPLICATION_M3U8)
+                        if (stream.optBoolean("isTranscoding") || url.contains(".m3u8")) setMimeType(MimeTypes.APPLICATION_M3U8)
                     }.build()
                 releaseLocal()
-                player = ExoPlayer.Builder(this@PlayerActivity).build().also { exo ->
+
+                val httpFactory = androidx.media3.datasource.DefaultHttpDataSource.Factory()
+                    .setUserAgent("HomeStream-Android/1.0")
+                    .setAllowCrossProtocolRedirects(true)
+                    .apply {
+                        if (token.isNotBlank()) setDefaultRequestProperties(mapOf("Authorization" to "Bearer $token"))
+                    }
+                val mediaSourceFactory = androidx.media3.exoplayer.source.DefaultMediaSourceFactory(this@PlayerActivity)
+                    .setDataSourceFactory(httpFactory)
+
+                player = ExoPlayer.Builder(this@PlayerActivity)
+                    .setMediaSourceFactory(mediaSourceFactory)
+                    .build().also { exo ->
                     playerView.player = exo
                     exo.addListener(object : Player.Listener {
                         override fun onPlaybackStateChanged(state: Int) {
@@ -147,6 +191,11 @@ class PlayerActivity : AppCompatActivity() {
                         }
                         override fun onPlayerError(error: PlaybackException) {
                             position = exo.currentPosition
+                            if (!transcode && !media.isDownload) {
+                                transcode = true
+                                startLocal()
+                                return
+                            }
                             clearMessages()
                             showMessage("Playback failed. Check that this device can reach Jellyfin.")
                             if (media.isDownload) {

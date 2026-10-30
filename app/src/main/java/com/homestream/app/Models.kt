@@ -17,6 +17,9 @@ data class Media(val json: JSONObject) {
     val downloadUrl: String get() = json.optString("downloadStreamUrl").ifBlank { json.optString("videoStreamUrl") }
     val isDownload: Boolean get() = json.optBoolean("isDownloading") && downloadUrl.isNotBlank()
     val resumeMs: Long get() = ticksToMs(json.optLong("playbackPositionTicks"))
+    val tmdbId: Int get() = json.optInt("tmdbId")
+    val trailerKey: String get() = json.optString("trailerKey")
+    val playableEpisodeId: String get() = json.optString("playableEpisodeId")
     val playable: Boolean get() = json.optString("source") != "demo" &&
         (isDownload || json.optString("status") == "available" || json.optString("status") == "partially_available" ||
             json.optString("jellyfinId").isNotBlank() || (type == "Episode" && !id.startsWith("seerr-")))
