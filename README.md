@@ -1,13 +1,15 @@
 # HomeStream for Android and Android TV
 
 An independent native Android client for [Eckobrew/HomeStream](https://github.com/eckobrew/homestream).
-Dark cinema styling, red accents, a full-width featured banner, horizontal poster
-rows and remote-friendly controls draw on the Netflix browsing experience while
-keeping HomeStream branding. This is a native Kotlin app, not a wrapped webpage.
+Two separate presentation layouts follow the Netflix experience on each platform:
+phones use a “For You” header, category pills, inset portrait feature card and
+bottom tabs; Android TVs use an expanding left navigation rail, wide backdrop
+hero and large landscape rows. Both keep HomeStream branding. This is a native Kotlin app, not a wrapped webpage.
 
 ## Features
 
-- Phone/tablet touch UI and Android TV launcher with D-pad focus and playback controls.
+- Phone/tablet mobile layout and dedicated Android TV layout with D-pad focus and playback controls.
+- New & Hot discovery and device-local My List, separated by server and profile.
 - HomeStream home feed, continue-watching progress, movies/TV libraries and search.
 - Household profiles, media details, seasons and episode playback.
 - Media3 H.264/AAC direct play or Jellyfin HLS transcoding, resume and subtitles.

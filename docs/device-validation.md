@@ -18,6 +18,9 @@ Before a release, use your deployed HomeStream/Jellyfin configuration:
 | Phone/TV, seek/resume | Seek, leave, reopen and resume within reporting interval |
 | Phone/TV, subtitles | VTT tracks selectable in player settings |
 | Phone/TV, HEVC/incompatible codec | Compatible-HLS retry plays through Jellyfin transcoding |
+| Phone, browse layout | Mobile header/categories, portrait feature card and bottom tabs; no TV rail |
+| TV, browse layout | Left rail, wide hero and landscape rows; no phone bottom tabs |
+| My List | Add/remove persists locally and stays separate for each server/profile |
 | TV, no touch hardware | Launcher entry visible; all browsing/play actions reachable by D-pad |
 | TV, remote transport keys | Play/pause/seek/back work without a touchscreen |
 | TV without Google Play services | Local playback works; Cast sender controls are absent |

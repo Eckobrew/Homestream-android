@@ -58,50 +58,144 @@ class MainActivity : AppCompatActivity() {
             val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
             view.setPadding(bars.left, bars.top, bars.right, bars.bottom); insets
         }
-        val header = LinearLayout(this).apply {
-            gravity = Gravity.CENTER_VERTICAL; setPadding(gutter, dp(10), gutter, dp(10))
-        }
-        header.addView(label("HOMESTREAM", if (isTelevision()) 24f else 20f, true).apply { setTextColor(RED); contentDescription = "HomeStream" })
-        if (isTelevision()) {
-            val nav = LinearLayout(this)
-            nav.addView(action("Home") { loadHome() })
-            nav.addView(action("Movies") { loadLibrary("movies") })
-            nav.addView(action("TV Shows") { loadLibrary("tv") })
-            nav.addView(action("Search") { search() })
-            nav.addView(action("Profiles") { profiles() })
-            nav.addView(action("Settings") { setup() })
-            header.addView(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(nav) }, LinearLayout.LayoutParams(0, dp(64), 1f))
-        } else {
-            header.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f))
-        }
-        castButton(this)?.let { header.addView(it, LinearLayout.LayoutParams(dp(48), dp(48))) }
-        if (!isTelevision()) header.addView(action("⚙") { setup() }.apply { contentDescription = "Server settings"; minWidth = dp(48); minimumWidth = dp(48) })
-        root.addView(header)
-        if (!isTelevision()) {
-            val categories = LinearLayout(this).apply { setPadding(gutter - dp(4), 0, gutter, 0) }
-            categories.addView(action("TV Shows") { loadLibrary("tv") })
-            categories.addView(action("Movies") { loadLibrary("movies") })
-            root.addView(categories)
-        }
         content = column().apply { setPadding(0, 0, 0, dp(40)) }
-        root.addView(ScrollView(this).apply { clipChildren = false; addView(content) }, LinearLayout.LayoutParams(-1, 0, 1f))
-        val mini = androidx.fragment.app.FragmentContainerView(this).apply { id = R.id.cast_mini }
-        root.addView(mini, LinearLayout.LayoutParams(-1, -2))
-        if (!isTelevision()) {
-            val bottom = LinearLayout(this).apply { gravity = Gravity.CENTER; setBackgroundColor(0xFF141414.toInt()); setPadding(dp(12), dp(4), dp(12), dp(4)) }
-            listOf("Home" to { loadHome() }, "Search" to { search() }, "Profiles" to { profiles() }).forEach { (title, click) ->
-                bottom.addView(action(title, title == "Home" && screen == "home", click).apply {
-                    layoutParams = LinearLayout.LayoutParams(0, dp(48), 1f).apply { setMargins(dp(3), 0, dp(3), 0) }
-                })
-            }
-            root.addView(bottom)
-        }
+        if (isTelevision()) televisionShell() else phoneShell()
         setContentView(root)
-        // Fragment is attached only when Cast is supported (Google Play services).
         if (castContext(this) != null) {
             supportFragmentManager.findFragmentByTag("cast-mini")?.let { supportFragmentManager.beginTransaction().remove(it).commitNow() }
-            supportFragmentManager.beginTransaction().replace(mini.id,
+            supportFragmentManager.beginTransaction().replace(R.id.cast_mini,
                 com.google.android.gms.cast.framework.media.widget.MiniControllerFragment(), "cast-mini").commitNow()
+        }
+    }
+
+    private fun phoneShell() {
+        val header = LinearLayout(this).apply {
+            id = R.id.phone_header; gravity = Gravity.CENTER_VERTICAL
+            setPadding(gutter, dp(6), gutter, dp(2))
+        }
+        header.addView(label("For You", 28f, true), LinearLayout.LayoutParams(0, dp(54), 1f))
+        castButton(this)?.let { header.addView(it, LinearLayout.LayoutParams(dp(44), dp(44))) }
+        header.addView(iconButton("Search", R.drawable.nav_search) { search() })
+        root.addView(header)
+        val categories = LinearLayout(this).apply {
+            id = R.id.phone_categories; setPadding(gutter, 0, gutter, dp(12))
+        }
+        categories.addView(categoryPill("TV Shows") { loadLibrary("tv") })
+        categories.addView(categoryPill("Movies") { loadLibrary("movies") })
+        categories.addView(categoryPill("Categories ⌄") {
+            AlertDialog.Builder(this).setTitle("Browse").setItems(arrayOf("Home", "TV Shows", "Movies", "My List")) { _, choice ->
+                when (choice) { 0 -> loadHome(); 1 -> loadLibrary("tv"); 2 -> loadLibrary("movies"); else -> myHomeStream() }
+            }.show()
+        })
+        root.addView(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(categories) })
+        root.addView(ScrollView(this).apply { clipChildren = false; addView(content) }, LinearLayout.LayoutParams(-1, 0, 1f))
+        root.addView(androidx.fragment.app.FragmentContainerView(this).apply { id = R.id.cast_mini }, LinearLayout.LayoutParams(-1, -2))
+        val bottom = LinearLayout(this).apply {
+            id = R.id.phone_bottom_navigation; gravity = Gravity.CENTER
+            setBackgroundColor(0xFF141414.toInt()); setPadding(dp(12), dp(5), dp(12), dp(5))
+        }
+        val tabs = listOf(Triple("Home", R.drawable.nav_home, "home"),
+            Triple("New & Hot", R.drawable.nav_new, "new"), Triple("My HomeStream", R.drawable.nav_profile, "mine"))
+        tabs.forEach { (title, icon, page) ->
+            val tab = action(title) { when (page) { "home" -> loadHome(); "new" -> newAndHot(); else -> myHomeStream() } }.apply {
+                textSize = 10f; setPadding(dp(2), dp(4), dp(2), 0)
+                setCompoundDrawablesWithIntrinsicBounds(0, icon, 0, 0)
+                compoundDrawablePadding = dp(4)
+                setTextColor(if (screen == page) Color.WHITE else MUTED)
+                background = rounded(Color.TRANSPARENT)
+                layoutParams = LinearLayout.LayoutParams(0, dp(58), 1f)
+            }
+            bottom.addView(tab)
+        }
+        root.addView(bottom)
+    }
+
+    private fun televisionShell() {
+        val stage = FrameLayout(this)
+        stage.addView(ScrollView(this).apply { clipChildren = false; addView(content) },
+            FrameLayout.LayoutParams(-1, -1).apply { marginStart = dp(68) })
+        val rail = column().apply {
+            id = R.id.tv_navigation_rail; gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(8), dp(24), dp(8), dp(24))
+            background = GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT,
+                intArrayOf(INK, 0xF0080808.toInt(), 0xDD080808.toInt()))
+        }
+        val entries = listOf(Triple("Profiles", R.drawable.nav_profile, { profiles() }),
+            Triple("Search", R.drawable.nav_search, { search() }),
+            Triple("Home", R.drawable.nav_home, { loadHome() }),
+            Triple("New & Popular", R.drawable.nav_new, { newAndHot() }),
+            Triple("TV Shows", R.drawable.nav_series, { loadLibrary("tv") }),
+            Triple("Movies", R.drawable.nav_movies, { loadLibrary("movies") }),
+            Triple("My List", R.drawable.nav_list, { myHomeStream() }),
+            Triple("Settings", R.drawable.nav_settings, { setup() }))
+        val buttons = entries.map { (title, icon, click) ->
+            action("", click = click).apply {
+                contentDescription = title; tag = title; gravity = Gravity.CENTER_VERTICAL
+                setCompoundDrawablesWithIntrinsicBounds(icon, 0, 0, 0); compoundDrawablePadding = dp(18)
+                setPadding(dp(12), 0, dp(8), 0)
+                background = android.graphics.drawable.StateListDrawable().apply {
+                    addState(intArrayOf(android.R.attr.state_focused), rounded(0xFF383838.toInt()))
+                    addState(intArrayOf(), rounded(Color.TRANSPARENT))
+                }
+                setTextColor(Color.WHITE)
+                layoutParams = LinearLayout.LayoutParams(-1, dp(48)).apply { bottomMargin = dp(4) }
+                rail.addView(this)
+            }
+        }
+        stage.addView(rail, FrameLayout.LayoutParams(dp(68), -1, Gravity.START))
+        stage.viewTreeObserver.addOnGlobalFocusChangeListener { _, focused ->
+            var parent: android.view.ViewParent? = focused?.parent
+            var inside = focused === rail
+            while (parent != null) { if (parent === rail) inside = true; parent = parent.parent }
+            val width = dp(if (inside) 200 else 68)
+            if (rail.layoutParams.width != width) {
+                rail.layoutParams = (rail.layoutParams as FrameLayout.LayoutParams).apply { this.width = width }
+                buttons.forEach { it.text = if (inside) it.tag.toString() else "" }
+            }
+        }
+        root.addView(stage, LinearLayout.LayoutParams(-1, 0, 1f))
+    }
+
+    private fun iconButton(title: String, icon: Int, click: () -> Unit) = action("", click = click).apply {
+        contentDescription = title; setCompoundDrawablesWithIntrinsicBounds(icon, 0, 0, 0)
+        setPadding(dp(10), 0, dp(6), 0); background = rounded(Color.TRANSPARENT)
+        minWidth = dp(44); minimumWidth = dp(44)
+        layoutParams = LinearLayout.LayoutParams(dp(44), dp(48))
+    }
+    private fun categoryPill(title: String, click: () -> Unit) = action(title, click = click).apply {
+        textSize = 12f; minHeight = dp(36); minimumHeight = dp(36)
+        setPadding(dp(14), 0, dp(14), 0)
+        background = GradientDrawable().apply { setColor(Color.TRANSPARENT); cornerRadius = dp(24).toFloat(); setStroke(dp(1), 0xFF777777.toInt()) }
+        layoutParams = LinearLayout.LayoutParams(-2, dp(36)).apply { marginEnd = dp(8) }
+    }
+
+    private fun newAndHot() {
+        screen = "new"
+        fetch("home") { data ->
+            heading(if (isTelevision()) "New & Popular" else "New & Hot", 28f)
+            val rows = data.optJSONArray("requestSections")?.takeIf { it.length() > 0 } ?: data.optJSONArray("sections")
+            rows?.let { for (i in 0 until it.length()) {
+                val row = it.getJSONObject(i); mediaRow(row.optString("title"), row.mediaList("items"))
+            } }
+        }
+    }
+    private fun myHomeStream() {
+        screen = "mine"
+        fetch("home") { data ->
+            heading(if (isTelevision()) "My List" else "My HomeStream", 28f)
+            val account = LinearLayout(this).apply { setPadding(gutter, 0, gutter, dp(12)) }
+            account.addView(action("Switch profile") { profiles() })
+            account.addView(action("Settings") { setup() })
+            content.addView(account)
+            val saved = Watchlist(this, settings).items()
+            if (saved.isEmpty()) message("Add titles to My List from the featured card or a title's details.")
+            else mediaRow("My List", saved)
+            data.optJSONArray("sections")?.let { rows ->
+                for (i in 0 until rows.length()) {
+                    val row = rows.getJSONObject(i)
+                    if (row.optString("id") == "continue-watching") mediaRow("Continue Watching", row.mediaList("items"))
+                }
+            }
         }
     }
 
@@ -119,6 +213,11 @@ class MainActivity : AppCompatActivity() {
                 val data = api.call(path, params)
                 if (generation != current) return@launch
                 content.removeAllViews(); draw(data)
+                if (isTelevision()) content.post {
+                    val targets = ArrayList<View>()
+                    content.addFocusables(targets, View.FOCUS_FORWARD)
+                    targets.firstOrNull()?.requestFocus()
+                }
             } catch (_: kotlinx.coroutines.CancellationException) {
                 // Navigation cancelled this request.
             } catch (e: Exception) {
@@ -143,29 +242,74 @@ class MainActivity : AppCompatActivity() {
         }
     }
     private fun hero(item: Media, showActions: Boolean = true) {
-        val frame = FrameLayout(this)
-        val height = dp(if (isTelevision()) 350 else 390)
+        if (isTelevision()) televisionHero(item, showActions) else phoneHero(item, showActions)
+    }
+
+    private fun phoneHero(item: Media, showActions: Boolean) {
+        val frame = FrameLayout(this).apply {
+            id = R.id.featured_card; background = GradientDrawable().apply {
+                setColor(0xFF242424.toInt()); cornerRadius = dp(12).toFloat(); setStroke(dp(1), 0xFF555555.toInt())
+            }; clipToOutline = true
+        }
+        frame.addView(ImageView(this).apply {
+            scaleType = ImageView.ScaleType.CENTER_CROP
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            load(api.absolute(item.poster.ifBlank { item.backdrop })) { crossfade(true) }
+        }, FrameLayout.LayoutParams(-1, -1))
+        frame.addView(View(this).apply { background = GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
+            intArrayOf(0x00080808, 0x11080808, 0xF0080808.toInt())) }, FrameLayout.LayoutParams(-1, -1))
+        val copy = column().apply { gravity = Gravity.CENTER_HORIZONTAL; setPadding(dp(16), dp(20), dp(16), dp(16)) }
+        copy.addView(label("H O M E S T R E A M", 10f, true).apply { gravity = Gravity.CENTER })
+        copy.addView(label(item.title, 32f, true).apply { gravity = Gravity.CENTER; maxLines = 2 })
+        val genres = item.json.optJSONArray("genres")?.let { array -> (0 until minOf(3, array.length())).map { array.optString(it) }.joinToString("  •  ") }.orEmpty()
+        copy.addView(label(genres.ifBlank { item.metadata }, 12f).apply { gravity = Gravity.CENTER; setPadding(0, dp(8), 0, dp(10)) })
+        if (showActions) {
+            val actions = LinearLayout(this)
+            actions.addView(action("▶ Play", true) { if (item.playable && item.type != "Series") play(item) else details(item) }.apply {
+                layoutParams = LinearLayout.LayoutParams(0, dp(44), 1f).apply { marginEnd = dp(8) }
+            })
+            val list = Watchlist(this, settings)
+            actions.addView(action(if (list.contains(item)) "✓ My List" else "+ My List") {}.apply {
+                setOnClickListener { text = if (list.toggle(item)) "✓ My List" else "+ My List" }
+                layoutParams = LinearLayout.LayoutParams(0, dp(44), 1f)
+            })
+            copy.addView(actions)
+            frame.addView(iconButton("More info", R.drawable.nav_info) { details(item) },
+                FrameLayout.LayoutParams(dp(44), dp(44), Gravity.TOP or Gravity.END))
+        }
+        frame.addView(copy, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
+        val height = dp((resources.configuration.screenHeightDp * .61f).toInt().coerceIn(360, 520))
+        content.addView(frame, LinearLayout.LayoutParams(-1, height).apply { setMargins(gutter, dp(2), gutter, dp(8)) })
+    }
+
+    private fun televisionHero(item: Media, showActions: Boolean) {
+        val frame = FrameLayout(this).apply { id = R.id.featured_card }
         frame.addView(ImageView(this).apply {
             scaleType = ImageView.ScaleType.CENTER_CROP
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
             load(api.absolute(item.backdrop)) { crossfade(true) }
         }, FrameLayout.LayoutParams(-1, -1))
+        frame.addView(View(this).apply { background = GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT,
+            intArrayOf(INK, 0xCC080808.toInt(), 0x00080808)) }, FrameLayout.LayoutParams(-1, -1))
         frame.addView(View(this).apply { background = GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
-            intArrayOf(0x33080808, 0x99080808.toInt(), INK)) }, FrameLayout.LayoutParams(-1, -1))
-        val copy = column().apply { setPadding(gutter, dp(30), gutter, dp(16)) }
-        copy.addView(label("H O M E S T R E A M   •   FEATURED", 11f, true).apply { setTextColor(MUTED) })
-        copy.addView(label(item.title, if (isTelevision()) 38f else 32f, true).apply { maxLines = 3 })
-        copy.addView(label(item.metadata, 13f).apply { setPadding(0, dp(8), 0, dp(8)); setTextColor(MUTED) })
-        copy.addView(label(item.overview, 14f).apply { maxLines = 3 })
+            intArrayOf(0x00080808, 0x00080808, INK)) }, FrameLayout.LayoutParams(-1, -1))
+        val copy = column().apply { setPadding(gutter, dp(40), dp(16), dp(32)) }
+        copy.addView(label("H O M E S T R E A M   •   FEATURED", 12f, true).apply { setTextColor(MUTED) })
+        copy.addView(label(item.title, 40f, true).apply { maxLines = 2 })
+        copy.addView(label(item.metadata, 14f).apply { setPadding(0, dp(12), 0, dp(12)); setTextColor(MUTED) })
+        copy.addView(label(item.overview, 16f).apply { maxLines = 3 })
         if (showActions) {
-            val actions = LinearLayout(this)
-            if (item.playable && (item.type != "Series" || item.isDownload)) actions.addView(action("▶ Play", true) { play(item) })
-            actions.addView(action("ⓘ More info") { details(item) })
+            val actions = LinearLayout(this).apply { setPadding(0, dp(12), 0, 0) }
+            actions.addView(action("▶ Play", true) { if (item.playable && item.type != "Series") play(item) else details(item) })
+            actions.addView(action("More Info") { details(item) })
             copy.addView(actions)
         }
-        frame.addView(copy, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
+        val copyWidth = dp(((resources.configuration.screenWidthDp - 68) * .56f).toInt())
+        frame.addView(copy, FrameLayout.LayoutParams(copyWidth, -2, Gravity.CENTER_VERTICAL))
+        val height = dp((resources.configuration.screenHeightDp * .70f).toInt().coerceIn(330, 480))
         content.addView(frame, LinearLayout.LayoutParams(-1, height))
     }
+
     private fun mediaRow(title: String, items: List<Media>) {
         if (items.isEmpty()) return
         heading(title)
@@ -179,16 +323,16 @@ class MainActivity : AppCompatActivity() {
             card.addView(ImageView(this).apply {
                 scaleType = ImageView.ScaleType.CENTER_CROP
                 importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-                load(api.absolute(item.poster)) { crossfade(true); error(R.drawable.ic_homestream) }
-            }, LinearLayout.LayoutParams(-1, dp(190)))
+                load(api.absolute(if (isTelevision()) item.backdrop else item.poster)) { crossfade(true); error(R.drawable.ic_homestream) }
+            }, LinearLayout.LayoutParams(-1, dp(if (isTelevision()) 126 else 158)))
             if (item.json.optDouble("progressPercent") > 0) {
                 card.addView(ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
                     max = 100; progress = item.json.optDouble("progressPercent").toInt()
                     progressTintList = android.content.res.ColorStateList.valueOf(RED)
                 }, LinearLayout.LayoutParams(-1, dp(4)))
             }
-            card.addView(label(item.title, 13f, true).apply { maxLines = 2; setPadding(dp(4), dp(6), dp(4), 0) })
-            row.addView(card, LinearLayout.LayoutParams(dp(140), -2).apply { setMargins(0, 0, dp(10), 0) })
+            if (isTelevision()) card.addView(label(item.title, 13f, true).apply { maxLines = 1; setPadding(dp(4), dp(6), dp(4), 0) })
+            row.addView(card, LinearLayout.LayoutParams(dp(if (isTelevision()) 224 else 112), -2).apply { setMargins(0, 0, dp(10), 0) })
         }
         content.addView(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; clipChildren = false; addView(row) })
     }
@@ -227,6 +371,10 @@ class MainActivity : AppCompatActivity() {
         fetch("media/${android.net.Uri.encode(item.id)}") { data ->
             val full = Media(data.getJSONObject("item")); hero(full, false)
             heading(full.title); message(full.overview)
+            val list = Watchlist(this, settings)
+            content.addView(action(if (list.contains(full)) "✓ My List" else "+ My List") {}.apply {
+                setOnClickListener { text = if (list.toggle(full)) "✓ My List" else "+ My List" }
+            })
             if ((full.type != "Series" || full.isDownload) && full.playable) {
                 content.addView(action(if (full.resumeMs > 0) "▶ Resume" else "▶ Play", true) { play(full) })
                 if (full.resumeMs > 0) content.addView(action("Play from beginning") { play(full, true) })

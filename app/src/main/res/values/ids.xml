@@ -1,1 +1,8 @@
-<resources><item name="cast_mini" type="id" /></resources>
+<resources>
+    <item name="cast_mini" type="id" />
+    <item name="phone_header" type="id" />
+    <item name="phone_categories" type="id" />
+    <item name="phone_bottom_navigation" type="id" />
+    <item name="tv_navigation_rail" type="id" />
+    <item name="featured_card" type="id" />
+</resources>
