@@ -500,7 +500,7 @@ class MainActivity : AppCompatActivity() {
                     url.error = "Enter an HTTP(S) server URL without credentials, query or fragment"; return@setOnClickListener
                 }
                 val pairingToken = token.text.toString().trim()
-                if (pairingToken.length < 32) { token.error = "Token must contain at least 32 characters"; return@setOnClickListener }
+                if (pairingToken.length < 6) { token.error = "Token must contain at least 6 characters"; return@setOnClickListener }
                 val button = dialog.getButton(AlertDialog.BUTTON_POSITIVE)
                 button.isEnabled = false; button.text = "Connecting…"
                 lifecycleScope.launch {
