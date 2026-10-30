@@ -842,8 +842,11 @@ class MainActivity : AppCompatActivity() {
             }
             metaSection.addView(playBtn, LinearLayout.LayoutParams(-1, dp(46)).apply { bottomMargin = dp(8) })
 
-            // Secondary Buttons (+ My List, Download, Request)
-            val btnRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+            // Secondary Buttons (+ My List, Request, Download)
+            val btnRow = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
             val list = Watchlist(this, settings)
             val listBtn = Button(this).apply {
                 text = if (list.contains(full)) "✓ My List" else "+ My List"; textSize = 12.5f
@@ -853,16 +856,6 @@ class MainActivity : AppCompatActivity() {
                 setOnClickListener { text = if (list.toggle(full)) "✓ My List" else "+ My List" }
             }
             btnRow.addView(listBtn, LinearLayout.LayoutParams(0, dp(40), 1f).apply { marginEnd = dp(8) })
-
-            // Download Button
-            val dlBtn = Button(this).apply {
-                text = "⬇ Download"; textSize = 12.5f
-                setTextColor(Color.WHITE); isAllCaps = false
-                background = rounded(0x33FFFFFF.toInt(), radius = dp(8).toFloat())
-                minHeight = dp(40); minimumHeight = dp(40)
-                setOnClickListener { triggerDownload(full) }
-            }
-            btnRow.addView(dlBtn, LinearLayout.LayoutParams(0, dp(40), 1f).apply { marginEnd = dp(8) })
 
             // Request Button if not available
             if (!full.playable && full.tmdbId > 0 && full.json.optString("status") != "available") {
@@ -883,8 +876,18 @@ class MainActivity : AppCompatActivity() {
                         }
                     }
                 }
-                btnRow.addView(reqBtn, LinearLayout.LayoutParams(0, dp(40), 1f))
+                btnRow.addView(reqBtn, LinearLayout.LayoutParams(0, dp(40), 1f).apply { marginEnd = dp(8) })
             }
+
+            // Download Button (aligned to right)
+            val dlBtn = Button(this).apply {
+                text = "⬇ Download"; textSize = 12.5f
+                setTextColor(Color.WHITE); isAllCaps = false
+                background = rounded(0x33FFFFFF.toInt(), radius = dp(8).toFloat())
+                minHeight = dp(40); minimumHeight = dp(40)
+                setOnClickListener { triggerDownload(full) }
+            }
+            btnRow.addView(dlBtn, LinearLayout.LayoutParams(0, dp(40), 1f))
             metaSection.addView(btnRow)
 
             // Synopsis
@@ -1052,16 +1055,21 @@ class MainActivity : AppCompatActivity() {
                 })
                 topRow.addView(titleCol)
 
-                // Episode Download Button
+                // Episode Download Button (aligned to right)
                 val dlBtn = ImageView(this).apply {
-                    setImageResource(R.drawable.ic_download); imageTintList = ColorStateList.valueOf(MUTED)
+                    setImageResource(R.drawable.ic_download)
+                    imageTintList = ColorStateList.valueOf(Color.WHITE)
+                    background = rounded(0x22FFFFFF.toInt(), radius = dp(18).toFloat())
                     setPadding(dp(8), dp(8), dp(8), dp(8))
                     isClickable = true
+                    contentDescription = "Download episode"
                     setOnClickListener { triggerDownload(ep) }
                 }
-                topRow.addView(dlBtn, LinearLayout.LayoutParams(dp(36), dp(36)))
+                topRow.addView(dlBtn, LinearLayout.LayoutParams(dp(36), dp(36)).apply {
+                    gravity = Gravity.CENTER_VERTICAL
+                })
 
-                epCard.addView(topRow)
+                epCard.addView(topRow, LinearLayout.LayoutParams(-1, -2))
                 episodesContainer.addView(epCard, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
             }
         }
@@ -1132,7 +1140,13 @@ class MainActivity : AppCompatActivity() {
 
         lifecycleScope.launch {
             try {
-                val recData = api.call("media/${android.net.Uri.encode(full.id)}/recommendations")
+                val params = mutableMapOf<String, String>()
+                params["type"] = if (full.type == "Series" || full.type == "Episode") "tv" else "movie"
+                val tmdb = full.json.optInt("tmdbId").takeIf { it > 0 } ?: full.tmdbId
+                if (tmdb > 0) {
+                    params["tmdbId"] = tmdb.toString()
+                }
+                val recData = api.call("media/${android.net.Uri.encode(full.id)}/recommendations", params)
                 val recs = recData.mediaList("recommendations")
                 container.removeAllViews()
 
@@ -1145,11 +1159,30 @@ class MainActivity : AppCompatActivity() {
                             setPadding(dp(4), dp(4), dp(4), dp(6)); focusableCard()
                             setOnClickListener { details(rec) }
                         }
+                        val posterBox = FrameLayout(this@MainActivity).apply {
+                            background = rounded(0xFF222222.toInt(), radius = dp(6).toFloat())
+                            clipToOutline = true
+                        }
                         val img = ImageView(this@MainActivity).apply {
                             scaleType = ImageView.ScaleType.CENTER_CROP
                             load(api.absolute(rec.poster)) { crossfade(true); error(R.drawable.ic_homestream) }
                         }
-                        card.addView(img, LinearLayout.LayoutParams(dp(100), dp(145)))
+                        posterBox.addView(img, FrameLayout.LayoutParams(-1, -1))
+
+                        // If item is from Seerr / not in local library, show a neat Request badge
+                        if (!rec.playable && (rec.id.startsWith("seerr-") || rec.source == "seerr")) {
+                            val reqBadge = TextView(this@MainActivity).apply {
+                                text = "Request"; textSize = 8.5f; setTextColor(Color.WHITE)
+                                typeface = android.graphics.Typeface.DEFAULT_BOLD
+                                background = rounded(RED, radius = dp(4).toFloat())
+                                setPadding(dp(4), dp(1), dp(4), dp(1))
+                            }
+                            posterBox.addView(reqBadge, FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.START).apply {
+                                setMargins(dp(4), dp(4), 0, 0)
+                            })
+                        }
+
+                        card.addView(posterBox, LinearLayout.LayoutParams(dp(100), dp(145)))
                         card.addView(label(rec.title, 11f, bold = true).apply {
                             maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
                             setPadding(dp(2), dp(4), dp(2), 0)

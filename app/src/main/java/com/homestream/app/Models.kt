@@ -20,6 +20,7 @@ data class Media(val json: JSONObject) {
     val tmdbId: Int get() = json.optInt("tmdbId")
     val trailerKey: String get() = json.optString("trailerKey")
     val playableEpisodeId: String get() = json.optString("playableEpisodeId")
+    val source: String get() = json.optString("source")
     val playable: Boolean get() = json.optString("source") != "demo" &&
         (isDownload || json.optString("status") == "available" || json.optString("status") == "partially_available" ||
             json.optString("jellyfinId").isNotBlank() || (type == "Episode" && !id.startsWith("seerr-")))
