@@ -13,6 +13,7 @@ keeping HomeStream branding. This is a native Kotlin app, not a wrapped webpage.
 - Media3 H.264/AAC direct play or Jellyfin HLS transcoding, resume and subtitles.
 - Google Cast discovery, compatible playback negotiation, position handoff,
   expanded/mini transport controls and return to local playback.
+- Local playback of in-progress download streams supplied by HomeStream.
 - Device-bound encryption for the server pairing token using Android Keystore.
 - TV playback works without Google Play services; Cast sender controls appear on
   phones/tablets with Google Play services.
@@ -77,3 +78,8 @@ when leaving it; Chromecast can continue playing after the app leaves the screen
 but this version does not run a background service to sync subsequent watch history.
 
 See [device validation](docs/device-validation.md) for the release checklist.
+
+In-progress downloads use HomeStream's existing download stream endpoint. They
+can buffer or lack seeking until enough data is available. They are played
+locally; Cast and Jellyfin watch-history sync apply after the completed media
+is imported into Jellyfin.

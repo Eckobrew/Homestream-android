@@ -11,12 +11,18 @@ import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
 /** Pairing token is encrypted with a device-bound Android Keystore AES key. */
-class ServerSettings(context: Context) {
+interface ConnectionSettings {
+    val baseUrl: String
+    val token: String
+    var profile: String
+}
+
+class ServerSettings(context: Context) : ConnectionSettings {
     private val prefs = context.getSharedPreferences("server", Context.MODE_PRIVATE)
-    var baseUrl: String
+    override var baseUrl: String
         get() = prefs.getString("url", "").orEmpty()
         private set(value) { prefs.edit().putString("url", value).apply() }
-    var profile: String
+    override var profile: String
         get() = prefs.getString("profile", "").orEmpty()
         set(value) { prefs.edit().putString("profile", value).apply() }
     private fun key(): SecretKey {
@@ -27,7 +33,7 @@ class ServerSettings(context: Context) {
                 .setBlockModes(KeyProperties.BLOCK_MODE_GCM).setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE).build())
         }.generateKey()
     }
-    val token: String get() = runCatching {
+    override val token: String get() = runCatching {
         val encoded = prefs.getString("token", "").orEmpty().split(':')
         if (encoded.size != 2) return@runCatching ""
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")

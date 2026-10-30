@@ -14,9 +14,11 @@ data class Media(val json: JSONObject) {
     val poster: String get() = json.optString("posterUrl", json.optString("thumbnailUrl"))
     val backdrop: String get() = json.optString("backdropUrl", poster)
     val playbackId: String get() = json.optString("jellyfinId").ifBlank { id }
+    val downloadUrl: String get() = json.optString("downloadStreamUrl").ifBlank { json.optString("videoStreamUrl") }
+    val isDownload: Boolean get() = json.optBoolean("isDownloading") && downloadUrl.isNotBlank()
     val resumeMs: Long get() = ticksToMs(json.optLong("playbackPositionTicks"))
     val playable: Boolean get() = json.optString("source") != "demo" &&
-        (json.optString("status") == "available" || json.optString("status") == "partially_available" ||
+        (isDownload || json.optString("status") == "available" || json.optString("status") == "partially_available" ||
             json.optString("jellyfinId").isNotBlank() || (type == "Episode" && !id.startsWith("seerr-")))
     val metadata: String get() = listOf(json.optString("year").takeUnless { it == "0" }.orEmpty(),
         json.optString("rating"), json.optString("resolution"),

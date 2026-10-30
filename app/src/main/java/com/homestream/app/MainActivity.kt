@@ -29,6 +29,8 @@ class MainActivity : AppCompatActivity() {
     private var work: Job? = null
     private var screen = "home"
     private var generation = 0
+    private var playbackWasLaunched = false
+    private var lastDetails: Media? = null
     private val gutter get() = dp(if (isTelevision()) 48 else 20)
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -42,6 +44,14 @@ class MainActivity : AppCompatActivity() {
         if (settings.baseUrl.isBlank() || settings.token.isBlank()) setup() else loadHome()
     }
 
+    override fun onResume() {
+        super.onResume()
+        if (playbackWasLaunched) {
+            playbackWasLaunched = false
+            lastDetails?.takeIf { screen == "details" }?.let { details(it) } ?: loadHome()
+        }
+    }
+
     private fun shell() {
         root = column().apply { setBackgroundColor(INK) }
         ViewCompat.setOnApplyWindowInsetsListener(root) { view, insets ->
@@ -51,21 +61,41 @@ class MainActivity : AppCompatActivity() {
         val header = LinearLayout(this).apply {
             gravity = Gravity.CENTER_VERTICAL; setPadding(gutter, dp(10), gutter, dp(10))
         }
-        header.addView(label(if (isTelevision()) "HOMESTREAM" else "H", 24f, true).apply { setTextColor(RED); contentDescription = "HomeStream" })
-        val nav = LinearLayout(this)
-        nav.addView(action("Home") { loadHome() })
-        nav.addView(action("Movies") { loadLibrary("movies") })
-        nav.addView(action("TV Shows") { loadLibrary("tv") })
-        nav.addView(action("Search") { search() })
-        nav.addView(action("Profiles") { profiles() })
-        nav.addView(action("Settings") { setup() })
-        header.addView(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(nav) }, LinearLayout.LayoutParams(0, dp(64), 1f))
+        header.addView(label("HOMESTREAM", if (isTelevision()) 24f else 20f, true).apply { setTextColor(RED); contentDescription = "HomeStream" })
+        if (isTelevision()) {
+            val nav = LinearLayout(this)
+            nav.addView(action("Home") { loadHome() })
+            nav.addView(action("Movies") { loadLibrary("movies") })
+            nav.addView(action("TV Shows") { loadLibrary("tv") })
+            nav.addView(action("Search") { search() })
+            nav.addView(action("Profiles") { profiles() })
+            nav.addView(action("Settings") { setup() })
+            header.addView(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(nav) }, LinearLayout.LayoutParams(0, dp(64), 1f))
+        } else {
+            header.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f))
+        }
         castButton(this)?.let { header.addView(it, LinearLayout.LayoutParams(dp(48), dp(48))) }
+        if (!isTelevision()) header.addView(action("⚙") { setup() }.apply { contentDescription = "Server settings"; minWidth = dp(48); minimumWidth = dp(48) })
         root.addView(header)
+        if (!isTelevision()) {
+            val categories = LinearLayout(this).apply { setPadding(gutter - dp(4), 0, gutter, 0) }
+            categories.addView(action("TV Shows") { loadLibrary("tv") })
+            categories.addView(action("Movies") { loadLibrary("movies") })
+            root.addView(categories)
+        }
         content = column().apply { setPadding(0, 0, 0, dp(40)) }
         root.addView(ScrollView(this).apply { clipChildren = false; addView(content) }, LinearLayout.LayoutParams(-1, 0, 1f))
-        val mini = androidx.fragment.app.FragmentContainerView(this).apply { id = View.generateViewId() }
+        val mini = androidx.fragment.app.FragmentContainerView(this).apply { id = R.id.cast_mini }
         root.addView(mini, LinearLayout.LayoutParams(-1, -2))
+        if (!isTelevision()) {
+            val bottom = LinearLayout(this).apply { gravity = Gravity.CENTER; setBackgroundColor(0xFF141414.toInt()); setPadding(dp(12), dp(4), dp(12), dp(4)) }
+            listOf("Home" to { loadHome() }, "Search" to { search() }, "Profiles" to { profiles() }).forEach { (title, click) ->
+                bottom.addView(action(title, title == "Home" && screen == "home", click).apply {
+                    layoutParams = LinearLayout.LayoutParams(0, dp(48), 1f).apply { setMargins(dp(3), 0, dp(3), 0) }
+                })
+            }
+            root.addView(bottom)
+        }
         setContentView(root)
         // Fragment is attached only when Cast is supported (Google Play services).
         if (castContext(this) != null) {
@@ -112,7 +142,7 @@ class MainActivity : AppCompatActivity() {
             } }
         }
     }
-    private fun hero(item: Media) {
+    private fun hero(item: Media, showActions: Boolean = true) {
         val frame = FrameLayout(this)
         val height = dp(if (isTelevision()) 350 else 390)
         frame.addView(ImageView(this).apply {
@@ -124,10 +154,15 @@ class MainActivity : AppCompatActivity() {
             intArrayOf(0x33080808, 0x99080808.toInt(), INK)) }, FrameLayout.LayoutParams(-1, -1))
         val copy = column().apply { setPadding(gutter, dp(30), gutter, dp(16)) }
         copy.addView(label("H O M E S T R E A M   •   FEATURED", 11f, true).apply { setTextColor(MUTED) })
-        copy.addView(label(item.title, if (isTelevision()) 38f else 32f, true))
+        copy.addView(label(item.title, if (isTelevision()) 38f else 32f, true).apply { maxLines = 3 })
         copy.addView(label(item.metadata, 13f).apply { setPadding(0, dp(8), 0, dp(8)); setTextColor(MUTED) })
         copy.addView(label(item.overview, 14f).apply { maxLines = 3 })
-        copy.addView(action("More info", true) { details(item) })
+        if (showActions) {
+            val actions = LinearLayout(this)
+            if (item.playable && (item.type != "Series" || item.isDownload)) actions.addView(action("▶ Play", true) { play(item) })
+            actions.addView(action("ⓘ More info") { details(item) })
+            copy.addView(actions)
+        }
         frame.addView(copy, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
         content.addView(frame, LinearLayout.LayoutParams(-1, height))
     }
@@ -187,11 +222,12 @@ class MainActivity : AppCompatActivity() {
             }.setNegativeButton("Cancel", null).show()
     }
     private fun details(item: Media) {
+        lastDetails = item
         screen = "details"
         fetch("media/${android.net.Uri.encode(item.id)}") { data ->
-            val full = Media(data.getJSONObject("item")); hero(full)
+            val full = Media(data.getJSONObject("item")); hero(full, false)
             heading(full.title); message(full.overview)
-            if (full.type != "Series" && full.playable) {
+            if ((full.type != "Series" || full.isDownload) && full.playable) {
                 content.addView(action(if (full.resumeMs > 0) "▶ Resume" else "▶ Play", true) { play(full) })
                 if (full.resumeMs > 0) content.addView(action("Play from beginning") { play(full, true) })
             }
@@ -225,6 +261,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
     private fun play(item: Media, fromBeginning: Boolean = false) {
+        playbackWasLaunched = true
         startActivity(Intent(this, PlayerActivity::class.java).putExtra("media", item.json.toString()).putExtra("fromBeginning", fromBeginning))
     }
     private fun profiles() {
@@ -263,8 +300,26 @@ class MainActivity : AppCompatActivity() {
                 if (parsed == null || parsed.username.isNotBlank() || parsed.password.isNotBlank() || parsed.query != null || parsed.fragment != null) {
                     url.error = "Enter an HTTP(S) server URL without credentials, query or fragment"; return@setOnClickListener
                 }
-                if (token.text.length < 32) { token.error = "Token must contain at least 32 characters"; return@setOnClickListener }
-                settings.save(parsed.toString(), token.text.toString().trim()); dialog.dismiss(); loadHome()
+                val pairingToken = token.text.toString().trim()
+                if (pairingToken.length < 32) { token.error = "Token must contain at least 32 characters"; return@setOnClickListener }
+                val button = dialog.getButton(AlertDialog.BUTTON_POSITIVE)
+                button.isEnabled = false; button.text = "Connecting…"
+                lifecycleScope.launch {
+                    try {
+                        val candidate = object : ConnectionSettings {
+                            override val baseUrl = parsed.toString().trimEnd('/')
+                            override val token = pairingToken
+                            override var profile = ""
+                        }
+                        val capabilities = HomeStreamApi(candidate).call("capabilities")
+                        check(capabilities.optInt("apiVersion") == 1) { "This server requires a different app version." }
+                        if (dialog.isShowing) {
+                            settings.save(candidate.baseUrl, pairingToken); dialog.dismiss(); loadHome()
+                        }
+                    } catch (e: Exception) {
+                        if (e !is kotlinx.coroutines.CancellationException) token.error = e.message ?: "Connection failed"
+                    } finally { button.isEnabled = true; button.text = "Connect" }
+                }
             }
         }
         dialog.show()

@@ -33,6 +33,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.json.JSONObject
 
+@androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 class PlayerActivity : AppCompatActivity() {
     private lateinit var api: HomeStreamApi
     private lateinit var media: Media
@@ -91,7 +92,7 @@ class PlayerActivity : AppCompatActivity() {
         val bar = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
         bar.addView(action("‹ Back") { finish() })
         bar.addView(label(media.title, 18f, true), LinearLayout.LayoutParams(0, -2, 1f))
-        castButton(this)?.let { bar.addView(it, LinearLayout.LayoutParams(dp(48), dp(48))) }
+        if (!media.isDownload) castButton(this)?.let { bar.addView(it, LinearLayout.LayoutParams(dp(48), dp(48))) }
         overlay.addView(bar)
         frame.addView(overlay, FrameLayout.LayoutParams(-1, -2, Gravity.TOP))
         playerView.setControllerVisibilityListener(PlayerView.ControllerVisibilityListener { visible ->
@@ -107,7 +108,9 @@ class PlayerActivity : AppCompatActivity() {
         super.onStart()
         context?.sessionManager?.addSessionManagerListener(sessionListener, CastSession::class.java)
         val session = context?.sessionManager?.currentCastSession
-        if (session?.isConnected == true) cast(session) else startLocal()
+        if (session?.isConnected == true) cast(session) else {
+            remote?.unregisterCallback(remoteCallback); remote = null; startLocal()
+        }
         timer = lifecycleScope.launch {
             while (true) {
                 delay(10_000)
@@ -119,10 +122,11 @@ class PlayerActivity : AppCompatActivity() {
         negotiation?.cancel(); clearMessages(); showMessage("Preparing playback…")
         negotiation = lifecycleScope.launch {
             try {
-                val stream = api.call("playback", mapOf("itemId" to media.playbackId, "forceTranscode" to transcode.toString()))
+                val stream = if (media.isDownload) JSONObject().put("streamUrl", media.downloadUrl)
+                    else api.call("playback", mapOf("itemId" to media.playbackId, "forceTranscode" to transcode.toString()))
                 val url = stream.optString("streamUrl")
                 if (url.isBlank()) error("No playable stream returned by Jellyfin.")
-                val tracks = subtitleItems()
+                val tracks = if (media.isDownload) emptyList() else subtitleItems()
                 val item = MediaItem.Builder().setUri(api.absolute(url)).setMediaId(media.playbackId)
                     .setSubtitleConfigurations(tracks).apply {
                         if (stream.optBoolean("isTranscoding")) setMimeType(MimeTypes.APPLICATION_M3U8)
@@ -139,7 +143,10 @@ class PlayerActivity : AppCompatActivity() {
                             position = exo.currentPosition
                             clearMessages()
                             showMessage("Playback failed. Check that this device can reach Jellyfin.")
-                            overlay.addView(action("Retry with compatible HLS") { transcode = true; startLocal() })
+                            if (media.isDownload) {
+                                showMessage("In-progress downloads may buffer or be unseekable. Wait for more data and retry.")
+                                overlay.addView(action("Retry") { startLocal() })
+                            } else overlay.addView(action("Retry with compatible HLS") { transcode = true; startLocal() })
                         }
                     })
                     exo.setMediaItem(item); exo.seekTo(position); exo.prepare(); exo.playWhenReady = wantsPlay
@@ -167,12 +174,16 @@ class PlayerActivity : AppCompatActivity() {
         emptyList()
     }
     private fun cast(session: CastSession) {
+        if (media.isDownload) {
+            Toast.makeText(this, "In-progress downloads play locally. Cast after Jellyfin imports the completed title.", Toast.LENGTH_LONG).show()
+            startLocal(); return
+        }
         if (castLoading) return
         val client = session.remoteMediaClient ?: return
         if (client.mediaInfo?.customData?.optString("itemId") == media.playbackId) {
             remote = client; client.registerCallback(remoteCallback)
             position = client.approximateStreamPosition
-            player?.pause(); clearMessages(); showCastControls(); return
+            releaseLocal(); clearMessages(); showCastControls(); return
         }
         position = player?.currentPosition ?: position
         wantsPlay = player?.playWhenReady ?: wantsPlay
@@ -186,7 +197,7 @@ class PlayerActivity : AppCompatActivity() {
                     val poster = api.absolute(media.poster)
                     if (poster.isNotBlank()) addImage(WebImage(Uri.parse(poster)))
                 }
-                val tracks = subtitleItems().mapIndexed { i, track -> MediaTrack.Builder((i + 1).toLong(), MediaTrack.TYPE_TEXT)
+                val tracks = if (media.isDownload) emptyList() else subtitleItems().mapIndexed { i, track -> MediaTrack.Builder((i + 1).toLong(), MediaTrack.TYPE_TEXT)
                     .setSubtype(MediaTrack.SUBTYPE_SUBTITLES).setContentId(track.uri.toString()).setContentType("text/vtt")
                     .setName(track.label ?: "Subtitle").setLanguage(track.language ?: "und").build() }
                 val info = MediaInfo.Builder(api.absolute(stream.getString("streamUrl")))
@@ -216,12 +227,17 @@ class PlayerActivity : AppCompatActivity() {
         startLocal()
     }
     private fun report(stopped: Boolean) {
+        if (media.isDownload) return
         val client = remote
         if (client != null && client.mediaInfo?.customData?.optString("itemId") != media.playbackId) return
         if (client != null) position = client.approximateStreamPosition else player?.let { position = it.currentPosition }
         val snapshot = position
         val paused = client?.isPaused ?: (player?.isPlaying == false)
-        lifecycleScope.launch { runCatching { api.progress(media.playbackId, snapshot, paused, stopped) } }
+        // A final report must survive Activity destruction (Back/rotation).
+        val id = media.playbackId
+        (application as HomeStreamApplication).playbackReports.launch {
+            runCatching { api.progress(id, snapshot, paused, stopped) }
+        }
     }
     private fun releaseLocal() { playerView.player = null; player?.release(); player = null; prepared = false }
     private fun clearMessages() { while (overlay.childCount > 1) overlay.removeViewAt(1) }
@@ -230,7 +246,7 @@ class PlayerActivity : AppCompatActivity() {
     override fun onStop() {
         negotiation?.cancel(); timer?.cancel()
         if (prepared || remote != null) report(remote == null)
-        player?.let { position = it.currentPosition; wantsPlay = it.playWhenReady }
+        if (remote == null) player?.let { position = it.currentPosition; wantsPlay = it.playWhenReady }
         releaseLocal(); remote?.unregisterCallback(remoteCallback)
         context?.sessionManager?.removeSessionManagerListener(sessionListener, CastSession::class.java)
         super.onStop()

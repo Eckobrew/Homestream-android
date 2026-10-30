@@ -8,7 +8,6 @@
         <item name="android:colorAccent">#E50914</item>
         <item name="colorAccent">#E50914</item>
         <item name="android:windowActionModeOverlay">true</item>
-        <item name="android:windowLightNavigationBar">false</item>
     </style>
     <string name="app_name">HomeStream</string>
 </resources>
