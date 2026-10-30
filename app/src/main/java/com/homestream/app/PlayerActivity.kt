@@ -48,6 +48,11 @@ class PlayerActivity : AppCompatActivity() {
     private var timer: Job? = null
     private var negotiation: Job? = null
     private var remote: RemoteMediaClient? = null
+    private val noisyReceiver = object : android.content.BroadcastReceiver() {
+        override fun onReceive(c: android.content.Context?, intent: android.content.Intent?) {
+            if (intent?.action == android.media.AudioManager.ACTION_AUDIO_BECOMING_NOISY) player?.pause()
+        }
+    }
     private val context by lazy { castContext(this) }
     private val remoteCallback = object : RemoteMediaClient.Callback() {
         override fun onStatusUpdated() {
@@ -106,6 +111,7 @@ class PlayerActivity : AppCompatActivity() {
     }
     override fun onStart() {
         super.onStart()
+        runCatching { registerReceiver(noisyReceiver, android.content.IntentFilter(android.media.AudioManager.ACTION_AUDIO_BECOMING_NOISY)) }
         context?.sessionManager?.addSessionManagerListener(sessionListener, CastSession::class.java)
         val session = context?.sessionManager?.currentCastSession
         if (session?.isConnected == true) cast(session) else {
@@ -243,7 +249,14 @@ class PlayerActivity : AppCompatActivity() {
     private fun clearMessages() { while (overlay.childCount > 1) overlay.removeViewAt(1) }
     private fun showMessage(text: String) { overlay.visibility = View.VISIBLE; overlay.addView(label(text, 14f)) }
     override fun onSaveInstanceState(outState: Bundle) { outState.putLong("position", player?.currentPosition ?: position); super.onSaveInstanceState(outState) }
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        if (player?.isPlaying == true && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+            enterPictureInPictureMode(android.app.PictureInPictureParams.Builder().build())
+        }
+    }
     override fun onStop() {
+        runCatching { unregisterReceiver(noisyReceiver) }
         negotiation?.cancel(); timer?.cancel()
         if (prepared || remote != null) report(remote == null)
         if (remote == null) player?.let { position = it.currentPosition; wantsPlay = it.playWhenReady }

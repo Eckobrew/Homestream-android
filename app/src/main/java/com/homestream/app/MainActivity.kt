@@ -85,8 +85,16 @@ class MainActivity : AppCompatActivity() {
         categories.addView(categoryPill("TV Shows") { loadLibrary("tv") })
         categories.addView(categoryPill("Movies") { loadLibrary("movies") })
         categories.addView(categoryPill("Categories ⌄") {
-            AlertDialog.Builder(this).setTitle("Browse").setItems(arrayOf("Home", "TV Shows", "Movies", "My List")) { _, choice ->
-                when (choice) { 0 -> loadHome(); 1 -> loadLibrary("tv"); 2 -> loadLibrary("movies"); else -> myHomeStream() }
+            AlertDialog.Builder(this).setTitle("Browse").setItems(arrayOf("Home", "TV Shows", "Movies", "Movie Categories", "TV Categories", "Downloads", "My List")) { _, choice ->
+                when (choice) {
+                    0 -> loadHome()
+                    1 -> loadLibrary("tv")
+                    2 -> loadLibrary("movies")
+                    3 -> loadCategories("movies")
+                    4 -> loadCategories("tv")
+                    5 -> loadDownloads()
+                    else -> myHomeStream()
+                }
             }.show()
         })
         root.addView(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(categories) })
@@ -130,6 +138,8 @@ class MainActivity : AppCompatActivity() {
             Triple("New & Popular", R.drawable.nav_new, { newAndHot() }),
             Triple("TV Shows", R.drawable.nav_series, { loadLibrary("tv") }),
             Triple("Movies", R.drawable.nav_movies, { loadLibrary("movies") }),
+            Triple("Categories", R.drawable.nav_movies, { loadCategories("movies") }),
+            Triple("Downloads", R.drawable.nav_new, { loadDownloads() }),
             Triple("My List", R.drawable.nav_list, { myHomeStream() }),
             Triple("Settings", R.drawable.nav_settings, { setup() }))
         val buttons = entries.map { (title, icon, click) ->
@@ -258,7 +268,7 @@ class MainActivity : AppCompatActivity() {
         frame.addView(ImageView(this).apply {
             scaleType = ImageView.ScaleType.CENTER_CROP
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-            load(api.absolute(item.poster.ifBlank { item.backdrop })) { crossfade(true) }
+            load(api.absolute(item.poster.ifBlank { item.backdrop })) { crossfade(true); error(R.drawable.ic_homestream) }
         }, FrameLayout.LayoutParams(-1, -1))
         frame.addView(View(this).apply { background = GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
             intArrayOf(0x00080808, 0x11080808, 0xF0080808.toInt())) }, FrameLayout.LayoutParams(-1, -1))
@@ -291,7 +301,7 @@ class MainActivity : AppCompatActivity() {
         frame.addView(ImageView(this).apply {
             scaleType = ImageView.ScaleType.CENTER_CROP
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-            load(api.absolute(item.backdrop)) { crossfade(true) }
+            load(api.absolute(item.backdrop)) { crossfade(true); error(R.drawable.ic_homestream) }
         }, FrameLayout.LayoutParams(-1, -1))
         frame.addView(View(this).apply { background = GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT,
             intArrayOf(INK, 0xCC080808.toInt(), 0x00080808)) }, FrameLayout.LayoutParams(-1, -1))
@@ -335,7 +345,10 @@ class MainActivity : AppCompatActivity() {
                     progressTintList = android.content.res.ColorStateList.valueOf(RED)
                 }, LinearLayout.LayoutParams(-1, dp(4)))
             }
-            if (isTelevision()) card.addView(label(item.title, 13f, true).apply { maxLines = 1; setPadding(dp(4), dp(6), dp(4), 0) })
+            card.addView(label(item.title, if (isTelevision()) 13f else 11f, true).apply {
+                maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
+                setPadding(dp(4), dp(5), dp(4), 0)
+            })
             row.addView(card, LinearLayout.LayoutParams(dp(if (isTelevision()) 224 else 112), -2).apply { setMargins(0, 0, dp(10), 0) })
         }
         content.addView(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; clipChildren = false; addView(row) })
@@ -349,22 +362,49 @@ class MainActivity : AppCompatActivity() {
             items.chunked(12).forEachIndexed { index, chunk -> mediaRow(if (index == 0) "Your collection" else "More to explore", chunk) }
         }
     }
+    private fun loadCategories(type: String) {
+        screen = "categories-$type"
+        fetch("categories/$type") { data ->
+            heading(if (type == "movies") "Movie Categories" else "TV Categories")
+            val sections = data.optJSONArray("sections")
+            if (sections != null && sections.length() > 0) {
+                for (i in 0 until sections.length()) {
+                    val sec = sections.getJSONObject(i)
+                    mediaRow(sec.optString("title"), sec.mediaList("items"))
+                }
+            } else {
+                message("No categories found.")
+            }
+        }
+    }
+
+    private fun loadDownloads() {
+        screen = "downloads"
+        fetch("downloads") { data ->
+            heading("Active Downloads")
+            val items = data.mediaList("items")
+            if (items.isEmpty()) message("No active torrent downloads.")
+            else mediaRow("Downloading via qBittorrent", items)
+        }
+    }
+
     private fun search() {
-        val field = EditText(this).apply { hint = "Search your library"; isSingleLine = true; inputType = InputType.TYPE_CLASS_TEXT }
+        val field = EditText(this).apply { hint = "Search movies, series, requests…"; isSingleLine = true; inputType = InputType.TYPE_CLASS_TEXT }
         AlertDialog.Builder(this).setTitle("Search HomeStream").setView(field)
             .setPositiveButton("Search") { _, _ ->
                 val query = field.text.toString().trim(); if (query.isBlank()) return@setPositiveButton
                 screen = "search"
-                fetch("library/movies", mapOf("search" to query)) { movies ->
+                fetch("search", mapOf("q" to query)) { data ->
                     heading("Results for “$query”")
-                    val movieItems = movies.mediaList("items")
-                    mediaRow("Movies", movieItems)
-                    work = lifecycleScope.launch {
-                        try {
-                            val shows = api.call("library/tv", mapOf("search" to query)).mediaList("items")
-                            mediaRow("TV Shows", shows)
-                            if (movieItems.isEmpty() && shows.isEmpty()) message("No matching titles in your Jellyfin library.")
-                        } catch (e: Exception) { if (e !is kotlinx.coroutines.CancellationException) message("TV search failed. Try again.") }
+                    val items = data.mediaList("results")
+                    if (items.isEmpty()) {
+                        message("No matching titles found.")
+                    } else {
+                        val available = items.filter { it.playable }
+                        val toRequest = items.filter { !it.playable }
+                        if (available.isNotEmpty()) mediaRow("In Your Library", available)
+                        if (toRequest.isNotEmpty()) mediaRow("Available to Request", toRequest)
+                        if (available.isEmpty() && toRequest.isEmpty()) mediaRow("Matches", items)
                     }
                 }
             }.setNegativeButton("Cancel", null).show()
@@ -410,6 +450,13 @@ class MainActivity : AppCompatActivity() {
                         }.show()
                 })
             } else if (!full.playable && full.type != "Series") message("This title is not available for playback yet.")
+            work = lifecycleScope.launch {
+                try {
+                    val recData = api.call("media/${android.net.Uri.encode(item.id)}/recommendations")
+                    val recs = recData.mediaList("recommendations")
+                    if (recs.isNotEmpty()) mediaRow("More Like This", recs)
+                } catch (_: Exception) {}
+            }
         }
     }
     private fun play(item: Media, fromBeginning: Boolean = false) {
