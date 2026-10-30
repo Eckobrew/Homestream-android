@@ -30,9 +30,11 @@ import androidx.media3.common.Player
 import androidx.media3.common.Tracks
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
+import coil.load
 import com.google.android.gms.cast.MediaInfo
 import com.google.android.gms.cast.MediaLoadRequestData
 import com.google.android.gms.cast.MediaMetadata
+import com.google.android.gms.cast.MediaStatus
 import com.google.android.gms.cast.MediaTrack
 import com.google.android.gms.cast.framework.CastSession
 import com.google.android.gms.cast.framework.SessionManagerListener
@@ -40,6 +42,7 @@ import com.google.android.gms.cast.framework.media.RemoteMediaClient
 import com.google.android.gms.common.images.WebImage
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import org.json.JSONObject
 
@@ -60,18 +63,41 @@ class PlayerActivity : AppCompatActivity() {
     private var timer: Job? = null
     private var negotiation: Job? = null
     private var remote: RemoteMediaClient? = null
+    private lateinit var castOverlay: FrameLayout
+    private lateinit var castBackdropView: ImageView
+    private lateinit var castBadgeView: TextView
+    private lateinit var castTitleView: TextView
+    private lateinit var castOverviewView: TextView
+    private lateinit var playThisBtn: android.widget.Button
+    private lateinit var controlsBtn: android.widget.Button
+    private lateinit var stopCastBtn: android.widget.Button
+    private var currentCycledItem: Media? = null
+    private var availableContent = mutableListOf<Media>()
+    private var idleCycleJob: Job? = null
+    private var idleIndex = 0
+
     private val noisyReceiver = object : android.content.BroadcastReceiver() {
         override fun onReceive(c: android.content.Context?, intent: android.content.Intent?) {
             if (intent?.action == android.media.AudioManager.ACTION_AUDIO_BECOMING_NOISY) player?.pause()
         }
     }
-    private val context by lazy { castContext(this) }
+    private val castCtx by lazy { castContext(this) }
     private val remoteCallback = object : RemoteMediaClient.Callback() {
         override fun onStatusUpdated() {
             remote?.let { client ->
                 val activeId = if (currentPlaybackId.isNotBlank()) currentPlaybackId else media.playbackId
                 if (client.mediaInfo?.customData?.optString("itemId") == activeId) {
                     position = client.approximateStreamPosition
+                }
+                val isActivelyPlaying = client.isPlaying || client.isLoadingNextItem
+                val isIdleOrEnded = client.playerState == MediaStatus.PLAYER_STATE_IDLE ||
+                        client.idleReason == MediaStatus.IDLE_REASON_FINISHED
+
+                if (isIdleOrEnded) {
+                    startIdleCycle()
+                } else if (isActivelyPlaying) {
+                    stopIdleCycle()
+                    showNowPlayingCastUI()
                 }
             }
         }
@@ -131,6 +157,7 @@ class PlayerActivity : AppCompatActivity() {
             controllerAutoShow = true; controllerShowTimeoutMs = if (isTelevision()) 6000 else 4000
         }
         frame.addView(playerView, FrameLayout.LayoutParams(-1, -1))
+        setupCastOverlay(frame)
 
         // Netflix-style top control overlay with soft vertical scrim gradient
         overlay = column().apply {
@@ -226,8 +253,8 @@ class PlayerActivity : AppCompatActivity() {
     override fun onStart() {
         super.onStart()
         runCatching { registerReceiver(noisyReceiver, android.content.IntentFilter(android.media.AudioManager.ACTION_AUDIO_BECOMING_NOISY)) }
-        context?.sessionManager?.addSessionManagerListener(sessionListener, CastSession::class.java)
-        val session = context?.sessionManager?.currentCastSession
+        castCtx?.sessionManager?.addSessionManagerListener(sessionListener, CastSession::class.java)
+        val session = castCtx?.sessionManager?.currentCastSession
         if (session?.isConnected == true) cast(session) else {
             remote?.unregisterCallback(remoteCallback); remote = null; startLocal()
         }
@@ -456,13 +483,248 @@ class PlayerActivity : AppCompatActivity() {
             } catch (e: Exception) { castLoading = false; showMessage(e.message ?: "Cast failed"); returnToLocal() }
         }
     }
-    private fun showCastControls() {
-        showMessage("Playing on Chromecast")
-        overlay.addView(action("Cast playback controls") { startActivity(android.content.Intent(this, CastControllerActivity::class.java)) })
-        overlay.addView(action("Stop casting and play here") { context?.sessionManager?.endCurrentSession(true) })
+    private fun setupCastOverlay(frame: FrameLayout) {
+        castOverlay = FrameLayout(this).apply {
+            visibility = View.GONE
+            setBackgroundColor(INK)
+        }
+        castBackdropView = ImageView(this).apply {
+            scaleType = ImageView.ScaleType.CENTER_CROP
+        }
+        castOverlay.addView(castBackdropView, FrameLayout.LayoutParams(-1, -1))
+
+        castOverlay.addView(View(this).apply {
+            background = GradientDrawable(
+                GradientDrawable.Orientation.TOP_BOTTOM,
+                intArrayOf(0xBB000000.toInt(), 0x44000000.toInt(), 0xEE141414.toInt())
+            )
+        }, FrameLayout.LayoutParams(-1, -1))
+
+        val infoCol = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(44), dp(24), dp(44), dp(36))
+        }
+
+        castBadgeView = TextView(this).apply {
+            text = "📺  READY TO CAST"
+            textSize = 12f
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
+            setTextColor(Color.WHITE)
+            background = rounded(RED, radius = dp(12).toFloat())
+            setPadding(dp(12), dp(5), dp(12), dp(5))
+        }
+        infoCol.addView(castBadgeView, LinearLayout.LayoutParams(-2, -2).apply { bottomMargin = dp(10) })
+
+        castTitleView = TextView(this).apply {
+            text = ""
+            textSize = 28f
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
+            setTextColor(Color.WHITE)
+            maxLines = 2
+        }
+        infoCol.addView(castTitleView, LinearLayout.LayoutParams(-1, -2))
+
+        castOverviewView = TextView(this).apply {
+            text = ""
+            textSize = 14f
+            setTextColor(0xCCFFFFFF.toInt())
+            maxLines = 3
+            ellipsize = android.text.TextUtils.TruncateAt.END
+        }
+        infoCol.addView(castOverviewView, LinearLayout.LayoutParams(dp(520), -2).apply {
+            topMargin = dp(6)
+            bottomMargin = dp(18)
+        })
+
+        val btnRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+
+        playThisBtn = android.widget.Button(this).apply {
+            text = "▶  Play Now"
+            isAllCaps = false
+            textSize = 14f
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
+            setTextColor(Color.BLACK)
+            background = rounded(Color.WHITE, radius = dp(8).toFloat())
+            setPadding(dp(22), dp(8), dp(22), dp(8))
+            setOnClickListener {
+                currentCycledItem?.let { playCycledItem(it) }
+            }
+        }
+        btnRow.addView(playThisBtn, LinearLayout.LayoutParams(-2, dp(44)).apply { marginEnd = dp(12) })
+
+        controlsBtn = android.widget.Button(this).apply {
+            text = "Remote Controls"
+            isAllCaps = false
+            textSize = 14f
+            setTextColor(Color.WHITE)
+            background = rounded(0xFF2E2E2E.toInt(), radius = dp(8).toFloat())
+            setPadding(dp(18), dp(8), dp(18), dp(8))
+            setOnClickListener {
+                startActivity(android.content.Intent(this@PlayerActivity, CastControllerActivity::class.java))
+            }
+        }
+        btnRow.addView(controlsBtn, LinearLayout.LayoutParams(-2, dp(44)).apply { marginEnd = dp(12) })
+
+        stopCastBtn = android.widget.Button(this).apply {
+            text = "Stop Casting"
+            isAllCaps = false
+            textSize = 14f
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
+            setTextColor(Color.WHITE)
+            background = rounded(RED, radius = dp(8).toFloat())
+            setPadding(dp(22), dp(8), dp(22), dp(8))
+            setOnClickListener {
+                castCtx?.sessionManager?.endCurrentSession(true)
+            }
+        }
+        btnRow.addView(stopCastBtn, LinearLayout.LayoutParams(-2, dp(44)))
+
+        infoCol.addView(btnRow)
+        castOverlay.addView(infoCol, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
+        frame.addView(castOverlay, FrameLayout.LayoutParams(-1, -1))
     }
+
+    private fun showCastControls() {
+        stopIdleCycle()
+        clearMessages()
+        showNowPlayingCastUI()
+        // The casting controls should just come up, not be a button!
+        startActivity(android.content.Intent(this, CastControllerActivity::class.java))
+    }
+
+    private fun showNowPlayingCastUI() {
+        castOverlay.visibility = View.VISIBLE
+        val session = castCtx?.sessionManager?.currentCastSession
+        val deviceName = session?.castDevice?.friendlyName ?: "Chromecast"
+        castBadgeView.text = "NOW PLAYING ON ${deviceName.uppercase()}"
+        castTitleView.text = media.title
+        val seriesTitle = media.json.optString("seriesTitle").ifBlank { media.json.optString("seriesName") }
+        castOverviewView.text = if (seriesTitle.isNotBlank() && seriesTitle != media.title) seriesTitle else media.overview
+        val art = media.backdrop.ifBlank { media.poster }
+        if (art.isNotBlank()) {
+            castBackdropView.load(api.absolute(art)) { crossfade(true) }
+        }
+        playThisBtn.visibility = View.GONE
+        controlsBtn.visibility = View.VISIBLE
+        stopCastBtn.visibility = View.VISIBLE
+    }
+
+    private fun startIdleCycle() {
+        if (remote == null) return
+        if (idleCycleJob?.isActive == true) return
+
+        castOverlay.visibility = View.VISIBLE
+        castBadgeView.text = "📺  READY TO CAST"
+        playThisBtn.visibility = View.VISIBLE
+        controlsBtn.visibility = View.GONE
+        stopCastBtn.visibility = View.VISIBLE
+
+        loadAvailableContentIfNeeded()
+        idleCycleJob = lifecycleScope.launch {
+            while (isActive) {
+                if (remote == null) break
+                val client = remote
+                if (client != null && (client.isPlaying || client.isLoadingNextItem)) break
+                if (availableContent.isNotEmpty()) {
+                    val item = availableContent[idleIndex % availableContent.size]
+                    renderIdleItem(item)
+                    idleIndex++
+                }
+                delay(10_000)
+            }
+        }
+    }
+
+    private fun stopIdleCycle() {
+        idleCycleJob?.cancel()
+        idleCycleJob = null
+    }
+
+    private fun renderIdleItem(item: Media) {
+        currentCycledItem = item
+        val art = item.backdrop.ifBlank { item.poster }
+        if (art.isNotBlank()) {
+            castBackdropView.load(api.absolute(art)) { crossfade(true) }
+        }
+        castTitleView.text = item.title
+        castOverviewView.text = item.overview
+
+        // Also sync to Chromecast receiver so the TV screen cycles with "Ready to cast"!
+        val client = remote
+        if (client != null && !client.isPlaying && !client.isLoadingNextItem && art.isNotBlank()) {
+            try {
+                val fullUrl = api.absolute(art)
+                val metadata = MediaMetadata(MediaMetadata.MEDIA_TYPE_PHOTO).apply {
+                    putString(MediaMetadata.KEY_TITLE, item.title)
+                    putString(MediaMetadata.KEY_SUBTITLE, "Ready to cast")
+                    addImage(WebImage(Uri.parse(fullUrl)))
+                }
+                val photoInfo = MediaInfo.Builder(fullUrl)
+                    .setContentType("image/jpeg")
+                    .setStreamType(MediaInfo.STREAM_TYPE_BUFFERED)
+                    .setMetadata(metadata)
+                    .build()
+                client.load(MediaLoadRequestData.Builder().setMediaInfo(photoInfo).setAutoplay(true).build())
+            } catch (_: Exception) {}
+        }
+    }
+
+    private fun loadAvailableContentIfNeeded() {
+        if (availableContent.isNotEmpty()) return
+        lifecycleScope.launch {
+            try {
+                val json = api.call("home")
+                val list = mutableListOf<Media>()
+                val heroObj = json.optJSONObject("hero")
+                if (heroObj != null) list.add(Media(heroObj))
+                val sections = json.optJSONArray("sections")
+                if (sections != null) {
+                    for (i in 0 until sections.length()) {
+                        val sec = sections.getJSONObject(i)
+                        val items = sec.optJSONArray("items") ?: continue
+                        for (j in 0 until items.length()) {
+                            val m = Media(items.getJSONObject(j))
+                            val backdrop = m.backdrop.ifBlank { m.poster }
+                            if (backdrop.isNotBlank() && list.none { it.id == m.id }) {
+                                list.add(m)
+                            }
+                        }
+                    }
+                }
+                if (list.isNotEmpty()) {
+                    availableContent.clear()
+                    availableContent.addAll(list)
+                    if (idleCycleJob?.isActive == true && currentCycledItem == null) {
+                        renderIdleItem(availableContent[0])
+                    }
+                }
+            } catch (_: Exception) {}
+        }
+    }
+
+    private fun playCycledItem(item: Media) {
+        media = item
+        currentPlaybackId = item.playbackId
+        position = 0L
+        val session = castCtx?.sessionManager?.currentCastSession
+        if (session?.isConnected == true) {
+            stopIdleCycle()
+            cast(session)
+        } else {
+            returnToLocal()
+        }
+    }
+
     private fun returnToLocal() {
-        castLoading = false; remote?.unregisterCallback(remoteCallback); remote = null
+        stopIdleCycle()
+        castLoading = false
+        remote?.unregisterCallback(remoteCallback)
+        remote = null
+        castOverlay.visibility = View.GONE
+        clearMessages()
         startLocal()
     }
     private fun report(stopped: Boolean) {
@@ -489,12 +751,13 @@ class PlayerActivity : AppCompatActivity() {
         }
     }
     override fun onStop() {
+        stopIdleCycle()
         runCatching { unregisterReceiver(noisyReceiver) }
         negotiation?.cancel(); timer?.cancel()
         if (prepared || remote != null) report(remote == null)
         if (remote == null) player?.let { position = it.currentPosition; wantsPlay = it.playWhenReady }
         releaseLocal(); remote?.unregisterCallback(remoteCallback)
-        context?.sessionManager?.removeSessionManagerListener(sessionListener, CastSession::class.java)
+        castCtx?.sessionManager?.removeSessionManagerListener(sessionListener, CastSession::class.java)
         super.onStop()
     }
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {

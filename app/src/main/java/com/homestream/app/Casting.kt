@@ -25,7 +25,29 @@ class HomeStreamCastOptions : OptionsProvider {
         .build()
     override fun getAdditionalSessionProviders(context: Context): List<SessionProvider>? = null
 }
-class CastControllerActivity : ExpandedControllerActivity()
+class CastControllerActivity : ExpandedControllerActivity() {
+    override fun onCreateOptionsMenu(menu: android.view.Menu): Boolean {
+        super.onCreateOptionsMenu(menu)
+        menu.add(0, 9999, 0, "Stop Casting").apply {
+            setShowAsAction(android.view.MenuItem.SHOW_AS_ACTION_ALWAYS)
+            val btn = android.widget.Button(this@CastControllerActivity).apply {
+                text = "Stop Casting"
+                isAllCaps = false
+                textSize = 12f
+                typeface = android.graphics.Typeface.DEFAULT_BOLD
+                setTextColor(android.graphics.Color.WHITE)
+                background = rounded(RED, radius = dp(8).toFloat())
+                setPadding(dp(14), dp(4), dp(14), dp(4))
+                setOnClickListener {
+                    CastContext.getSharedInstance(this@CastControllerActivity).sessionManager.endCurrentSession(true)
+                    finish()
+                }
+            }
+            actionView = btn
+        }
+        return true
+    }
+}
 
 fun castContext(context: Context): CastContext? {
     if (context.isTelevision() || GoogleApiAvailability.getInstance().isGooglePlayServicesAvailable(context) != ConnectionResult.SUCCESS) return null

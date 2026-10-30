@@ -35,6 +35,12 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import org.json.JSONObject
+import com.google.android.gms.cast.MediaInfo
+import com.google.android.gms.cast.MediaLoadRequestData
+import com.google.android.gms.cast.MediaMetadata
+import com.google.android.gms.cast.framework.CastSession
+import com.google.android.gms.cast.framework.SessionManagerListener
+import com.google.android.gms.common.images.WebImage
 
 class MainActivity : AppCompatActivity() {
     private lateinit var settings: ServerSettings
@@ -74,6 +80,32 @@ class MainActivity : AppCompatActivity() {
             }
         })
         if (settings.baseUrl.isBlank() || settings.token.isBlank()) setup() else loadTab("home")
+    }
+
+    private val castSessionListener = object : SessionManagerListener<CastSession> {
+        override fun onSessionStarted(session: CastSession, id: String) {
+            heroItems.getOrNull(currentHeroIndex)?.let { syncCastIdle(it) }
+        }
+        override fun onSessionResumed(session: CastSession, suspended: Boolean) {
+            heroItems.getOrNull(currentHeroIndex)?.let { syncCastIdle(it) }
+        }
+        override fun onSessionEnded(session: CastSession, error: Int) {}
+        override fun onSessionSuspended(session: CastSession, reason: Int) {}
+        override fun onSessionStartFailed(session: CastSession, error: Int) {}
+        override fun onSessionResumeFailed(session: CastSession, error: Int) {}
+        override fun onSessionStarting(session: CastSession) {}
+        override fun onSessionEnding(session: CastSession) {}
+        override fun onSessionResuming(session: CastSession, id: String) {}
+    }
+
+    override fun onStart() {
+        super.onStart()
+        castContext(this)?.sessionManager?.addSessionManagerListener(castSessionListener, CastSession::class.java)
+    }
+
+    override fun onStop() {
+        super.onStop()
+        castContext(this)?.sessionManager?.removeSessionManagerListener(castSessionListener, CastSession::class.java)
     }
 
     override fun onResume() {
@@ -565,6 +597,7 @@ class MainActivity : AppCompatActivity() {
         currentHeroIndex = 0
         if (heroItems.isNotEmpty()) {
             hero(heroItems[0], true)
+            syncCastIdle(heroItems[0])
         }
         if (heroItems.size > 1) {
             heroRotationJob?.cancel()
@@ -573,9 +606,35 @@ class MainActivity : AppCompatActivity() {
                     delay(7000)
                     if (heroItems.isNotEmpty()) {
                         currentHeroIndex = (currentHeroIndex + 1) % heroItems.size
-                        hero(heroItems[currentHeroIndex], true)
+                        val nextItem = heroItems[currentHeroIndex]
+                        hero(nextItem, true)
+                        syncCastIdle(nextItem)
                     }
                 }
+            }
+        }
+    }
+
+    private fun syncCastIdle(item: Media) {
+        val session = castContext(this)?.sessionManager?.currentCastSession ?: return
+        val client = session.remoteMediaClient ?: return
+        if (!client.isPlaying && !client.isLoadingNextItem) {
+            val art = item.backdrop.ifBlank { item.poster }
+            if (art.isNotBlank()) {
+                try {
+                    val fullUrl = api.absolute(art)
+                    val metadata = MediaMetadata(MediaMetadata.MEDIA_TYPE_PHOTO).apply {
+                        putString(MediaMetadata.KEY_TITLE, item.title)
+                        putString(MediaMetadata.KEY_SUBTITLE, "Ready to cast")
+                        addImage(WebImage(Uri.parse(fullUrl)))
+                    }
+                    val photoInfo = MediaInfo.Builder(fullUrl)
+                        .setContentType("image/jpeg")
+                        .setStreamType(MediaInfo.STREAM_TYPE_BUFFERED)
+                        .setMetadata(metadata)
+                        .build()
+                    client.load(MediaLoadRequestData.Builder().setMediaInfo(photoInfo).setAutoplay(true).build())
+                } catch (_: Exception) {}
             }
         }
     }
