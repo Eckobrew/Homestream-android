@@ -193,13 +193,16 @@ class PlayerActivity : AppCompatActivity() {
         negotiation = lifecycleScope.launch {
             try {
                 var targetId = media.playbackId
-                if (media.type == "Series" && !media.isDownload) {
+                if (!media.isDownload && (media.type == "Series" || targetId.startsWith("seerr-"))) {
                     try {
                         val details = api.call("media/${android.net.Uri.encode(media.id)}")
                         val itemObj = details.optJSONObject("item")
                         val epId = itemObj?.optString("playableEpisodeId") ?: ""
+                        val jfId = itemObj?.optString("jellyfinId") ?: ""
                         if (epId.isNotBlank()) {
                             targetId = epId
+                        } else if (jfId.isNotBlank()) {
+                            targetId = jfId
                         } else {
                             val seasons = itemObj?.optJSONArray("seasons")
                             if (seasons != null && seasons.length() > 0) {
@@ -207,8 +210,15 @@ class PlayerActivity : AppCompatActivity() {
                                     val sObj = seasons.getJSONObject(sIdx)
                                     val eps = sObj.optJSONArray("episodes")
                                     if (eps != null && eps.length() > 0) {
-                                        targetId = eps.getJSONObject(0).optString("id", targetId)
-                                        break
+                                        for (eIdx in 0 until eps.length()) {
+                                            val ep = eps.getJSONObject(eIdx)
+                                            val playableEp = ep.optString("jellyfinId").ifBlank { ep.optString("id") }
+                                            if (playableEp.isNotBlank() && !playableEp.startsWith("seerr-")) {
+                                                targetId = playableEp
+                                                break
+                                            }
+                                        }
+                                        if (!targetId.startsWith("seerr-")) break
                                     }
                                 }
                             }
@@ -216,8 +226,25 @@ class PlayerActivity : AppCompatActivity() {
                     } catch (_: Exception) {}
                 }
 
+                if (targetId.startsWith("seerr-")) {
+                    clearMessages()
+                    showMessage("This title is not yet available in your Jellyfin collection.")
+                    overlay.addView(action("Request Media") {
+                        lifecycleScope.launch {
+                            try {
+                                showMessage("Requesting…")
+                                api.call("request", body = JSONObject().put("mediaId", media.tmdbId).put("mediaType", if (media.type == "Movie") "movie" else "tv"))
+                                clearMessages(); showMessage("Requested! It will be downloaded automatically.")
+                            } catch (e: Exception) {
+                                clearMessages(); showMessage(e.message ?: "Request failed")
+                            }
+                        }
+                    })
+                    return@launch
+                }
+
                 val stream = if (media.isDownload) JSONObject().put("streamUrl", media.downloadUrl)
-                    else api.call("playback", mapOf("itemId" to targetId, "forceTranscode" to transcode.toString()))
+                    else api.call("playback", mapOf("itemId" to targetId, "forceTranscode" to transcode.toString(), "canPlayHevc" to "true"))
                 val url = stream.optString("streamUrl")
                 if (url.isBlank()) error("No playable stream returned by Jellyfin.")
                 currentPlaybackId = targetId
@@ -240,6 +267,8 @@ class PlayerActivity : AppCompatActivity() {
                 val httpFactory = androidx.media3.datasource.DefaultHttpDataSource.Factory()
                     .setUserAgent("HomeStream-Android/1.0")
                     .setAllowCrossProtocolRedirects(true)
+                    .setConnectTimeoutMs(20_000)
+                    .setReadTimeoutMs(60_000)
                     .apply {
                         if (token.isNotBlank() && isHomeStreamInternal) {
                             setDefaultRequestProperties(mapOf("Authorization" to "Bearer $token"))
