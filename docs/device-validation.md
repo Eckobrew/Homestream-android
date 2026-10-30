@@ -31,7 +31,22 @@ Before a release, use your deployed HomeStream/Jellyfin configuration:
 | Chromecast, incompatible URL | Load failure returns local playback with a useful error |
 | Pairing revocation | Rotating the server token rejects future API requests |
 
-No physical phone, Android TV or Chromecast was attached to the development
-workspace. These checks must be completed on your devices before a production
-release. This project does not imply certification by Netflix, Google or a TV
-manufacturer.
+## Physical Pixel startup — 30 October 2026
+
+Tested the existing installed 1.0.1 APK (version code 2, target SDK 35) on a
+wirelessly connected Pixel 8a running Android 17. The app was force-stopped and
+cold-launched with `adb shell am start -W -n com.homestream.app/.MainActivity`.
+Android reported `Status: ok`, `LaunchState: COLD` and 713 ms total launch time.
+The app displayed the phone header, category controls, bottom navigation, Cast
+button and empty server-pairing dialog. Its process remained alive, and the
+process-filtered crash buffer contained no entries after launch.
+
+This verifies the reported startup crash is fixed on the physical Pixel, including
+initialization of the phone Cast UI with Google Play services present. The app
+was not reinstalled and its existing settings were preserved. The phone locked
+before further form and Cast chooser interaction could be verified.
+
+Live server pairing, playback, Cast discovery/handoff and actual Android TV
+remote operation remain unverified. The mobile API PR has not been merged or
+deployed. Complete the remaining checklist before a production release.
+This project does not imply certification by Netflix, Google or a TV manufacturer.
