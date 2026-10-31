@@ -7,6 +7,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
 import android.widget.EditText
+import android.widget.TextView
 import org.junit.Assert.*
 import org.junit.Before
 import org.junit.Test
@@ -27,16 +28,16 @@ class MainActivityTest {
     private fun descendants(view: View): List<View> = listOf(view) + if (view is ViewGroup)
         (0 until view.childCount).flatMap { descendants(view.getChildAt(it)) } else emptyList()
 
-    @Test fun firstLaunchShowsPairingAndValidatesMissingServer() {
+    @Test fun firstLaunchOffersOnlyLocalPairingAndExternalLogin() {
         Robolectric.buildActivity(MainActivity::class.java).setup().use { controller ->
             val dialog = ShadowDialog.getLatestDialog()
             assertTrue(dialog.isShowing)
-            val button = dialog.findViewById<Button>(android.R.id.button1)
-            assertEquals("Connect", button.text.toString())
-            button.performClick()
-            val inputs = descendants(dialog.window!!.decorView).filterIsInstance<EditText>()
-            assertEquals(2, inputs.size)
-            assertNotNull(inputs[0].error)
+            val views = descendants(dialog.window!!.decorView)
+            assertTrue(views.filterIsInstance<EditText>().isEmpty())
+            val labels = views.filterIsInstance<TextView>().map { it.text.toString() }
+            assertTrue(labels.contains("LOCAL — AUTO DISCOVER & PAIR"))
+            assertTrue(labels.any { it.contains("External Server") })
+            assertFalse(labels.any { it.contains("MANUAL SERVER") || it.contains("HOMESTREAM_MOBILE_TOKEN") })
             assertTrue(dialog.isShowing)
             assertFalse(controller.get().isFinishing)
             assertNotNull(controller.get().findViewById<View>(R.id.phone_header))
