@@ -8,7 +8,7 @@ import java.security.MessageDigest
 class Watchlist(context: Context, private val settings: ConnectionSettings) {
     private val prefs = context.getSharedPreferences("watchlists", Context.MODE_PRIVATE)
     private fun key() = MessageDigest.getInstance("SHA-256")
-        .digest("${settings.baseUrl}|${settings.profile}".toByteArray()).joinToString("") { "%02x".format(it) }
+        .digest("${(settings as? ServerSettings)?.serverIdentity ?: settings.baseUrl}|${settings.profile}".toByteArray()).joinToString("") { "%02x".format(it) }
     fun items(): List<Media> = runCatching {
         val array = JSONArray(prefs.getString(key(), "[]"))
         (0 until array.length()).map { Media(array.getJSONObject(it)) }

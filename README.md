@@ -8,6 +8,8 @@ hero and large landscape rows. Both keep HomeStream branding. This is a native K
 
 ## Features
 
+- Automatic next/previous episode playback locally and receiver-side Cast queues.
+- Library sorting, watched-state filters and mark watched/unwatched controls.
 - Phone/tablet mobile layout and dedicated Android TV layout with D-pad focus and playback controls.
 - New & Hot discovery and device-local My List, separated by server and profile.
 - HomeStream home feed, continue-watching progress, movies/TV libraries and search.
@@ -22,9 +24,9 @@ hero and large landscape rows. Both keep HomeStream branding. This is a native K
 
 ## Backend setup
 
-The stock HomeStream repository needs the additional `/api/mobile/v1` API routes.
-Those changes are proposed in [HomeStream PR #1](https://github.com/Eckobrew/HomeStream/pull/1)
-on `feat/mobile-api`. This Android repository has no dependency on the web source,
+Use the matching HomeStream backend with the `/api/mobile/v1` routes, including
+`episodes`, `watched`, `search`, `downloads` and `stream/download`. The original
+mobile routes alone do not support every feature in version 1.1.0. This Android repository has no dependency on the web source,
 Node, npm, a shared filesystem or direct Jellyfin administrator configuration.
 
 1. Apply the mobile API changes to your HomeStream server.
@@ -39,7 +41,9 @@ Node, npm, a shared filesystem or direct Jellyfin administrator configuration.
 Use HTTPS outside a trusted LAN. HTTP is supported for local self-hosted servers;
 it sends the pairing secret and media traffic without encryption. The token is a
 household password with access to all HomeStream profiles and media requests,
-not an individual-user login. Rotate it on the server to revoke paired clients.
+not an individual-user login. Rotate the shared token to revoke that credential. Registered device tokens
+are revoked through the server device registry; account sessions are revoked by
+rotating the session signing secret.
 The app disables backup and does not log tokens or stream URLs.
 
 ## Build
@@ -90,3 +94,6 @@ In-progress downloads use HomeStream's existing download stream endpoint. They
 can buffer or lack seeking until enough data is available. They are played
 locally; Cast and Jellyfin watch-history sync apply after the completed media
 is imported into Jellyfin.
+
+See [audit fixes and playback additions](docs/audit-fixes.md) for migration notes,
+queue limits and validation details.

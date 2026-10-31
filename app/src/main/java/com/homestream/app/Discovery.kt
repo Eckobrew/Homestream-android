@@ -12,17 +12,15 @@ data class DiscoveredServer(
 )
 
 object NetworkDiscovery {
-    private val seenUrls = mutableSetOf<String>()
 
     fun startDiscovery(
         scope: CoroutineScope,
         onServerFound: (DiscoveredServer) -> Unit
     ): Job {
-        seenUrls.clear()
+        val seenUrls = mutableSetOf<String>()
         return scope.launch(Dispatchers.IO) {
             // 1. Check common local hosts and default test endpoints immediately
             val commonHosts = listOf(
-                "192.168.1.172",
                 "192.168.1.1",
                 "192.168.0.1",
                 "10.0.0.1",
@@ -33,7 +31,7 @@ object NetworkDiscovery {
 
             commonHosts.forEach { host ->
                 launch {
-                    probeServer("http://$host:3000", host, onServerFound)
+                    probeServer("http://$host:3000", host, onServerFound, seenUrls)
                 }
             }
 
@@ -60,7 +58,7 @@ object NetworkDiscovery {
                             val serverName = json.optString("Name", "HomeStream Media Server")
                             if (!addr.isNullOrBlank()) {
                                 val cleanHost = addr.replace("http://", "").replace("https://", "").split(':')[0]
-                                probeServer("http://$cleanHost:3000", cleanHost, onServerFound, serverName)
+                                probeServer("http://$cleanHost:3000", cleanHost, onServerFound, seenUrls, serverName)
                             }
                         } catch (_: SocketTimeoutException) {
                             break
@@ -79,7 +77,7 @@ object NetworkDiscovery {
                     val batchJobs = (batchStart until (batchStart + 32).coerceAtMost(255)).map { hostNum ->
                         launch {
                             val ip = "$subnet.$hostNum"
-                            probeServer("http://$ip:3000", ip, onServerFound)
+                            probeServer("http://$ip:3000", ip, onServerFound, seenUrls)
                         }
                     }
                     batchJobs.joinAll()
@@ -92,6 +90,7 @@ object NetworkDiscovery {
         url: String,
         host: String,
         onServerFound: (DiscoveredServer) -> Unit,
+        seenUrls: MutableSet<String>,
         defaultName: String = "HomeStream Server"
     ) {
         val cleanUrl = url.trimEnd('/')
@@ -99,55 +98,20 @@ object NetworkDiscovery {
             if (seenUrls.contains(cleanUrl)) return
         }
 
-        try {
-            val u = URL("$cleanUrl/api/mobile/v1/capabilities")
-            val conn = (u.openConnection() as HttpURLConnection).apply {
-                connectTimeout = 1200
-                readTimeout = 1200
-                requestMethod = "GET"
-                setRequestProperty("Accept", "application/json")
-            }
-
-            if (conn.responseCode == 200) {
-                val text = conn.inputStream.bufferedReader().use { it.readText() }
-                val json = JSONObject(text)
-                val appName = json.optString("appName", defaultName)
-                val server = DiscoveredServer(
-                    name = appName,
-                    url = cleanUrl,
-                    host = host,
-                    isLocal = true
-                )
-                synchronized(seenUrls) {
-                    if (seenUrls.add(cleanUrl)) {
-                        onServerFound(server)
-                    }
-                }
-            }
-        } catch (_: Exception) {
-            // Also check /api/auth?action=users
-            try {
-                val u2 = URL("$cleanUrl/api/auth?action=users")
-                val conn2 = (u2.openConnection() as HttpURLConnection).apply {
-                    connectTimeout = 800
-                    readTimeout = 800
-                    requestMethod = "GET"
-                }
-                if (conn2.responseCode == 200) {
-                    val server = DiscoveredServer(
-                        name = defaultName,
-                        url = cleanUrl,
-                        host = host,
-                        isLocal = true
-                    )
-                    synchronized(seenUrls) {
-                        if (seenUrls.add(cleanUrl)) {
-                            onServerFound(server)
-                        }
-                    }
-                }
-            } catch (_: Exception) {}
+        val conn = (URL("$cleanUrl/api/mobile/v1/discovery").openConnection() as HttpURLConnection).apply {
+            connectTimeout = 1200; readTimeout = 1200; requestMethod = "GET"
+            setRequestProperty("Accept", "application/json")
+            instanceFollowRedirects = false
         }
+        try {
+            if (conn.responseCode != 200) return
+            val json = JSONObject(conn.inputStream.bufferedReader().use { it.readText() })
+            if (json.optInt("apiVersion") != 1 || !json.has("appName")) return
+            val server = DiscoveredServer(json.optString("appName", defaultName), cleanUrl, host, true)
+            synchronized(seenUrls) { if (seenUrls.add(cleanUrl)) onServerFound(server) }
+        } catch (_: Exception) {
+            // Manual pairing remains available when discovery is unsupported.
+        } finally { conn.disconnect() }
     }
 
     private fun getLocalSubnets(): List<String> {

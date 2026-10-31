@@ -28,4 +28,10 @@ class MediaTest {
         assertEquals(123450L, media.resumeMs)
         assertEquals("Pilot", media.title)
     }
+    @Test fun discoveryTitlesMatchedToJellyfinCanPlay() {
+        val matched = Media(JSONObject("""{"id":"seerr-movie-42","type":"Movie","status":"available","source":"jellyfin","jellyfinId":"real-file"}"""))
+        assertTrue(matched.isAvailableForPlayback)
+        assertEquals("real-file", matched.playbackId)
+        assertFalse(Media(JSONObject("""{"id":"seerr-movie-42","type":"Movie","status":"available"}""")).isAvailableForPlayback)
+    }
 }

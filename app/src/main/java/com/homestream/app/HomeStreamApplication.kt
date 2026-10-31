@@ -19,9 +19,9 @@ class HomeStreamApplication : Application() {
         val imageClient = OkHttpClient.Builder()
             .addInterceptor { chain ->
                 val request = chain.request()
-                val serverHost = settings.baseUrl.toHttpUrlOrNull()?.host
+                val server = settings.baseUrl.toHttpUrlOrNull()
                 val builder = request.newBuilder()
-                if (serverHost != null && request.url.host.equals(serverHost, ignoreCase = true) && settings.token.isNotBlank()) {
+                if (server != null && request.url.scheme == server.scheme && request.url.host == server.host && request.url.port == server.port && settings.token.isNotBlank()) {
                     builder.header("Authorization", "Bearer ${settings.token}")
                 }
                 chain.proceed(builder.build())

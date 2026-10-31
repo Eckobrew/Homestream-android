@@ -17,7 +17,7 @@ interface ConnectionSettings {
     var profile: String
 }
 
-class ServerSettings(context: Context) : ConnectionSettings {
+class ServerSettings(context: Context, private val keyProvider: (() -> SecretKey)? = null) : ConnectionSettings {
     private val prefs = context.getSharedPreferences("server", Context.MODE_PRIVATE)
 
     var localUrl: String
@@ -45,7 +45,9 @@ class ServerSettings(context: Context) : ConnectionSettings {
             val local = localUrl
             val ext = externalUrl
             val legacy = prefs.getString("url", "").orEmpty()
+            val active = prefs.getString("activeUrl", "").orEmpty()
             return when {
+                active.isNotBlank() && (active == local || active == ext) -> active
                 local.isNotBlank() -> local
                 ext.isNotBlank() -> ext
                 else -> legacy
@@ -61,24 +63,20 @@ class ServerSettings(context: Context) : ConnectionSettings {
         set(value) { prefs.edit().putString("profile", value).apply() }
 
     private fun key(): SecretKey {
-        return runCatching {
-            val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
-            (store.getKey("homestream-pairing", null) as? SecretKey)?.let { return it }
-            KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore").apply {
-                init(KeyGenParameterSpec.Builder("homestream-pairing", KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
-                    .setBlockModes(KeyProperties.BLOCK_MODE_GCM).setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE).build())
-            }.generateKey()
-        }.getOrElse {
-            // JVM / Robolectric environment fallback when AndroidKeyStore is unavailable
-            val raw = prefs.getString("keystore_fallback", null) ?: run {
-                val bytes = ByteArray(16).also { java.security.SecureRandom().nextBytes(it) }
-                val encoded = Base64.encodeToString(bytes, Base64.NO_WRAP)
-                prefs.edit().putString("keystore_fallback", encoded).commit()
-                encoded
-            }
-            javax.crypto.spec.SecretKeySpec(Base64.decode(raw, Base64.NO_WRAP), "AES")
-        }
+        keyProvider?.let { return it() }
+        val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+        (store.getKey("homestream-pairing", null) as? SecretKey)?.let { return it }
+        return KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore").apply {
+            init(KeyGenParameterSpec.Builder("homestream-pairing", KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
+                .setBlockModes(KeyProperties.BLOCK_MODE_GCM).setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE).build())
+        }.generateKey()
     }
+
+    fun rememberSuccessfulUrl(url: String) {
+        if (url == localUrl || url == externalUrl) prefs.edit().putString("activeUrl", url).apply()
+    }
+
+    val serverIdentity: String get() = localUrl.ifBlank { externalUrl.ifBlank { baseUrl } }
 
     override val token: String get() = runCatching {
         val encoded = prefs.getString("token", "").orEmpty().split(':')
@@ -95,6 +93,8 @@ class ServerSettings(context: Context) : ConnectionSettings {
             Base64.encodeToString(encrypted, Base64.NO_WRAP))
             .putString("url", url.trimEnd('/'))
             .putString("localUrl", url.trimEnd('/'))
+            .remove("externalUrl").remove("activeUrl").remove("keystore_fallback")
+            .putString("authType", "device")
             .remove("profile")
             .apply()
     }
@@ -116,6 +116,7 @@ class ServerSettings(context: Context) : ConnectionSettings {
             .putString("externalUrl", external.trimEnd('/'))
             .putString("authType", type)
             .putString("serverName", name)
+            .remove("activeUrl").remove("keystore_fallback")
             .remove("profile")
             .apply()
     }

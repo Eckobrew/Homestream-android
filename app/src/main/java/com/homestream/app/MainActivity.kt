@@ -26,6 +26,8 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.lifecycleScope
+import androidx.recyclerview.widget.RecyclerView
+import androidx.recyclerview.widget.GridLayoutManager
 import coil.load
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -37,6 +39,7 @@ import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import org.json.JSONObject
 import com.google.android.gms.cast.MediaInfo
 import com.google.android.gms.cast.MediaLoadRequestData
+import com.google.android.gms.cast.MediaStatus
 import com.google.android.gms.cast.MediaMetadata
 import com.google.android.gms.cast.framework.CastSession
 import com.google.android.gms.cast.framework.SessionManagerListener
@@ -49,7 +52,11 @@ class MainActivity : AppCompatActivity() {
     private lateinit var root: FrameLayout
     private lateinit var mainContainer: LinearLayout
     private var sidebarDrawer: FrameLayout? = null
+    private var trailerView: WebView? = null
     private var work: Job? = null
+    private var searchJob: Job? = null
+    private var categoryJob: Job? = null
+    private val catalogCache = mutableMapOf<String, List<Media>>()
     private var heroRotationJob: Job? = null
     private var currentTab = "home"
     private var screen = "home"
@@ -101,22 +108,29 @@ class MainActivity : AppCompatActivity() {
     override fun onStart() {
         super.onStart()
         castContext(this)?.sessionManager?.addSessionManagerListener(castSessionListener, CastSession::class.java)
+        if (screen == "home" && heroItems.size > 1) setupDynamicHero(heroItems)
     }
 
     override fun onStop() {
+        trailerView?.onPause()
+        heroRotationJob?.cancel()
         super.onStop()
         castContext(this)?.sessionManager?.removeSessionManagerListener(castSessionListener, CastSession::class.java)
     }
 
     override fun onResume() {
         super.onResume()
+        trailerView?.onResume()
         if (playbackWasLaunched) {
             playbackWasLaunched = false
+            catalogCache.clear()
             lastDetails?.takeIf { screen == "details" }?.let { details(it) } ?: loadTab(currentTab)
         }
     }
 
     private fun shell() {
+        searchJob?.cancel(); categoryJob?.cancel()
+        trailerView?.apply { stopLoading(); destroy() }; trailerView = null
         heroRotationJob?.cancel()
         if (!supportFragmentManager.isStateSaved) {
             supportFragmentManager.findFragmentByTag("cast-mini")?.let {
@@ -126,7 +140,7 @@ class MainActivity : AppCompatActivity() {
         root = FrameLayout(this).apply { setBackgroundColor(INK) }
         ViewCompat.setOnApplyWindowInsetsListener(root) { view, insets ->
             val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
-            view.setPadding(bars.left, bars.top, bars.right, 0)
+            view.setPadding(bars.left, bars.top, bars.right, bars.bottom)
             insets
         }
         mainContainer = column().apply { setBackgroundColor(INK) }
@@ -138,6 +152,9 @@ class MainActivity : AppCompatActivity() {
         setupSidebarDrawer()
         setContentView(root)
     }
+
+    private fun browseViewport(): View = if (screen.startsWith("catalog-")) content else
+        ScrollView(this).apply { clipChildren = false; addView(content) }
 
     private fun phoneShell() {
         // 1. Netflix-style sleek header
@@ -179,7 +196,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         // 3. Scrollable content
-        mainContainer.addView(ScrollView(this).apply { clipChildren = false; addView(content) },
+        mainContainer.addView(browseViewport(),
             LinearLayout.LayoutParams(-1, 0, 1f))
 
         // Cast mini controller if cast is active - docked above floating navigation pill
@@ -257,7 +274,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun televisionShell() {
         val stage = FrameLayout(this)
-        stage.addView(ScrollView(this).apply { clipChildren = false; addView(content) },
+        stage.addView(browseViewport(),
             FrameLayout.LayoutParams(-1, -1).apply { marginStart = dp(76) })
 
         val rail = column().apply {
@@ -297,14 +314,15 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        stage.addView(rail, FrameLayout.LayoutParams(dp(76), -1, Gravity.START))
+        val railViewport = ScrollView(this).apply { isVerticalScrollBarEnabled = false; addView(rail) }
+        stage.addView(railViewport, FrameLayout.LayoutParams(dp(76), -1, Gravity.START))
         stage.viewTreeObserver.addOnGlobalFocusChangeListener { _, focused ->
             var parent: android.view.ViewParent? = focused?.parent
             var inside = focused === rail
             while (parent != null) { if (parent === rail) inside = true; parent = parent.parent }
             val width = dp(if (inside) 210 else 76)
-            if (rail.layoutParams.width != width) {
-                rail.layoutParams = (rail.layoutParams as FrameLayout.LayoutParams).apply { this.width = width }
+            if (railViewport.layoutParams.width != width) {
+                railViewport.layoutParams = (railViewport.layoutParams as FrameLayout.LayoutParams).apply { this.width = width }
                 buttons.forEach { it.text = if (inside) it.tag.toString() else "" }
             }
         }
@@ -582,9 +600,12 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun loadCategorySectionsIntoContent(type: String) {
-        lifecycleScope.launch {
+        categoryJob?.cancel()
+        val current = generation
+        categoryJob = lifecycleScope.launch {
             try {
                 val catData = api.call("categories/$type")
+                if (current != generation) return@launch
                 val sections = catData.optJSONArray("sections")
                 if (sections != null && sections.length() > 0) {
                     for (i in 0 until sections.length()) {
@@ -628,7 +649,7 @@ class MainActivity : AppCompatActivity() {
     private fun syncCastIdle(item: Media) {
         val session = castContext(this)?.sessionManager?.currentCastSession ?: return
         val client = session.remoteMediaClient ?: return
-        if (!client.isPlaying && !client.isLoadingNextItem) {
+        if (client.playerState == MediaStatus.PLAYER_STATE_IDLE) {
             val art = item.backdrop.ifBlank { item.poster }
             if (art.isNotBlank()) {
                 try {
@@ -823,9 +844,9 @@ class MainActivity : AppCompatActivity() {
         mediaRow(title, items, isContinueWatching = false)
     }
 
-    private fun mediaRow(title: String, items: List<Media>, isContinueWatching: Boolean = false) {
+    private fun mediaRow(title: String, items: List<Media>, isContinueWatching: Boolean = false, parent: LinearLayout = content) {
         if (items.isEmpty()) return
-        heading(title)
+        parent.addView(label(title, 20f, true).apply { setPadding(gutter, dp(22), gutter, dp(8)) })
         val row = LinearLayout(this).apply { setPadding(gutter, dp(6), gutter, dp(10)); clipChildren = false }
 
         items.forEach { item ->
@@ -871,7 +892,7 @@ class MainActivity : AppCompatActivity() {
             card.addView(posterContainer, LinearLayout.LayoutParams(cardWidth, cardHeight))
 
             // Card title under poster
-            card.addView(label(item.title, if (isTelevision()) 12.5f else 11f, bold = true).apply {
+            card.addView(label((if (item.json.optBoolean("played")) "✓ " else "") + item.title, if (isTelevision()) 12.5f else 11f, bold = true).apply {
                 maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
                 setPadding(dp(2), dp(5), dp(2), 0)
             })
@@ -879,7 +900,7 @@ class MainActivity : AppCompatActivity() {
             row.addView(card, LinearLayout.LayoutParams(-2, -2).apply { setMargins(0, 0, dp(10), 0) })
         }
 
-        content.addView(HorizontalScrollView(this).apply {
+        parent.addView(HorizontalScrollView(this).apply {
             isHorizontalScrollBarEnabled = false; clipChildren = false; addView(row)
         })
     }
@@ -931,6 +952,7 @@ class MainActivity : AppCompatActivity() {
                     """.trimIndent()
                     loadDataWithBaseURL("https://www.youtube-nocookie.com", html, "text/html", "UTF-8", null)
                 }
+                trailerView = webView
                 headerArea.addView(webView, FrameLayout.LayoutParams(-1, -1))
             }
 
@@ -1007,6 +1029,19 @@ class MainActivity : AppCompatActivity() {
                     setOnClickListener { triggerDownload(full) }
                 }
                 btnRow.addView(dlBtn, LinearLayout.LayoutParams(0, dp(40), 1f))
+            }
+            if (full.isAvailableForPlayback && !full.isDownload) {
+                metaSection.addView(action(if (full.json.optBoolean("played")) "Mark unwatched" else "Mark watched") {
+                    lifecycleScope.launch {
+                        try {
+                            api.call("watched", body = JSONObject().put("itemId", full.playbackId).put("played", !full.json.optBoolean("played")))
+                            catalogCache.clear(); details(full)
+                        } catch (e: Exception) {
+                            if (e is kotlinx.coroutines.CancellationException) throw e
+                            toast(e.message ?: "Could not update watched status")
+                        }
+                    }
+                })
             }
             metaSection.addView(btnRow)
 
@@ -1121,7 +1156,7 @@ class MainActivity : AppCompatActivity() {
                     focusableCard()
                     setOnClickListener {
                         if (canPlayEp) {
-                            play(ep)
+                            play(Media(JSONObject(ep.json.toString()).put("seriesId", full.playbackId).put("seriesName", full.title)))
                         } else {
                             streamMedia(ep, full)
                         }
@@ -1172,7 +1207,7 @@ class MainActivity : AppCompatActivity() {
                 }
                 val epNum = ep.json.optInt("episodeNumber", 1)
                 titleCol.addView(TextView(this).apply {
-                    text = "$epNum. ${ep.title}"; textSize = 13.5f; typeface = android.graphics.Typeface.DEFAULT_BOLD
+                    text = (if (ep.json.optBoolean("played")) "✓ " else "") + "$epNum. ${ep.title}"; textSize = 13.5f; typeface = android.graphics.Typeface.DEFAULT_BOLD
                     setTextColor(Color.WHITE); maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
                 })
                 titleCol.addView(TextView(this).apply {
@@ -1336,8 +1371,9 @@ class MainActivity : AppCompatActivity() {
     // -----------------------------------------------------------------------------------------
     private fun openSearch() {
         heroRotationJob?.cancel()
+        work?.cancel(); ++generation
         screen = "search"
-        content.removeAllViews()
+        shell()
 
         val searchBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
@@ -1372,7 +1408,6 @@ class MainActivity : AppCompatActivity() {
         val resultsContainer = column()
         content.addView(resultsContainer)
 
-        var searchJob: Job? = null
         searchInput.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
@@ -1396,10 +1431,14 @@ class MainActivity : AppCompatActivity() {
                         } else {
                             val available = items.filter { it.playable }
                             val toRequest = items.filter { !it.playable }
-                            if (available.isNotEmpty()) mediaRow("In Your Library", available)
-                            if (toRequest.isNotEmpty()) mediaRow("Available to Request", toRequest)
+                            if (available.isNotEmpty()) mediaRow("In Your Library", available, parent = resultsContainer)
+                            if (toRequest.isNotEmpty()) mediaRow("Available to Request", toRequest, parent = resultsContainer)
                         }
-                    } catch (_: Exception) {}
+                    } catch (e: Exception) {
+                        if (e is kotlinx.coroutines.CancellationException) throw e
+                        resultsContainer.removeAllViews()
+                        resultsContainer.addView(label(e.message ?: "Search failed. Try again."))
+                    }
                 }
             }
             override fun afterTextChanged(s: Editable?) {}
@@ -1412,72 +1451,85 @@ class MainActivity : AppCompatActivity() {
     // -----------------------------------------------------------------------------------------
     private fun loadCatalog(type: String, selectedLetter: String = "All") {
         screen = "catalog-$type"
-        fetch("library/$type") { data ->
-            val title = when (type) {
-                "movies" -> "Movies (A–Z)"
-                "tv" -> "TV Shows (A–Z)"
-                else -> "YouTube (A–Z)"
-            }
-            val allItems = data.mediaList("items")
-
-            heading("$title (${allItems.size})", 22f)
-
-            // Alphabet Filter Bar: All, #, A-Z
-            val alphabet = listOf("All", "#") + ('A'..'Z').map { it.toString() }
-            val alphaScroll = HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false }
-            val alphaRow = LinearLayout(this).apply { setPadding(gutter, dp(4), gutter, dp(14)) }
-
-            alphabet.forEach { letter ->
-                val pill = action(letter, primary = (letter == selectedLetter)) {
-                    loadCatalog(type, letter)
-                }.apply {
-                    textSize = 12f; minHeight = dp(32); minimumHeight = dp(32)
-                    setPadding(dp(12), 0, dp(12), 0)
-                    background = rounded(if (letter == selectedLetter) RED else 0x33FFFFFF.toInt(), radius = dp(16).toFloat())
-                    setTextColor(Color.WHITE)
-                    layoutParams = LinearLayout.LayoutParams(-2, dp(32)).apply { marginEnd = dp(6) }
-                }
-                alphaRow.addView(pill)
-            }
-            alphaScroll.addView(alphaRow)
-            content.addView(alphaScroll)
-
-            // Filter items by selected letter
-            val filtered = if (selectedLetter == "All") {
-                allItems
-            } else if (selectedLetter == "#") {
-                allItems.filter { it.title.firstOrNull()?.isLetter() != true }
-            } else {
-                allItems.filter { it.title.startsWith(selectedLetter, ignoreCase = true) }
-            }
-
-            if (filtered.isEmpty()) {
-                message("No titles found under '$selectedLetter'.")
-            } else {
-                val grid = GridLayout(this).apply {
-                    columnCount = if (isTelevision()) 5 else 3
-                    setPadding(gutter, dp(4), gutter, dp(16))
-                }
-                filtered.forEach { item ->
-                    val card = column().apply {
-                        setPadding(dp(4), dp(4), dp(4), dp(6)); focusableCard()
-                        setOnClickListener { details(item) }
-                    }
-                    val img = ImageView(this).apply {
-                        scaleType = ImageView.ScaleType.CENTER_CROP
-                        load(api.absolute(item.poster)) { crossfade(true); error(R.drawable.ic_homestream) }
-                    }
-                    card.addView(img, LinearLayout.LayoutParams(dp(100), dp(145)))
-                    card.addView(label(item.title, 11f, bold = true).apply {
-                        maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
-                        setPadding(dp(2), dp(4), dp(2), 0)
-                    })
-                    grid.addView(card)
-                }
-                content.addView(grid)
-            }
+        val cacheKey = "${settings.baseUrl}|${settings.profile}|$type"
+        val cached = catalogCache[cacheKey]
+        if (cached != null) {
+            work?.cancel(); ++generation; shell()
+            renderCatalog(type, selectedLetter, cached)
+        } else fetch("library/$type") { data ->
+            val items = data.mediaList("items")
+            catalogCache[cacheKey] = items
+            renderCatalog(type, selectedLetter, items)
         }
     }
+
+    private fun renderCatalog(type: String, selectedLetter: String, allItems: List<Media>) {
+        val title = when (type) { "movies" -> "Movies"; "tv" -> "TV Shows"; else -> "YouTube" }
+        heading("$title (A–Z) (${allItems.size})", 22f)
+        val alphaRow = LinearLayout(this).apply { setPadding(gutter, dp(4), gutter, dp(14)) }
+        (listOf("All", "#") + ('A'..'Z').map { it.toString() }).forEach { letter ->
+            alphaRow.addView(action(letter, primary = letter == selectedLetter) { loadCatalog(type, letter) })
+        }
+        content.addView(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(alphaRow) })
+        val options = getSharedPreferences("library-options", MODE_PRIVATE)
+        val optionKey = "${settings.serverIdentity}|${settings.profile}|$type"
+        val sort = options.getInt("$optionKey-sort", 0)
+        val filter = options.getInt("$optionKey-filter", 0)
+        val sorts = arrayOf("Title A–Z", "Title Z–A", "Newest year", "Unwatched first")
+        val filters = arrayOf("All titles", "Unwatched", "Watched", "In progress")
+        val controls = LinearLayout(this).apply { setPadding(gutter, 0, gutter, dp(8)) }
+        controls.addView(action("Sort: ${sorts[sort.coerceIn(sorts.indices)]}") {
+            AlertDialog.Builder(this).setTitle("Sort library").setSingleChoiceItems(sorts, sort) { dialog, index ->
+                options.edit().putInt("$optionKey-sort", index).apply(); dialog.dismiss(); loadCatalog(type, selectedLetter)
+            }.show()
+        })
+        controls.addView(action(filters[filter.coerceIn(filters.indices)]) {
+            AlertDialog.Builder(this).setTitle("Filter library").setSingleChoiceItems(filters, filter) { dialog, index ->
+                options.edit().putInt("$optionKey-filter", index).apply(); dialog.dismiss(); loadCatalog(type, selectedLetter)
+            }.show()
+        })
+        content.addView(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(controls) })
+        val filtered = libraryItems(when (selectedLetter) {
+            "All" -> allItems
+            "#" -> allItems.filter { it.title.firstOrNull()?.isLetter() != true }
+            else -> allItems.filter { it.title.startsWith(selectedLetter, ignoreCase = true) }
+        }, sort, filter)
+        if (filtered.isEmpty()) { message("No titles found under '$selectedLetter'."); return }
+        val grid = RecyclerView(this).apply {
+            setPadding(gutter, 0, gutter, 0)
+            clipToPadding = false
+            val manager = GridLayoutManager(this@MainActivity, 1)
+            layoutManager = manager
+            addOnLayoutChangeListener { view, _, _, _, _, _, _, _, _ ->
+                val columns = ((view.width - paddingLeft - paddingRight) / dp(if (isTelevision()) 150 else 108)).coerceAtLeast(1)
+                if (manager.spanCount != columns) manager.spanCount = columns
+            }
+            adapter = object : RecyclerView.Adapter<CatalogHolder>() {
+                override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): CatalogHolder {
+                    val card = column().apply {
+                        setPadding(dp(4), dp(4), dp(4), dp(8)); focusableCard()
+                        layoutParams = RecyclerView.LayoutParams(-1, -2)
+                    }
+                    val image = ImageView(this@MainActivity).apply { scaleType = ImageView.ScaleType.CENTER_CROP }
+                    val label = label("", 12f, true).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }
+                    card.addView(image, LinearLayout.LayoutParams(-1, dp(if (isTelevision()) 210 else 145)))
+                    card.addView(label)
+                    return CatalogHolder(card, image, label)
+                }
+                override fun getItemCount() = filtered.size
+                override fun onBindViewHolder(holder: CatalogHolder, position: Int) {
+                    val item = filtered[position]
+                    holder.title.text = (if (item.json.optBoolean("played")) "✓ " else "") + item.title
+                    holder.itemView.contentDescription = item.title + if (item.json.optBoolean("played")) ", watched" else ", unwatched"
+                    holder.image.load(api.absolute(item.poster)) { error(R.drawable.ic_homestream) }
+                    holder.itemView.setOnClickListener { details(item) }
+                }
+            }
+        }
+        content.addView(grid, LinearLayout.LayoutParams(-1, 0, 1f))
+    }
+
+    private class CatalogHolder(view: View, val image: ImageView, val title: TextView) : RecyclerView.ViewHolder(view)
 
     // -----------------------------------------------------------------------------------------
     // Categories & Other Helpers
@@ -1568,20 +1620,25 @@ class MainActivity : AppCompatActivity() {
                 val streamData = api.call("playback", mapOf("itemId" to item.playbackId))
                 val streamUrl = streamData.optString("streamUrl")
                 if (streamUrl.isNotBlank()) {
-                    val token = settings.token
-                    val downloadUri = if (token.isNotBlank() && (streamUrl.startsWith("/api/") || !streamUrl.contains("api_key="))) {
-                        Uri.parse(api.absolute(streamUrl)).buildUpon().appendQueryParameter("token", token).build()
-                    } else {
-                        Uri.parse(api.absolute(streamUrl))
+                    if (streamData.optBoolean("isTranscoding") ||
+                        Uri.parse(streamUrl).path.orEmpty().endsWith(".m3u8", ignoreCase = true)) {
+                        toast("This title requires streaming conversion and cannot be downloaded as a file.")
+                        return@launch
                     }
+                    val token = settings.token
+                    val internal = api.isServerUrl(streamUrl)
+                    val downloadUri = Uri.parse(api.absolute(streamUrl))
                     val fileName = "${item.title.replace("[^a-zA-Z0-9.-]".toRegex(), "_")}.mp4"
                     val request = DownloadManager.Request(downloadUri)
                         .setTitle(item.title)
                         .setDescription("HomeStream Download")
                         .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-                        .setDestinationInExternalPublicDir(Environment.DIRECTORY_MOVIES, fileName)
                         .apply {
-                            if (token.isNotBlank()) addRequestHeader("Authorization", "Bearer $token")
+                            if (android.os.Build.VERSION.SDK_INT >= 29) setDestinationInExternalPublicDir(Environment.DIRECTORY_MOVIES, fileName)
+                            else setDestinationInExternalFilesDir(this@MainActivity, Environment.DIRECTORY_MOVIES, fileName)
+                        }
+                        .apply {
+                            if (internal && token.isNotBlank()) addRequestHeader("Authorization", "Bearer $token")
                         }
                     val dm = getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
                     dm.enqueue(request)
@@ -1606,21 +1663,6 @@ class MainActivity : AppCompatActivity() {
         val seasonNum = item.json.optInt("seasonNumber", 1).takeIf { it > 0 } ?: 1
         val episodeNum = item.json.optInt("episodeNumber", 1).takeIf { it > 0 } ?: 1
 
-        if (tmdb > 0) {
-            lifecycleScope.launch {
-                try {
-                    val body = JSONObject()
-                        .put("mediaType", mediaType)
-                        .put("mediaId", tmdb)
-                    if (isTv) {
-                        body.put("seasons", org.json.JSONArray().put(seasonNum))
-                    }
-                    api.call("request", body = body)
-                } catch (e: Exception) {
-                    android.util.Log.w("HomeStream", "Stream request error: ${e.message}")
-                }
-            }
-        }
 
         playbackWasLaunched = true
         val intent = Intent(this, PlayerActivity::class.java).apply {
@@ -1654,7 +1696,7 @@ class MainActivity : AppCompatActivity() {
                 }
                 val names = Array(profiles.length()) { profiles.getJSONObject(it).optString("name") }
                 AlertDialog.Builder(this@MainActivity).setTitle("Who's watching?").setItems(names) { _, index ->
-                    settings.profile = profiles.getJSONObject(index).getString("id"); loadTab(currentTab)
+                    settings.profile = profiles.getJSONObject(index).getString("id"); catalogCache.clear(); loadTab(currentTab)
                 }.show()
             } catch (e: Exception) { toast(e.message ?: "Could not load profiles") }
         }
@@ -1741,10 +1783,13 @@ class MainActivity : AppCompatActivity() {
         form.addView(label("Password", 13.5f, true)); form.addView(passwordInput)
 
         // Helper function to fetch users from the entered URL
+        var userLookupJob: Job? = null
         fun fetchJellyfinUsers(serverUrl: String) {
+            userLookupJob?.cancel()
             val clean = serverUrl.trim().trimEnd('/')
             if (clean.isBlank()) return
-            lifecycleScope.launch(Dispatchers.IO) {
+            userLookupJob = lifecycleScope.launch(Dispatchers.IO) {
+                delay(300)
                 try {
                     val u = java.net.URL("$clean/api/mobile/v1/auth/users")
                     val conn = (u.openConnection() as java.net.HttpURLConnection).apply {
@@ -1756,6 +1801,7 @@ class MainActivity : AppCompatActivity() {
                         val uArr = json.optJSONArray("users")
                         if (uArr != null && uArr.length() > 0) {
                             withContext(Dispatchers.Main) {
+                                if (extUrlInput.text.toString().trim().trimEnd('/') != clean) return@withContext
                                 usersContainer.removeAllViews()
                                 for (i in 0 until uArr.length()) {
                                     val uObj = uArr.getJSONObject(i)
@@ -1841,6 +1887,7 @@ class MainActivity : AppCompatActivity() {
                             val text = conn.inputStream.bufferedReader().use { it.readText() }
                             val resp = JSONObject(text)
                             val token = resp.optString("token")
+                            check(token.isNotBlank()) { "Server did not return a login token" }
                             val userObj = resp.optJSONObject("user")
                             withContext(Dispatchers.Main) {
                                 settings.saveServer(local = "", external = cleanUrl, token = token, type = "jellyfin", name = userObj?.optString("name", username) ?: username)
@@ -1871,6 +1918,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun setup() {
+        var connectionDialog: AlertDialog? = null
         val first = settings.baseUrl.isBlank()
         if (first) { shell(); heading("Your cinema. Your collection."); message("Connect to your HomeStream server to begin.") }
         val form = column().apply { setPadding(dp(20), dp(8), dp(20), dp(8)) }
@@ -1901,7 +1949,7 @@ class MainActivity : AppCompatActivity() {
             setTextColor(Color.WHITE); isAllCaps = false
             background = rounded(0x28FFFFFF.toInt(), radius = dp(8).toFloat())
             minHeight = dp(40); minimumHeight = dp(40)
-            setOnClickListener { openJellyfinLoginDialog() }
+            setOnClickListener { connectionDialog?.dismiss(); openJellyfinLoginDialog() }
         }
         form.addView(jellyfinRemoteBtn, LinearLayout.LayoutParams(-1, dp(40)).apply { bottomMargin = dp(14) })
 
@@ -1931,6 +1979,7 @@ class MainActivity : AppCompatActivity() {
             }
             .apply { if (!first) setNeutralButton("Disconnect") { _, _ -> discoveryJob?.cancel(); settings.clear(); setup() } }.create()
 
+        connectionDialog = dialog
         dialog.setOnDismissListener { discoveryJob?.cancel() }
 
         // Start Discovery
@@ -1953,55 +2002,14 @@ class MainActivity : AppCompatActivity() {
                 sCard.addView(info)
 
                 val pairBtn = Button(this@MainActivity).apply {
-                    text = "Pair"; textSize = 11.5f; setTextColor(Color.BLACK); isAllCaps = false
+                    text = "Select"; textSize = 11.5f; setTextColor(Color.BLACK); isAllCaps = false
                     background = rounded(Color.WHITE, radius = dp(6).toFloat())
                     minHeight = dp(32); minimumHeight = dp(32)
                     setPadding(dp(12), 0, dp(12), 0)
                     setOnClickListener {
-                        discoveryJob?.cancel()
-                        isEnabled = false; text = "Pairing…"
-                        val devId = runCatching {
-                            android.provider.Settings.Secure.getString(contentResolver, android.provider.Settings.Secure.ANDROID_ID)
-                        }.getOrNull() ?: java.util.UUID.randomUUID().toString()
-                        val devName = "${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}".trim()
-
-                        lifecycleScope.launch(Dispatchers.IO) {
-                            try {
-                                val u = java.net.URL("${s.url}/api/mobile/v1/auth/pair")
-                                val conn = (u.openConnection() as java.net.HttpURLConnection).apply {
-                                    connectTimeout = 5000; readTimeout = 5000
-                                    requestMethod = "POST"
-                                    doOutput = true
-                                    setRequestProperty("Content-Type", "application/json")
-                                }
-                                val reqBody = JSONObject().put("deviceId", devId).put("deviceName", devName).put("client", "android")
-                                conn.outputStream.bufferedWriter().use { it.write(reqBody.toString()) }
-
-                                if (conn.responseCode == 200) {
-                                    val respText = conn.inputStream.bufferedReader().use { it.readText() }
-                                    val respJson = JSONObject(respText)
-                                    val pairedToken = respJson.optString("token")
-                                    if (pairedToken.isNotBlank()) {
-                                        withContext(Dispatchers.Main) {
-                                            settings.saveServer(local = s.url, external = "", token = pairedToken, type = "device", name = s.name)
-                                            toast("Successfully paired with ${s.name}!")
-                                            dialog.dismiss()
-                                            loadTab("home")
-                                        }
-                                    }
-                                } else {
-                                    withContext(Dispatchers.Main) {
-                                        toast("Local pairing rejected (${conn.responseCode}). Try manual setup.")
-                                        isEnabled = true; text = "Pair"
-                                    }
-                                }
-                            } catch (e: Exception) {
-                                withContext(Dispatchers.Main) {
-                                    toast(e.message ?: "Pairing connection failed")
-                                    isEnabled = true; text = "Pair"
-                                }
-                            }
-                        }
+                        url.setText(s.url)
+                        token.requestFocus()
+                        toast("Enter your server pairing token, then select Connect.")
                     }
                 }
                 sCard.addView(pairBtn, LinearLayout.LayoutParams(-2, dp(32)))
@@ -2064,6 +2072,11 @@ class MainActivity : AppCompatActivity() {
                 content.addView(action("Server settings") { setup() })
             }
         }
+    }
+
+    override fun onDestroy() {
+        trailerView?.apply { stopLoading(); destroy() }; trailerView = null
+        super.onDestroy()
     }
 
     private fun heading(text: String, size: Float = 20f) = label(text, size, true).apply {

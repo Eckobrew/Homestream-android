@@ -26,7 +26,7 @@ data class Media(val json: JSONObject) {
     val playable: Boolean get() = json.optString("source") != "demo" && !isVirtual &&
         (isDownload || json.optString("status") == "available" || json.optString("status") == "partially_available" ||
             json.optString("jellyfinId").isNotBlank() || (type == "Episode" && !id.startsWith("seerr-")))
-    val isAvailableForPlayback: Boolean get() = !isVirtual && (isDownload || (playable && !isRequested && !id.startsWith("seerr-")))
+    val isAvailableForPlayback: Boolean get() = !isVirtual && (isDownload || (playable && !isRequested && (!id.startsWith("seerr-") || json.optString("jellyfinId").isNotBlank() || playableEpisodeId.isNotBlank())))
     val metadata: String get() = listOf(json.optString("year").takeUnless { it == "0" }.orEmpty(),
         json.optString("rating"), json.optString("resolution"),
         json.optInt("durationMinutes").takeIf { it > 0 }?.let { "$it min" }.orEmpty()).filter { it.isNotBlank() }.joinToString("  •  ")
