@@ -3,6 +3,7 @@ package com.homestream.app
 import kotlinx.coroutines.*
 import org.json.JSONObject
 import java.net.*
+import java.util.concurrent.Executors
 
 data class DiscoveredServer(
     val name: String,
@@ -12,21 +13,21 @@ data class DiscoveredServer(
 )
 
 object NetworkDiscovery {
+    private val probeDispatcher = Executors.newFixedThreadPool(48).asCoroutineDispatcher()
 
     fun startDiscovery(
         scope: CoroutineScope,
         onServerFound: (DiscoveredServer) -> Unit
     ): Job {
         val seenUrls = mutableSetOf<String>()
-        return scope.launch(Dispatchers.IO) {
+        return scope.launch(probeDispatcher) {
             // 1. Check common local hosts and default test endpoints immediately
             val commonHosts = listOf(
                 "192.168.1.1",
                 "192.168.0.1",
                 "10.0.0.1",
                 "homeflix.local",
-                "homestream.local",
-                "localhost"
+                "homestream.local"
             )
 
             commonHosts.forEach { host ->
@@ -106,11 +107,11 @@ object NetworkDiscovery {
         try {
             if (conn.responseCode != 200) return
             val json = JSONObject(conn.inputStream.bufferedReader().use { it.readText() })
-            if (json.optInt("apiVersion") != 1 || !json.has("appName")) return
+            if (!json.optString("appName").equals("HomeStream", ignoreCase = true) && json.optInt("apiVersion") != 1) return
             val server = DiscoveredServer(json.optString("appName", defaultName), cleanUrl, host, true)
             synchronized(seenUrls) { if (seenUrls.add(cleanUrl)) onServerFound(server) }
         } catch (_: Exception) {
-            // Manual pairing remains available when discovery is unsupported.
+            // Unrelated services and unreachable addresses are ignored.
         } finally { conn.disconnect() }
     }
 

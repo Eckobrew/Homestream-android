@@ -1930,7 +1930,7 @@ class MainActivity : AppCompatActivity() {
         }
         val discTitleRow = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
         discTitleRow.addView(TextView(this).apply {
-            text = "LOCAL SERVERS DISCOVERED"; textSize = 11f; typeface = android.graphics.Typeface.DEFAULT_BOLD
+            text = "LOCAL — AUTO DISCOVER & PAIR"; textSize = 11f; typeface = android.graphics.Typeface.DEFAULT_BOLD
             setTextColor(RED); layoutParams = LinearLayout.LayoutParams(0, -2, 1f)
         })
         val scanStatus = TextView(this).apply {
@@ -1953,27 +1953,10 @@ class MainActivity : AppCompatActivity() {
         }
         form.addView(jellyfinRemoteBtn, LinearLayout.LayoutParams(-1, dp(40)).apply { bottomMargin = dp(14) })
 
-        // 3. Manual Server Setup (Preserving test compatibility & direct pairing token)
-        form.addView(TextView(this).apply {
-            text = "MANUAL SERVER CONNECTION"; textSize = 11f; typeface = android.graphics.Typeface.DEFAULT_BOLD
-            setTextColor(MUTED); setPadding(0, 0, 0, dp(4))
-        })
-        val url = EditText(this).apply {
-            hint = "https://homestream.example.com"; setText(settings.baseUrl)
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI; isSingleLine = true
-        }
-        val token = EditText(this).apply {
-            hint = "Server pairing token"; setText(settings.token)
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD; isSingleLine = true
-        }
-        form.addView(label("HomeStream server URL", 13f)); form.addView(url)
-        form.addView(label("HOMESTREAM_MOBILE_TOKEN", 13f)); form.addView(token)
-        form.addView(label("Set pairing token or connect via auto-discovered local server above.", 11.5f).apply { setTextColor(MUTED) })
-
         var discoveryJob: Job? = null
         val dialog = AlertDialog.Builder(this).setTitle("Connect HomeStream")
             .setView(ScrollView(this).apply { addView(form) })
-            .setPositiveButton("Connect", null).setNegativeButton(if (first) "Close" else "Cancel") { _, _ ->
+            .setNegativeButton(if (first) "Close" else "Cancel") { _, _ ->
                 discoveryJob?.cancel()
                 if (first) finish()
             }
@@ -2002,14 +1985,36 @@ class MainActivity : AppCompatActivity() {
                 sCard.addView(info)
 
                 val pairBtn = Button(this@MainActivity).apply {
-                    text = "Select"; textSize = 11.5f; setTextColor(Color.BLACK); isAllCaps = false
+                    text = "Connect"; textSize = 11.5f; setTextColor(Color.BLACK); isAllCaps = false
                     background = rounded(Color.WHITE, radius = dp(6).toFloat())
                     minHeight = dp(32); minimumHeight = dp(32)
                     setPadding(dp(12), 0, dp(12), 0)
                     setOnClickListener {
-                        url.setText(s.url)
-                        token.requestFocus()
-                        toast("Enter your server pairing token, then select Connect.")
+                        isEnabled = false; text = "Pairing…"
+                        lifecycleScope.launch {
+                            try {
+                                val candidate = object : ConnectionSettings {
+                                    override val baseUrl = s.url
+                                    override val token = ""
+                                    override var profile = ""
+                                }
+                                val deviceId = android.provider.Settings.Secure.getString(contentResolver, android.provider.Settings.Secure.ANDROID_ID)
+                                    ?: java.util.UUID.randomUUID().toString()
+                                val result = HomeStreamApi(candidate).call("auth/pair", body = JSONObject()
+                                    .put("deviceId", deviceId)
+                                    .put("deviceName", "${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}"))
+                                val pairedToken = result.getString("token")
+                                val external = result.getString("externalUrl")
+                                check(pairedToken.isNotBlank() && external.toHttpUrlOrNull() != null) { "Invalid pairing response" }
+                                if (dialog.isShowing) {
+                                    settings.saveServer(s.url, external, pairedToken, name = s.name)
+                                    dialog.dismiss(); loadTab("home")
+                                }
+                            } catch (e: Exception) {
+                                if (e is kotlinx.coroutines.CancellationException) throw e
+                                scanStatus.text = e.message ?: "Pairing failed"
+                            } finally { isEnabled = true; text = "Connect" }
+                        }
                     }
                 }
                 sCard.addView(pairBtn, LinearLayout.LayoutParams(-2, dp(32)))
@@ -2018,35 +2023,16 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        dialog.setOnShowListener {
-            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
-                val parsed = url.text.toString().trim().toHttpUrlOrNull()
-                if (parsed == null || parsed.username.isNotBlank() || parsed.password.isNotBlank() || parsed.query != null || parsed.fragment != null) {
-                    url.error = "Enter an HTTP(S) server URL without credentials, query or fragment"; return@setOnClickListener
-                }
-                val pairingToken = token.text.toString().trim()
-                if (pairingToken.length < 6) { token.error = "Token must contain at least 6 characters"; return@setOnClickListener }
-                val button = dialog.getButton(AlertDialog.BUTTON_POSITIVE)
-                button.isEnabled = false; button.text = "Connecting…"
-                lifecycleScope.launch {
-                    try {
-                        val candidate = object : ConnectionSettings {
-                            override val baseUrl = parsed.toString().trimEnd('/')
-                            override val token = pairingToken
-                            override var profile = ""
-                        }
-                        val capabilities = HomeStreamApi(candidate).call("capabilities")
-                        check(capabilities.optInt("apiVersion") == 1) { "This server requires a different app version." }
-                        if (dialog.isShowing) {
-                            discoveryJob?.cancel()
-                            settings.save(candidate.baseUrl, pairingToken); dialog.dismiss(); loadTab("home")
-                        }
-                    } catch (e: Exception) {
-                        if (e !is kotlinx.coroutines.CancellationException) token.error = e.message ?: "Connection failed"
-                    } finally { button.isEnabled = true; button.text = "Connect" }
-                }
+        discoveryJob?.invokeOnCompletion {
+            runOnUiThread {
+                if (dialog.isShowing) scanStatus.text = if (foundServers.isEmpty()) "No servers found. Check Wi-Fi, then retry." else "Found ${foundServers.size} server(s)"
             }
         }
+        val retry = Button(this).apply {
+            text = "Scan again"; isAllCaps = false
+            setOnClickListener { dialog.dismiss(); setup() }
+        }
+        discoverySection.addView(retry)
         dialog.show()
     }
 
