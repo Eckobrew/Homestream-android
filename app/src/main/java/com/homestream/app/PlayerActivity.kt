@@ -156,8 +156,14 @@ class PlayerActivity : AppCompatActivity() {
         }
         val frame = FrameLayout(this).apply { setBackgroundColor(INK) }
         playerView = PlayerView(this).apply {
-            setShowSubtitleButton(true); setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING)
+            setShowSubtitleButton(true); setShowBuffering(PlayerView.SHOW_BUFFERING_ALWAYS)
             controllerAutoShow = true; controllerShowTimeoutMs = if (isTelevision()) 6000 else 4000
+        }
+        playerView.findViewById<androidx.media3.ui.DefaultTimeBar>(androidx.media3.ui.R.id.exo_progress)?.apply {
+            setPlayedColor(RED)
+            setScrubberColor(Color.WHITE)
+            setBufferedColor(0x80FFFFFF.toInt())
+            setUnplayedColor(0x33FFFFFF.toInt())
         }
         frame.addView(playerView, FrameLayout.LayoutParams(-1, -1))
         setupCastOverlay(frame)
@@ -294,8 +300,9 @@ class PlayerActivity : AppCompatActivity() {
             strId.toIntOrNull() ?: 0
         }
 
-        showMessage("Connecting to live stream…\nQueuing download with qBittorrent…")
-        overlay.addView(action("←  Back to Browse") { finish() })
+        val totalDurationMs = (media.json.optInt("durationMinutes").takeIf { it > 0 } ?: 120) * 60L * 1000L
+        val timeBar = playerView.findViewById<androidx.media3.ui.DefaultTimeBar>(androidx.media3.ui.R.id.exo_progress)
+        timeBar?.setDuration(totalDurationMs)
 
         downloadPollingJob = lifecycleScope.launch {
             if (tmdb > 0) {
@@ -339,17 +346,15 @@ class PlayerActivity : AppCompatActivity() {
 
                     if (matchedTorrent != null) {
                         val hash = matchedTorrent.optString("hash")
-                        val progress = matchedTorrent.optDouble("progressPercent", 0.0)
-                        val speedBytes = matchedTorrent.optLong("downloadSpeed", 0L)
-                        val speedMB = speedBytes.toDouble() / (1024.0 * 1024.0)
-                        val speedStr = String.format(java.util.Locale.US, "%.1f MB/s", speedMB)
+                        val progress = matchedTorrent.optDouble("progressPercent", 0.0) / 100.0
                         val downloadedBytes = matchedTorrent.optLong("downloaded", 0L)
-                        val downloadedMB = downloadedBytes / (1024L * 1024L)
+
+                        // Directly display buffering progress along the seek bar
+                        val bufferedMs = (progress * totalDurationMs).toLong()
+                        timeBar?.setBufferedPosition(bufferedMs)
 
                         val minBufferBytes = 10L * 1024L * 1024L
-                        if (downloadedBytes >= minBufferBytes || progress >= 1.0 || progress >= 99.0) {
-                            clearMessages()
-                            showMessage("Starting live stream ($speedStr)…")
+                        if (downloadedBytes >= minBufferBytes || progress >= 0.01 || progress >= 0.99) {
                             val streamPath = buildString {
                                 append("stream/download?hash=").append(hash)
                                 if (isTv) {
@@ -359,11 +364,6 @@ class PlayerActivity : AppCompatActivity() {
                             }
                             launchStreamUrl(streamPath)
                             return@launch
-                        } else {
-                            clearMessages()
-                            val pctText = if (progress > 0) String.format(java.util.Locale.US, " (%.1f%%)", progress) else ""
-                            showMessage("Buffering live stream from qBittorrent…\n${downloadedMB} MB / 10 MB$pctText  •  $speedStr")
-                            overlay.addView(action("←  Back to Browse") { finish() })
                         }
                     } else {
                         attempts++
@@ -373,10 +373,6 @@ class PlayerActivity : AppCompatActivity() {
                             overlay.addView(action("Keep Waiting") { startStreamingDownloadPipeline() })
                             overlay.addView(action("←  Back to Browse") { finish() })
                             return@launch
-                        } else {
-                            clearMessages()
-                            showMessage("Connecting to live stream…\nLocating torrent in qBittorrent (${attempts * 2}s)…")
-                            overlay.addView(action("←  Back to Browse") { finish() })
                         }
                     }
                 } catch (e: Exception) {
@@ -434,9 +430,6 @@ class PlayerActivity : AppCompatActivity() {
                         prepared = true
                         clearMessages()
                     }
-                    if (state == Player.STATE_BUFFERING) {
-                        showMessage("Buffering live stream…")
-                    }
                     if (state == Player.STATE_ENDED) {
                         position = exo.duration.coerceAtLeast(0)
                         report(true)
@@ -445,8 +438,7 @@ class PlayerActivity : AppCompatActivity() {
                 override fun onPlayerError(error: PlaybackException) {
                     android.util.Log.e("HomeStream", "Stream download playback error: ${error.errorCodeName}", error)
                     lifecycleScope.launch {
-                        showMessage("Buffering live stream from qBittorrent…")
-                        delay(3000)
+                        delay(2500)
                         if (!isFinishing && !isDestroyed) {
                             exo.seekTo(exo.currentPosition)
                             exo.prepare()
@@ -594,8 +586,7 @@ class PlayerActivity : AppCompatActivity() {
                             position = exo.currentPosition
                             if (isStreamingDownload) {
                                 lifecycleScope.launch {
-                                    showMessage("Buffering live stream from qBittorrent…")
-                                    delay(3000)
+                                    delay(2500)
                                     if (!isFinishing && !isDestroyed) {
                                         exo.seekTo(exo.currentPosition)
                                         exo.prepare()
@@ -724,15 +715,25 @@ class PlayerActivity : AppCompatActivity() {
             setPadding(dp(44), dp(24), dp(44), dp(36))
         }
 
+        val castBadgeContainer = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = rounded(RED, radius = dp(14).toFloat())
+            setPadding(dp(12), dp(6), dp(14), dp(6))
+        }
+        val castBadgeIcon = ImageView(this).apply {
+            setImageResource(R.drawable.ic_cast)
+            imageTintList = ColorStateList.valueOf(Color.WHITE)
+        }
+        castBadgeContainer.addView(castBadgeIcon, LinearLayout.LayoutParams(dp(18), dp(18)).apply { marginEnd = dp(8) })
         castBadgeView = TextView(this).apply {
-            text = "📺  READY TO CAST"
-            textSize = 12f
+            text = "Ready to stream"
+            textSize = 12.5f
             typeface = android.graphics.Typeface.DEFAULT_BOLD
             setTextColor(Color.WHITE)
-            background = rounded(RED, radius = dp(12).toFloat())
-            setPadding(dp(12), dp(5), dp(12), dp(5))
         }
-        infoCol.addView(castBadgeView, LinearLayout.LayoutParams(-2, -2).apply { bottomMargin = dp(10) })
+        castBadgeContainer.addView(castBadgeView, LinearLayout.LayoutParams(-2, -2))
+        infoCol.addView(castBadgeContainer, LinearLayout.LayoutParams(-2, -2).apply { bottomMargin = dp(10) })
 
         castTitleView = TextView(this).apply {
             text = ""
@@ -836,7 +837,7 @@ class PlayerActivity : AppCompatActivity() {
         if (idleCycleJob?.isActive == true) return
 
         castOverlay.visibility = View.VISIBLE
-        castBadgeView.text = "📺  READY TO CAST"
+        castBadgeView.text = "Ready to stream"
         playThisBtn.visibility = View.VISIBLE
         controlsBtn.visibility = View.GONE
         stopCastBtn.visibility = View.VISIBLE
@@ -871,14 +872,14 @@ class PlayerActivity : AppCompatActivity() {
         castTitleView.text = item.title
         castOverviewView.text = item.overview
 
-        // Also sync to Chromecast receiver so the TV screen cycles with "Ready to cast"!
+        // Also sync to Chromecast receiver so the TV screen cycles with "Ready to stream"!
         val client = remote
         if (client != null && !client.isPlaying && !client.isLoadingNextItem && art.isNotBlank()) {
             try {
                 val fullUrl = api.absolute(art)
                 val metadata = MediaMetadata(MediaMetadata.MEDIA_TYPE_PHOTO).apply {
                     putString(MediaMetadata.KEY_TITLE, item.title)
-                    putString(MediaMetadata.KEY_SUBTITLE, "Ready to cast")
+                    putString(MediaMetadata.KEY_SUBTITLE, "Ready to stream")
                     addImage(WebImage(Uri.parse(fullUrl)))
                 }
                 val photoInfo = MediaInfo.Builder(fullUrl)
