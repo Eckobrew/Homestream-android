@@ -58,6 +58,8 @@ class PlayerActivity : AppCompatActivity() {
     private var prepared = false
     private var transcode = false
     private var modeBadge: TextView? = null
+    private var isStreamingDownload = false
+    private var downloadPollingJob: Job? = null
     private var castLoading = false
     private var wantsPlay = true
     private var timer: Job? = null
@@ -143,6 +145,7 @@ class PlayerActivity : AppCompatActivity() {
             requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
         }
         media = runCatching { Media(JSONObject(intent.getStringExtra("media") ?: "")) }.getOrElse { finish(); return }
+        isStreamingDownload = intent.getBooleanExtra("isStreamingDownload", false) || media.json.optBoolean("isStreamingDownload")
         currentPlaybackId = media.playbackId
         api = HomeStreamApi(ServerSettings(this))
         position = savedInstanceState?.getLong("position") ?: if (intent.getBooleanExtra("fromBeginning", false)) 0 else media.resumeMs
@@ -268,35 +271,204 @@ class PlayerActivity : AppCompatActivity() {
     private fun showUnDownloadedUI(reason: String = "This title has not been downloaded yet.") {
         clearMessages()
         showMessage(reason)
-        overlay.addView(action("⬇  Request Download") {
-            lifecycleScope.launch {
-                try {
-                    showMessage("Sending request to download…")
-                    val tmdb = if (media.tmdbId > 0) media.tmdbId else {
-                        val strId = media.id.replace("^seerr-(?:movie-|tv-)?".toRegex(), "")
-                        strId.toIntOrNull() ?: 0
-                    }
-                    if (tmdb > 0) {
-                        api.call("request", body = JSONObject()
-                            .put("mediaId", tmdb)
-                            .put("mediaType", if (media.type == "Series" || media.type == "tv") "tv" else "movie"))
-                        clearMessages()
-                        showMessage("Download requested! It will download automatically.")
-                    } else {
-                        clearMessages()
-                        showMessage("Cannot request: TMDB ID not available.")
-                    }
-                } catch (e: Exception) {
-                    clearMessages()
-                    showMessage(e.message ?: "Request failed")
-                }
-            }
+        overlay.addView(action("▶  Stream with qBittorrent") {
+            startStreamingDownloadPipeline()
         })
         overlay.addView(action("←  Back to Browse") { finish() })
     }
 
+    private fun startStreamingDownloadPipeline() {
+        isStreamingDownload = true
+        downloadPollingJob?.cancel()
+        negotiation?.cancel()
+        releaseLocal()
+        clearMessages()
+
+        val isTv = intent.getStringExtra("mediaType") == "tv" || media.type == "Series" || media.type == "Episode"
+        val sNum = intent.getIntExtra("season", 0).takeIf { it > 0 } ?: media.json.optInt("seasonNumber", 1).coerceAtLeast(1)
+        val epNum = intent.getIntExtra("episode", 0).takeIf { it > 0 } ?: media.json.optInt("episodeNumber", 1).coerceAtLeast(1)
+        val sTitle = intent.getStringExtra("seriesTitle")?.ifBlank { null } ?: media.title
+
+        val tmdb = intent.getIntExtra("tmdbId", 0).takeIf { it > 0 } ?: if (media.tmdbId > 0) media.tmdbId else {
+            val strId = media.id.replace("^seerr-(?:movie-|tv-)?".toRegex(), "")
+            strId.toIntOrNull() ?: 0
+        }
+
+        showMessage("Connecting to live stream…\nQueuing download with qBittorrent…")
+        overlay.addView(action("←  Back to Browse") { finish() })
+
+        downloadPollingJob = lifecycleScope.launch {
+            if (tmdb > 0) {
+                try {
+                    val body = JSONObject()
+                        .put("mediaType", if (isTv) "tv" else "movie")
+                        .put("mediaId", tmdb)
+                    if (isTv) body.put("seasons", org.json.JSONArray().put(sNum))
+                    api.call("request", body = body)
+                } catch (e: Exception) {
+                    android.util.Log.w("HomeStream", "Download request trigger: ${e.message}")
+                }
+            }
+
+            var attempts = 0
+            val cleanMediaTitle = sTitle.lowercase().replace(Regex("[^a-z0-9]"), "")
+            var matchedHash: String? = null
+
+            while (isActive) {
+                try {
+                    val res = api.call("downloads")
+                    val items = res.optJSONArray("items")
+                    var matchedTorrent: JSONObject? = null
+
+                    if (items != null) {
+                        for (i in 0 until items.length()) {
+                            val t = items.getJSONObject(i)
+                            val tHash = t.optString("hash")
+                            if (matchedHash != null && tHash.equals(matchedHash, ignoreCase = true)) {
+                                matchedTorrent = t
+                                break
+                            }
+                            val tName = t.optString("name").lowercase().replace(Regex("[^a-z0-9]"), "")
+                            if (cleanMediaTitle.isNotBlank() && (tName.contains(cleanMediaTitle) || cleanMediaTitle.contains(tName))) {
+                                matchedTorrent = t
+                                matchedHash = tHash
+                                break
+                            }
+                        }
+                    }
+
+                    if (matchedTorrent != null) {
+                        val hash = matchedTorrent.optString("hash")
+                        val progress = matchedTorrent.optDouble("progressPercent", 0.0)
+                        val speedBytes = matchedTorrent.optLong("downloadSpeed", 0L)
+                        val speedMB = speedBytes.toDouble() / (1024.0 * 1024.0)
+                        val speedStr = String.format(java.util.Locale.US, "%.1f MB/s", speedMB)
+                        val downloadedBytes = matchedTorrent.optLong("downloaded", 0L)
+                        val downloadedMB = downloadedBytes / (1024L * 1024L)
+
+                        val minBufferBytes = 10L * 1024L * 1024L
+                        if (downloadedBytes >= minBufferBytes || progress >= 1.0 || progress >= 99.0) {
+                            clearMessages()
+                            showMessage("Starting live stream ($speedStr)…")
+                            val streamPath = buildString {
+                                append("stream/download?hash=").append(hash)
+                                if (isTv) {
+                                    append("&season=").append(sNum)
+                                    append("&episode=").append(epNum)
+                                }
+                            }
+                            launchStreamUrl(streamPath)
+                            return@launch
+                        } else {
+                            clearMessages()
+                            val pctText = if (progress > 0) String.format(java.util.Locale.US, " (%.1f%%)", progress) else ""
+                            showMessage("Buffering live stream from qBittorrent…\n${downloadedMB} MB / 10 MB$pctText  •  $speedStr")
+                            overlay.addView(action("←  Back to Browse") { finish() })
+                        }
+                    } else {
+                        attempts++
+                        if (attempts > 30) {
+                            clearMessages()
+                            showMessage("Download queued in Sonarr/Radarr.\nqBittorrent has not started the torrent yet.")
+                            overlay.addView(action("Keep Waiting") { startStreamingDownloadPipeline() })
+                            overlay.addView(action("←  Back to Browse") { finish() })
+                            return@launch
+                        } else {
+                            clearMessages()
+                            showMessage("Connecting to live stream…\nLocating torrent in qBittorrent (${attempts * 2}s)…")
+                            overlay.addView(action("←  Back to Browse") { finish() })
+                        }
+                    }
+                } catch (e: Exception) {
+                    if (e is kotlinx.coroutines.CancellationException) throw e
+                    android.util.Log.w("HomeStream", "Error polling downloads: ${e.message}")
+                }
+                delay(2000)
+            }
+        }
+    }
+
+    private fun launchStreamUrl(streamPath: String) {
+        val token = ServerSettings(this).token
+        val fullPath = if (streamPath.startsWith("/api/mobile/v1/")) streamPath
+                       else "/api/mobile/v1/${streamPath.removePrefix("/")}"
+        val rawUri = api.absolute(fullPath)
+        val playUri = if (token.isNotBlank() && !rawUri.contains("token=")) {
+            Uri.parse(rawUri).buildUpon().appendQueryParameter("token", token).build()
+        } else {
+            Uri.parse(rawUri)
+        }
+
+        val item = MediaItem.Builder()
+            .setUri(playUri)
+            .setMimeType(MimeTypes.VIDEO_MP4)
+            .build()
+        releaseLocal()
+
+        val httpFactory = androidx.media3.datasource.DefaultHttpDataSource.Factory()
+            .setUserAgent("HomeStream-Android/1.0")
+            .setAllowCrossProtocolRedirects(true)
+            .setConnectTimeoutMs(20_000)
+            .setReadTimeoutMs(60_000)
+            .apply {
+                if (token.isNotBlank()) {
+                    setDefaultRequestProperties(mapOf("Authorization" to "Bearer $token"))
+                }
+            }
+        val mediaSourceFactory = androidx.media3.exoplayer.source.DefaultMediaSourceFactory(this)
+            .setDataSourceFactory(httpFactory)
+
+        val audioAttributes = AudioAttributes.Builder()
+            .setUsage(C.USAGE_MEDIA)
+            .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
+            .build()
+
+        player = ExoPlayer.Builder(this)
+            .setMediaSourceFactory(mediaSourceFactory)
+            .setAudioAttributes(audioAttributes, true)
+            .build().also { exo ->
+            playerView.player = exo
+            exo.addListener(object : Player.Listener {
+                override fun onPlaybackStateChanged(state: Int) {
+                    if (state == Player.STATE_READY) {
+                        prepared = true
+                        clearMessages()
+                    }
+                    if (state == Player.STATE_BUFFERING) {
+                        showMessage("Buffering live stream…")
+                    }
+                    if (state == Player.STATE_ENDED) {
+                        position = exo.duration.coerceAtLeast(0)
+                        report(true)
+                    }
+                }
+                override fun onPlayerError(error: PlaybackException) {
+                    android.util.Log.e("HomeStream", "Stream download playback error: ${error.errorCodeName}", error)
+                    lifecycleScope.launch {
+                        showMessage("Buffering live stream from qBittorrent…")
+                        delay(3000)
+                        if (!isFinishing && !isDestroyed) {
+                            exo.seekTo(exo.currentPosition)
+                            exo.prepare()
+                            exo.playWhenReady = true
+                        }
+                    }
+                }
+            })
+            exo.setMediaItem(item)
+            exo.prepare()
+            exo.playWhenReady = wantsPlay
+        }
+        playerView.requestFocus()
+        playerView.showController()
+    }
+
     private fun startLocal() {
         negotiation?.cancel(); clearMessages(); showMessage("Preparing playback…")
+        if (isStreamingDownload || !media.isAvailableForPlayback) {
+            startStreamingDownloadPipeline()
+            return
+        }
         negotiation = lifecycleScope.launch {
             try {
                 var targetId = media.playbackId
@@ -334,7 +506,7 @@ class PlayerActivity : AppCompatActivity() {
                 }
 
                 if (targetId.startsWith("seerr-") || media.isVirtual) {
-                    showUnDownloadedUI()
+                    startStreamingDownloadPipeline()
                     return@launch
                 }
 
@@ -420,6 +592,18 @@ class PlayerActivity : AppCompatActivity() {
                         override fun onPlayerError(error: PlaybackException) {
                             android.util.Log.e("HomeStream", "Playback error encountered: ${error.errorCodeName} (${error.errorCode})", error)
                             position = exo.currentPosition
+                            if (isStreamingDownload) {
+                                lifecycleScope.launch {
+                                    showMessage("Buffering live stream from qBittorrent…")
+                                    delay(3000)
+                                    if (!isFinishing && !isDestroyed) {
+                                        exo.seekTo(exo.currentPosition)
+                                        exo.prepare()
+                                        exo.playWhenReady = true
+                                    }
+                                }
+                                return
+                            }
                             if (error.errorCode == PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS) {
                                 showUnDownloadedUI("Media file has not been downloaded or is not available on Jellyfin.")
                                 return
@@ -475,8 +659,8 @@ class PlayerActivity : AppCompatActivity() {
         emptyList()
     }
     private fun cast(session: CastSession) {
-        if (media.isDownload) {
-            Toast.makeText(this, "In-progress downloads play locally. Cast after Jellyfin imports the completed title.", Toast.LENGTH_LONG).show()
+        if (media.isDownload || isStreamingDownload) {
+            Toast.makeText(this, "Live download streams play locally on device. Cast after import into Jellyfin.", Toast.LENGTH_LONG).show()
             startLocal(); return
         }
         if (castLoading) return
@@ -775,7 +959,13 @@ class PlayerActivity : AppCompatActivity() {
             runCatching { api.progress(activeId, snapshot, paused, stopped) }
         }
     }
-    private fun releaseLocal() { playerView.player = null; player?.release(); player = null; prepared = false }
+    private fun releaseLocal() {
+        downloadPollingJob?.cancel()
+        playerView.player = null
+        player?.release()
+        player = null
+        prepared = false
+    }
     private fun clearMessages() { while (overlay.childCount > 1) overlay.removeViewAt(1) }
     private fun showMessage(text: String) { overlay.visibility = View.VISIBLE; overlay.addView(label(text, 14f)) }
     override fun onSaveInstanceState(outState: Bundle) { outState.putLong("position", player?.currentPosition ?: position); super.onSaveInstanceState(outState) }
@@ -787,6 +977,7 @@ class PlayerActivity : AppCompatActivity() {
     }
     override fun onStop() {
         stopIdleCycle()
+        downloadPollingJob?.cancel()
         runCatching { unregisterReceiver(noisyReceiver) }
         negotiation?.cancel(); timer?.cancel()
         if (prepared || remote != null) report(remote == null)

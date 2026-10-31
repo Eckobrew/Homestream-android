@@ -719,23 +719,15 @@ class MainActivity : AppCompatActivity() {
             val btnRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
 
             val canPlay = item.isAvailableForPlayback
-            val isReq = item.isRequested
             val playBtn = Button(this).apply {
-                text = if (canPlay) (if (item.resumeMs > 0) "▶  Resume" else "▶  Play") else (if (isReq) "⌛  Requested" else "⬇  Request")
+                text = if (canPlay) (if (item.resumeMs > 0) "▶  Resume" else "▶  Play") else "▶  Stream"
                 textSize = 13.5f; typeface = android.graphics.Typeface.DEFAULT_BOLD
                 setTextColor(if (canPlay) Color.BLACK else Color.WHITE); isAllCaps = false
-                background = rounded(if (canPlay) Color.WHITE else if (isReq) 0x66E50914.toInt() else RED, radius = dp(8).toFloat())
+                background = rounded(if (canPlay) Color.WHITE else RED, radius = dp(8).toFloat())
                 minHeight = dp(40); minimumHeight = dp(40)
                 setPadding(dp(16), 0, dp(16), 0)
                 setOnClickListener {
-                    if (item.isAvailableForPlayback) {
-                        play(item)
-                    } else {
-                        requestMediaTitle(item) {
-                            text = "⌛  Requested"
-                            background = rounded(0x66E50914.toInt(), radius = dp(8).toFloat())
-                        }
-                    }
+                    if (canPlay) play(item) else streamMedia(item)
                 }
             }
             btnRow.addView(playBtn, LinearLayout.LayoutParams(-2, dp(40)).apply { marginEnd = dp(10) })
@@ -806,7 +798,13 @@ class MainActivity : AppCompatActivity() {
 
         if (showActions) {
             val actions = LinearLayout(this).apply { setPadding(0, dp(12), 0, 0) }
-            actions.addView(action("▶ Play", true) { if (item.playable && item.type != "Series") play(item) else details(item) })
+            val canPlay = item.isAvailableForPlayback
+            val playText = if (canPlay) "▶ Play" else "▶ Stream"
+            actions.addView(action(playText, true) {
+                if (canPlay && item.type != "Series") play(item)
+                else if (!canPlay) streamMedia(item)
+                else details(item)
+            })
             actions.addView(action("More Info") { details(item) })
             copy.addView(actions)
         }
@@ -963,30 +961,26 @@ class MainActivity : AppCompatActivity() {
             if (duration > 0) badges.addView(TextView(this).apply { text = "  •  ${duration}m"; textSize = 11.5f; setTextColor(MUTED) })
             metaSection.addView(badges)
 
-            // Primary Play / Resume / Request Button
+            // Primary Play / Stream Button
             val playBtn = Button(this).apply {
                 val canPlay = full.isAvailableForPlayback
                 val resume = full.resumeMs > 0
-                val isReq = full.isRequested
-                text = if (canPlay) (if (resume) "▶  Resume" else "▶  Play") else (if (isReq) "⌛  Requested" else "⬇  Request to Download")
+                text = if (canPlay) (if (resume) "▶  Resume" else "▶  Play") else "▶  Stream"
                 textSize = 14f; typeface = android.graphics.Typeface.DEFAULT_BOLD
                 setTextColor(if (canPlay) Color.BLACK else Color.WHITE); isAllCaps = false
-                background = rounded(if (canPlay) Color.WHITE else if (isReq) 0x66E50914.toInt() else RED, radius = dp(8).toFloat())
+                background = rounded(if (canPlay) Color.WHITE else RED, radius = dp(8).toFloat())
                 minHeight = dp(46); minimumHeight = dp(46)
                 setOnClickListener {
-                    if (full.isAvailableForPlayback) {
+                    if (canPlay) {
                         play(full)
                     } else {
-                        requestMediaTitle(full) {
-                            text = "⌛  Requested"
-                            background = rounded(0x66E50914.toInt(), radius = dp(8).toFloat())
-                        }
+                        streamMedia(full)
                     }
                 }
             }
             metaSection.addView(playBtn, LinearLayout.LayoutParams(-1, dp(46)).apply { bottomMargin = dp(8) })
 
-            // Secondary Buttons (+ My List, Request, Download)
+            // Secondary Buttons (+ My List, Download)
             val btnRow = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
@@ -999,39 +993,21 @@ class MainActivity : AppCompatActivity() {
                 minHeight = dp(40); minimumHeight = dp(40)
                 setOnClickListener { text = if (list.toggle(full)) "✓ My List" else "+ My List" }
             }
-            btnRow.addView(listBtn, LinearLayout.LayoutParams(0, dp(40), 1f).apply { marginEnd = dp(8) })
+            btnRow.addView(listBtn, LinearLayout.LayoutParams(0, dp(40), 1f).apply {
+                if (full.isAvailableForPlayback) marginEnd = dp(8)
+            })
 
-            // Request Button if not available
-            if (!full.playable && full.tmdbId > 0 && full.json.optString("status") != "available") {
-                val reqBtn = Button(this).apply {
-                    text = "Request Title"; textSize = 12.5f
+            // Download Button (aligned to right) - ONLY shown for currently downloaded titles!
+            if (full.isAvailableForPlayback) {
+                val dlBtn = Button(this).apply {
+                    text = "⬇ Download"; textSize = 12.5f
                     setTextColor(Color.WHITE); isAllCaps = false
-                    background = rounded(RED, radius = dp(8).toFloat())
+                    background = rounded(0x33FFFFFF.toInt(), radius = dp(8).toFloat())
                     minHeight = dp(40); minimumHeight = dp(40)
-                    setOnClickListener {
-                        lifecycleScope.launch {
-                            try {
-                                val body = JSONObject()
-                                    .put("mediaType", if (full.type == "Series") "tv" else "movie")
-                                    .put("mediaId", full.tmdbId)
-                                val res = api.call("request", body = body)
-                                toast(res.optString("message", "Request sent successfully!"))
-                            } catch (e: Exception) { toast(e.message ?: "Request failed") }
-                        }
-                    }
+                    setOnClickListener { triggerDownload(full) }
                 }
-                btnRow.addView(reqBtn, LinearLayout.LayoutParams(0, dp(40), 1f).apply { marginEnd = dp(8) })
+                btnRow.addView(dlBtn, LinearLayout.LayoutParams(0, dp(40), 1f))
             }
-
-            // Download Button (aligned to right)
-            val dlBtn = Button(this).apply {
-                text = "⬇ Download"; textSize = 12.5f
-                setTextColor(Color.WHITE); isAllCaps = false
-                background = rounded(0x33FFFFFF.toInt(), radius = dp(8).toFloat())
-                minHeight = dp(40); minimumHeight = dp(40)
-                setOnClickListener { triggerDownload(full) }
-            }
-            btnRow.addView(dlBtn, LinearLayout.LayoutParams(0, dp(40), 1f))
             metaSection.addView(btnRow)
 
             // Synopsis
@@ -1147,14 +1123,7 @@ class MainActivity : AppCompatActivity() {
                         if (canPlayEp) {
                             play(ep)
                         } else {
-                            AlertDialog.Builder(this@MainActivity)
-                                .setTitle(ep.title)
-                                .setMessage("This episode has not been downloaded yet. Would you like to request it?")
-                                .setPositiveButton("Request Download") { _, _ ->
-                                    requestMediaTitle(full)
-                                }
-                                .setNegativeButton("Cancel", null)
-                                .show()
+                            streamMedia(ep, full)
                         }
                     }
                 }
@@ -1179,8 +1148,8 @@ class MainActivity : AppCompatActivity() {
 
                 // Play icon overlay
                 val playOverlay = ImageView(this).apply {
-                    setImageResource(if (canPlayEp) R.drawable.ic_play_arrow else R.drawable.ic_download)
-                    background = rounded(0x88000000.toInt(), radius = dp(14).toFloat())
+                    setImageResource(R.drawable.ic_play_arrow)
+                    background = rounded(if (canPlayEp) 0x88000000.toInt() else 0xCCE50914.toInt(), radius = dp(14).toFloat())
                     setPadding(dp(4), dp(4), dp(4), dp(4))
                 }
                 thumbBox.addView(playOverlay, FrameLayout.LayoutParams(dp(28), dp(28), Gravity.CENTER))
@@ -1213,19 +1182,21 @@ class MainActivity : AppCompatActivity() {
                 })
                 topRow.addView(titleCol)
 
-                // Episode Download Button (aligned to right)
-                val dlBtn = ImageView(this).apply {
-                    setImageResource(R.drawable.ic_download)
-                    imageTintList = ColorStateList.valueOf(Color.WHITE)
-                    background = rounded(0x22FFFFFF.toInt(), radius = dp(18).toFloat())
-                    setPadding(dp(8), dp(8), dp(8), dp(8))
-                    isClickable = true
-                    contentDescription = "Download episode"
-                    setOnClickListener { triggerDownload(ep) }
+                // Episode Download Button (aligned to right) - ONLY shown for currently downloaded episodes!
+                if (canPlayEp) {
+                    val dlBtn = ImageView(this).apply {
+                        setImageResource(R.drawable.ic_download)
+                        imageTintList = ColorStateList.valueOf(Color.WHITE)
+                        background = rounded(0x22FFFFFF.toInt(), radius = dp(18).toFloat())
+                        setPadding(dp(8), dp(8), dp(8), dp(8))
+                        isClickable = true
+                        contentDescription = "Download episode"
+                        setOnClickListener { triggerDownload(ep) }
+                    }
+                    topRow.addView(dlBtn, LinearLayout.LayoutParams(dp(36), dp(36)).apply {
+                        gravity = Gravity.CENTER_VERTICAL
+                    })
                 }
-                topRow.addView(dlBtn, LinearLayout.LayoutParams(dp(36), dp(36)).apply {
-                    gravity = Gravity.CENTER_VERTICAL
-                })
 
                 epCard.addView(topRow, LinearLayout.LayoutParams(-1, -2))
                 episodesContainer.addView(epCard, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
@@ -1622,6 +1593,49 @@ class MainActivity : AppCompatActivity() {
                 toast(e.message ?: "Download failed")
             }
         }
+    }
+
+    private fun streamMedia(item: Media, parent: Media? = null) {
+        val tmdb = if (item.tmdbId > 0) item.tmdbId else if (parent != null && parent.tmdbId > 0) parent.tmdbId else {
+            val rawId = (if (item.id.startsWith("seerr-")) item.id else parent?.id ?: item.id)
+                .replace("^seerr-(?:movie-|tv-)?".toRegex(), "")
+            rawId.toIntOrNull() ?: 0
+        }
+        val isTv = item.type == "Series" || item.type == "Episode" || (parent != null && parent.type == "Series")
+        val mediaType = if (isTv) "tv" else "movie"
+        val seasonNum = item.json.optInt("seasonNumber", 1).takeIf { it > 0 } ?: 1
+        val episodeNum = item.json.optInt("episodeNumber", 1).takeIf { it > 0 } ?: 1
+
+        if (tmdb > 0) {
+            lifecycleScope.launch {
+                try {
+                    val body = JSONObject()
+                        .put("mediaType", mediaType)
+                        .put("mediaId", tmdb)
+                    if (isTv) {
+                        body.put("seasons", org.json.JSONArray().put(seasonNum))
+                    }
+                    api.call("request", body = body)
+                } catch (e: Exception) {
+                    android.util.Log.w("HomeStream", "Stream request error: ${e.message}")
+                }
+            }
+        }
+
+        playbackWasLaunched = true
+        val intent = Intent(this, PlayerActivity::class.java).apply {
+            putExtra("media", item.json.toString())
+            putExtra("isStreamingDownload", true)
+            putExtra("mediaType", mediaType)
+            putExtra("tmdbId", tmdb)
+            if (isTv) {
+                putExtra("season", seasonNum)
+                putExtra("episode", episodeNum)
+                val seriesName = parent?.title ?: item.title
+                putExtra("seriesTitle", seriesName)
+            }
+        }
+        startActivity(intent)
     }
 
     private fun play(item: Media, fromBeginning: Boolean = false) {
