@@ -26,6 +26,24 @@ class HomeStreamCastOptions : OptionsProvider {
     override fun getAdditionalSessionProviders(context: Context): List<SessionProvider>? = null
 }
 class CastControllerActivity : ExpandedControllerActivity() {
+    override fun onCreate(savedInstanceState: android.os.Bundle?) {
+        requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+        super.onCreate(savedInstanceState)
+        androidx.core.view.WindowCompat.setDecorFitsSystemWindows(window, false)
+        val content = findViewById<View>(android.R.id.content)
+        val left = content.paddingLeft
+        val top = content.paddingTop
+        val right = content.paddingRight
+        val bottom = content.paddingBottom
+        androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(content) { view, insets ->
+            val safe = insets.getInsets(androidx.core.view.WindowInsetsCompat.Type.systemBars() or
+                androidx.core.view.WindowInsetsCompat.Type.displayCutout())
+            view.setPadding(left + safe.left, top + safe.top, right + safe.right, bottom + safe.bottom)
+            androidx.core.view.WindowInsetsCompat.CONSUMED
+        }
+        androidx.core.view.ViewCompat.requestApplyInsets(content)
+    }
+
     override fun onCreateOptionsMenu(menu: android.view.Menu): Boolean {
         super.onCreateOptionsMenu(menu)
         menu.add(0, 9999, 0, "Stop Casting").apply {

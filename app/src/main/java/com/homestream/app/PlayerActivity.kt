@@ -201,11 +201,22 @@ class PlayerActivity : AppCompatActivity() {
         return codecs.joinToString(",")
     }
 
+    private var castingPresentation = false
+    private lateinit var playbackRoot: FrameLayout
+
+    private fun setPlaybackPresentation(casting: Boolean) {
+        castingPresentation = casting
+        if (!isTelevision()) requestedOrientation = if (casting) ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+            else ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+        WindowInsetsControllerCompat(window, window.decorView).apply {
+            if (casting) show(WindowInsetsCompat.Type.systemBars()) else hide(WindowInsetsCompat.Type.systemBars())
+            systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        }
+        if (::playbackRoot.isInitialized) ViewCompat.requestApplyInsets(playbackRoot)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        if (!isTelevision()) {
-            requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
-        }
         media = runCatching { Media(JSONObject(savedInstanceState?.getString("media") ?: intent.getStringExtra("media") ?: "")) }.getOrElse { finish(); return }
         isStreamingDownload = intent.getBooleanExtra("isStreamingDownload", false) || media.json.optBoolean("isStreamingDownload")
         currentPlaybackId = media.playbackId
@@ -213,11 +224,9 @@ class PlayerActivity : AppCompatActivity() {
         api = HomeStreamApi(ServerSettings(this))
         position = savedInstanceState?.getLong("position") ?: if (intent.getBooleanExtra("fromBeginning", false)) 0 else media.resumeMs
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        WindowInsetsControllerCompat(window, window.decorView).apply {
-            hide(WindowInsetsCompat.Type.systemBars())
-            systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-        }
+        setPlaybackPresentation(castCtx?.sessionManager?.currentCastSession?.isConnected == true && !media.isDownload)
         val frame = FrameLayout(this).apply { setBackgroundColor(INK) }
+        playbackRoot = frame
         playerView = PlayerView(this).apply {
             setShowSubtitleButton(true); setShowBuffering(PlayerView.SHOW_BUFFERING_ALWAYS)
             controllerAutoShow = true; controllerShowTimeoutMs = if (isTelevision()) 6000 else 4000
@@ -351,14 +360,18 @@ class PlayerActivity : AppCompatActivity() {
             addView(action("Subtitles") { showCastSubtitles() }.apply { visibility = if (castCtx != null) View.VISIBLE else View.GONE })
         }
         overlay.addView(bar)
-        overlay.addView(episodeBar)
+        overlay.addView(android.widget.HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+            addView(episodeBar)
+        })
         frame.addView(overlay, FrameLayout.LayoutParams(-1, -2, Gravity.TOP))
         playerView.setControllerVisibilityListener(PlayerView.ControllerVisibilityListener { visible ->
             overlay.visibility = if (visible == View.VISIBLE || remote != null) View.VISIBLE else View.GONE
         })
         setContentView(frame)
         ViewCompat.setOnApplyWindowInsetsListener(frame) { view, insets ->
-            val safe = insets.getInsets(WindowInsetsCompat.Type.displayCutout())
+            val safe = insets.getInsets(WindowInsetsCompat.Type.displayCutout() or
+                if (castingPresentation) WindowInsetsCompat.Type.systemBars() else 0)
             view.setPadding(safe.left, safe.top, safe.right, safe.bottom); insets
         }
     }
@@ -583,6 +596,7 @@ class PlayerActivity : AppCompatActivity() {
     }
 
     private fun startLocal() {
+        setPlaybackPresentation(false)
         negotiation?.cancel(); clearMessages(); showMessage("Preparing playback…")
         if (media.isDownload) {
             isStreamingDownload = true
@@ -751,6 +765,7 @@ class PlayerActivity : AppCompatActivity() {
             Toast.makeText(this, "Live download streams play locally on device. Cast after import into Jellyfin.", Toast.LENGTH_LONG).show()
             startLocal(); return
         }
+        setPlaybackPresentation(true)
         if (castLoading) return
         val deviceKey = "cast-profile-${session.castDevice?.deviceId.orEmpty()}"
         val stored = playbackPrefs.getString(deviceKey, null)
@@ -991,7 +1006,7 @@ class PlayerActivity : AppCompatActivity() {
 
         val infoCol = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(44), dp(24), dp(44), dp(36))
+            setPadding(dp(if (isTelevision()) 44 else 24), dp(24), dp(if (isTelevision()) 44 else 24), dp(24))
         }
 
         val castBadgeContainer = LinearLayout(this).apply {
@@ -1030,13 +1045,13 @@ class PlayerActivity : AppCompatActivity() {
             maxLines = 3
             ellipsize = android.text.TextUtils.TruncateAt.END
         }
-        infoCol.addView(castOverviewView, LinearLayout.LayoutParams(dp(520), -2).apply {
+        infoCol.addView(castOverviewView, LinearLayout.LayoutParams(if (isTelevision()) dp(520) else -1, -2).apply {
             topMargin = dp(6)
             bottomMargin = dp(18)
         })
 
         val btnRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
+            orientation = if (isTelevision()) LinearLayout.HORIZONTAL else LinearLayout.VERTICAL
             gravity = Gravity.CENTER_VERTICAL
         }
 
@@ -1088,8 +1103,16 @@ class PlayerActivity : AppCompatActivity() {
         })
         btnRow.addView(action("Device") { castCtx?.sessionManager?.currentCastSession?.let { chooseCastProfile(it) } })
 
+        if (!isTelevision()) {
+            for (index in 0 until btnRow.childCount) btnRow.getChildAt(index).layoutParams =
+                LinearLayout.LayoutParams(-1, dp(48)).apply { bottomMargin = dp(8) }
+        }
         infoCol.addView(btnRow)
-        castOverlay.addView(infoCol, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
+        if (isTelevision()) castOverlay.addView(infoCol, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
+        else castOverlay.addView(android.widget.ScrollView(this).apply {
+            isFillViewport = false
+            addView(infoCol)
+        }, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM).apply { topMargin = dp(130) })
         frame.addView(castOverlay, FrameLayout.LayoutParams(-1, -1))
     }
 
