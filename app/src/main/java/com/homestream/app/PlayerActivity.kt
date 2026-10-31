@@ -440,7 +440,7 @@ class PlayerActivity : AppCompatActivity() {
                                 break
                             }
                             val tName = t.optString("name").lowercase().replace(Regex("[^a-z0-9]"), "")
-                            if (cleanMediaTitle.isNotBlank() && (tName.contains(cleanMediaTitle) || cleanMediaTitle.contains(tName))) {
+                            if (cleanMediaTitle.isNotBlank() && tName.isNotBlank() && (tName.contains(cleanMediaTitle) || cleanMediaTitle.contains(tName))) {
                                 matchedTorrent = t
                                 matchedHash = tHash
                                 break
@@ -488,15 +488,15 @@ class PlayerActivity : AppCompatActivity() {
         }
     }
 
-    private fun launchStreamUrl(streamPath: String) {
-        val fullPath = if (streamPath.startsWith("/api/mobile/v1/")) streamPath
+    private fun launchStreamUrl(streamPath: String, compatible: Boolean = transcode) {
+        val fullPath = if (streamPath.startsWith("/api/")) streamPath
                        else "/api/mobile/v1/${streamPath.removePrefix("/")}"
-        val rawUri = api.absolute(fullPath)
-        val playUri = Uri.parse(rawUri)
+        val playUri = Uri.parse(api.absolute(fullPath)).buildUpon()
+            .appendQueryParameter(if (compatible) "transcode" else "native", "1").build()
 
         val item = MediaItem.Builder()
             .setUri(playUri)
-            .setMimeType(MimeTypes.VIDEO_MP4)
+            .apply { if (compatible) setMimeType(MimeTypes.VIDEO_MP4) }
             .build()
         releaseLocal()
 
@@ -528,6 +528,16 @@ class PlayerActivity : AppCompatActivity() {
                 }
                 override fun onPlayerError(error: PlaybackException) {
                     android.util.Log.e("HomeStream", "Stream download playback error: ${error.errorCodeName}")
+                    if (!compatible && error.errorCode in setOf(
+                        PlaybackException.ERROR_CODE_DECODING_FAILED,
+                        PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED,
+                        PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED
+                    )) {
+                        transcode = true
+                        showMessage("Preparing compatible download stream…")
+                        launchStreamUrl(streamPath, compatible = true)
+                        return
+                    }
                     retryJob?.cancel()
                     retryJob = lifecycleScope.launch {
                         delay(2500)
@@ -565,6 +575,11 @@ class PlayerActivity : AppCompatActivity() {
 
     private fun startLocal() {
         negotiation?.cancel(); clearMessages(); showMessage("Preparing playback…")
+        if (media.isDownload) {
+            isStreamingDownload = true
+            launchStreamUrl(media.downloadUrl)
+            return
+        }
         if (isStreamingDownload || !media.isAvailableForPlayback) {
             startStreamingDownloadPipeline()
             return
