@@ -526,11 +526,20 @@ class PlayerActivity : AppCompatActivity() {
                         report(true)
                     }
                 }
+                override fun onTracksChanged(tracks: Tracks) {
+                    val audio = tracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }
+                    if (!compatible && audio.isNotEmpty() && audio.none { it.isSupported }) {
+                        transcode = true
+                        launchStreamUrl(streamPath, compatible = true)
+                    }
+                }
                 override fun onPlayerError(error: PlaybackException) {
                     android.util.Log.e("HomeStream", "Stream download playback error: ${error.errorCodeName}")
                     if (!compatible && error.errorCode in setOf(
                         PlaybackException.ERROR_CODE_DECODING_FAILED,
                         PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED,
+                        PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES,
+                        PlaybackException.ERROR_CODE_AUDIO_TRACK_INIT_FAILED,
                         PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED
                     )) {
                         transcode = true
