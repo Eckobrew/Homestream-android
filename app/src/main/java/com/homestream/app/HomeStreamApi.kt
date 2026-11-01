@@ -24,7 +24,7 @@ class HomeStreamApi(private val settings: ConnectionSettings) {
     private fun cacheKey(path: String, params: Map<String, String>): String {
         val identity = (settings as? ServerSettings)?.serverIdentity ?: settings.baseUrl
         val token = java.security.MessageDigest.getInstance("SHA-256").digest(settings.token.toByteArray()).joinToString("") { "%02x".format(it) }
-        return "$identity|$token|${settings.profile}|$path|${params.toSortedMap()}"
+        return "browse-v2|$identity|$token|${settings.profile}|$path|${params.toSortedMap()}"
     }
     fun cached(path: String, params: Map<String, String> = emptyMap()): JSONObject? =
         if (BrowseCache.supported(path)) BrowseCache.get(cacheKey(path, params)) else null

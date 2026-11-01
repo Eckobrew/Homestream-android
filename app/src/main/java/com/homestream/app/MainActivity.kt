@@ -273,7 +273,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun browseViewport(): View = if (screen.startsWith("catalog-")) content else
+    private fun browseViewport(): View = if (screen.startsWith("catalog-") || screen.startsWith("categories-")) content else
         ScrollView(this).apply { clipChildren = false; addView(content) }
 
     private fun phoneShell() {
@@ -724,18 +724,37 @@ class MainActivity : AppCompatActivity() {
     private fun loadCategorySectionsIntoContent(type: String) {
         categoryJob?.cancel()
         val current = generation
+        val slot = column().apply { setTag(R.id.browse_key, "category-preview:$type") }
+        content.addView(slot)
+        fun render(data: JSONObject) {
+            val sections = data.optJSONArray("sections") ?: return
+            slot.removeAllViews()
+            slot.setTag(R.id.browse_signature, data.toString())
+            if (sections.length() == 0) return
+            slot.addView(label("Browse categories", 20f, true).apply { setPadding(gutter, dp(20), gutter, dp(8)) })
+            val chips = LinearLayout(this).apply { setPadding(gutter, 0, gutter, 0) }
+            for (index in 0 until sections.length()) {
+                val section = sections.getJSONObject(index)
+                chips.addView(action(section.optString("title")) { loadCategories(type, section.optString("id")) })
+            }
+            slot.addView(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(chips) })
+            for (index in 0 until minOf(3, sections.length())) {
+                val section = sections.getJSONObject(index)
+                mediaRow(section.optString("title"), section.mediaList("items"), parent = slot)
+            }
+            slot.addView(action("Browse all ${sections.length()} categories") { loadCategories(type) })
+        }
+        val cached = api.cached("categories/$type")
+        if (cached != null) render(cached)
+        if (cached != null && api.cacheFresh("categories/$type")) return
         categoryJob = lifecycleScope.launch {
             try {
-                val catData = api.call("categories/$type")
-                if (current != generation) return@launch
-                val sections = catData.optJSONArray("sections")
-                if (sections != null && sections.length() > 0) {
-                    for (i in 0 until sections.length()) {
-                        val sec = sections.getJSONObject(i)
-                        mediaRow(sec.optString("title"), sec.mediaList("items"))
-                    }
-                }
-            } catch (_: Exception) {}
+                val fresh = api.call("categories/$type")
+                if (current == generation && (cached == null || cached.toString() != fresh.toString())) render(fresh)
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                android.util.Log.w("HomeStream", "Category refresh unavailable")
+            }
         }
     }
 
@@ -1676,18 +1695,49 @@ class MainActivity : AppCompatActivity() {
         }.show()
     }
 
-    private fun loadCategories(type: String) {
-        rememberScreen("categories-$type") { loadCategories(type) }
+    private class CategoryHolder(val body: LinearLayout) : RecyclerView.ViewHolder(body) { var sectionId = "" }
+
+    private fun loadCategories(type: String, selectedCategory: String? = null) {
+        rememberScreen("categories-$type") { loadCategories(type, selectedCategory) }
         screen = "categories-$type"
         fetch("categories/$type") { data ->
-            heading(if (type == "movies") "Movie Categories" else "TV Categories")
+            heading(when (type) { "movies" -> "Movie Categories"; "requests" -> "Discover by Category"; else -> "TV Categories" })
             val sections = data.optJSONArray("sections")
-            if (sections != null && sections.length() > 0) {
-                for (i in 0 until sections.length()) {
-                    val sec = sections.getJSONObject(i)
-                    mediaRow(sec.optString("title"), sec.mediaList("items"))
+            if (sections == null || sections.length() == 0) { message("No categories found."); return@fetch }
+            val positions = mutableMapOf<String, Int>()
+            val list = RecyclerView(this).apply {
+                layoutManager = androidx.recyclerview.widget.LinearLayoutManager(this@MainActivity)
+                setItemViewCacheSize(0)
+                recycledViewPool.setMaxRecycledViews(0, 2)
+                adapter = object : RecyclerView.Adapter<CategoryHolder>() {
+                    override fun onCreateViewHolder(parent: ViewGroup, viewType: Int) = CategoryHolder(column().apply {
+                        layoutParams = RecyclerView.LayoutParams(-1, -2)
+                    })
+                    private fun remember(holder: CategoryHolder) {
+                        if (holder.sectionId.isNotBlank()) positions[holder.sectionId] =
+                            (holder.body.getChildAt(1) as? HorizontalScrollView)?.scrollX ?: 0
+                    }
+                    override fun onBindViewHolder(holder: CategoryHolder, position: Int) {
+                        remember(holder); holder.body.removeAllViews()
+                        val section = sections.getJSONObject(position)
+                        holder.sectionId = section.optString("id")
+                        mediaRow(section.optString("title"), section.mediaList("items"), parent = holder.body)
+                        (holder.body.getChildAt(1) as? HorizontalScrollView)?.let { row ->
+                            val targetId = holder.sectionId
+                            row.post { if (holder.sectionId == targetId) row.scrollTo(positions[targetId] ?: 0, 0) }
+                        }
+                    }
+                    override fun onViewRecycled(holder: CategoryHolder) {
+                        remember(holder); holder.sectionId = ""; holder.body.removeAllViews()
+                    }
+                    override fun getItemCount() = sections.length()
                 }
-            } else message("No categories found.")
+            }
+            content.addView(list, LinearLayout.LayoutParams(-1, 0, 1f))
+            if (selectedCategory != null) {
+                val index = (0 until sections.length()).firstOrNull { sections.getJSONObject(it).optString("id") == selectedCategory }
+                if (index != null) list.scrollToPosition(index)
+            }
         }
     }
 

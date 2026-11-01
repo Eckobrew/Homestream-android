@@ -163,3 +163,17 @@ Additional manual checks:
   Slideshow transport controls and generic receiver naming are hidden on the phone;
   actual video retains playback controls. Receiver software is still the stock
   Google receiver, rather than a separately registered custom receiver.
+
+## Category navigation and rendering
+
+- Added horizontal category chips to movie/TV/request browsing and a full category
+  view. Preview pages show three rows and an explicit Browse all categories action.
+- Full category pages use recycled vertical rows and release off-screen poster
+  views. Horizontal row scroll positions are retained when rows are recycled.
+- Updated the metadata-cache namespace so the expanded category set is fetched
+  after installing this update instead of waiting on a prior cached genre list.
+
+Manual discovery checks: browse movie and TV categories, select a genre chip and
+return with Back; scroll the full category list on phone and TV. Open More Like
+This for a movie and an episode, check the results are relevant and include titles
+that can be requested, then verify that truly available suggestions play locally.
