@@ -6,14 +6,17 @@ This is the current manual acceptance checklist. Older validation reports descri
 
 ## Current baseline
 
-- Android: `1d2f678` — custom Cast receiver `75369D0A`, session-policy checks for both setup modes, TV Connect focus fix, simplified TV sidebar, phone top-tab removal and the earlier profile/category changes. Build passed; installation updates target **HomeStream Preview**, preserving pairing/settings.
-- Backend: `aefd1d2` — deployed to LXC 111 from its GitHub-built Docker image, healthy with clean startup logs. Includes the backend audit fixes and `/cast/receiver.html`. No LXC build.
+- Android: `5d9b526` — custom Cast receiver `75369D0A`, session-policy checks for both setup modes, TV Connect focus fix, simplified TV sidebar, phone top-tab removal and the earlier profile/category changes. Build passed; installation updates target **HomeStream Preview**, preserving pairing/settings.
+- Backend: `6e65ea2` — deployed to LXC 111 from its GitHub-built Docker image, healthy with clean startup logs. Includes the backend audit fixes and `/cast/receiver.html`. No LXC build.
 - Pixel 8a and Chromecast HD (`192.168.1.100`) are the current ADB deployment targets. Phone screen timeout is restored to 30 seconds after installation.
 - User confirmed the original profile-confirmation blocker cleared after matching the backend update. The TV reached Home after an explicitly requested assisted Connect press; its screenshot confirmed the focusable inactive server row and visually repeated sidebar icons.
 - These observations do not verify the replacement TV remote-focus/sidebar behavior, the custom receiver launch, codecs or audio sync. Those remain manual checks below.
 - Automatic backend CI passed for the deployed commit. Local Android APK assembly passed. Full backend lint still fails (113 errors/39 warnings in the audit snapshot); production dependency audit reported zero vulnerabilities. See the backend audit report for findings and limits.
 
 ## Latest TV, receiver and audit checks — start here
+
+- [ ] Focus the bottom-right/last card in a row and the lowest visible row: the full selection border should fit the card, with no clipped white strip at the screen edge.
+- [ ] Collapsed TV rail highlights should be square and centred on the icons; expanded rail highlights should follow the labelled button bounds.
 
 - [ ] On the TV, reopen **HomeStream Preview**. The primary rail should have unique Search, Home, TV Shows, Movies, Requests, More, My List, Profiles (local paired only) and Settings destinations. Settings should remain reachable; More contains A–Z libraries, categories, YouTube and eligible downloads.
 - [ ] Verify one selected rail destination at a time, a visible remote-focus outline, and readable labels when the rail expands. Check Back from a More destination.
@@ -27,7 +30,7 @@ This is the current manual acceptance checklist. Older validation reports descri
 - [ ] Playback progress should resume accurately; if Jellyfin cannot save it, the API should report a failure rather than claim success. Subtitle selection/preview should continue working through scoped URLs.
 - [ ] Arr webhook **Test** should succeed without modifying torrents when a valid webhook token is configured. Non-admin calls and invalid event/hash data must not change torrent priority.
 - [ ] Check search includes real Jellyfin library matches even if Seerr is unavailable, and avoids duplicate available/requestable copies of the same title.
-- [ ] Check quality options against the actual Radarr/Sonarr configuration, especially during a provider outage; legacy web fallback quality IDs remain a review item.
+- [ ] Check quality options against the actual Radarr/Sonarr configuration, especially during a provider outage; provider outages should offer Server default and never invent Radarr/Sonarr profile IDs.
 
 ## First: latest UI and category loading
 
