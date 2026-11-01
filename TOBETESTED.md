@@ -108,7 +108,7 @@ Verification: local Android compilation, backend TypeScript compilation, code re
 
 - [ ] Phone: resume an episode at least five minutes in, both locally and over Cast; it must resume at the saved position.
 - [ ] Series details: Resume should choose the in-progress episode rather than the first episode. Check an episode from a later season.
-- [ ] Cast: header Cast button and the mini-player open the same remote; no second full-screen controller or “Remote Controls” detour.
+- [ ] Cast: header Cast button and the mini-player open the Google Cast remote with artwork, timeline and volume controls; no second HomeStream backdrop remote.
 - [ ] Cast: play/pause and seeking work; the total duration stays at the library runtime while the stream buffers. Artwork/title must not flash with progress updates.
 - [ ] Cast queue: next episode updates title, runtime and progress to the new episode.
 - [ ] Native Android TV: standard transport controls, without the phone action-button row or debug stream-mode toggle; hardware next/previous keys still skip episodes.
@@ -118,3 +118,13 @@ Verification: local Android compilation, backend TypeScript compilation, code re
 - [ ] Internet without Tailscale: still requires login. A forged forwarding header must not grant household access.
 - [ ] Kids restrictions and parent PIN remain enforced. Identifying a trusted network does not bypass child restrictions.
 - [ ] Continue Watching reflects progress for the selected household profile after leaving playback and reopening the app.
+
+
+### Google Cast remote preference
+
+- Restored the Google SDK expanded controller as the only full-screen Cast remote, with portrait lock and cutout/system-bar insets retained.
+- Removed the alternate HomeStream backdrop remote. Starting a cast opens the Google controller; Back returns to browse.
+- Cast progress is recorded independently of the player Activity while the app process is alive, including when browsing or using the Google controller. No progress is written during initial buffering.
+- [ ] Check the Google remote’s play/pause, timeline, volume, subtitles and queue controls.
+- [ ] Back should return to browsing rather than another full-screen remote; resume/progress should continue to update while browsing.
+- Verification: local compilation and source review; manual device acceptance remains with the user.

@@ -26,6 +26,7 @@ class HomeStreamApplication : Application() {
         super.onCreate()
         BrowseCache.initialize(cacheDir.resolve("browse-metadata"))
         WatchNext.schedule(this)
+        observeCastProgress()
         playbackReports.launch { cacheDir.resolve("image_cache").takeIf { it.isDirectory }?.deleteRecursively() }
         val settings = ServerSettings(this)
         val imageClient = OkHttpClient.Builder()
