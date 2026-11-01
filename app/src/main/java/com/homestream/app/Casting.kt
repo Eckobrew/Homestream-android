@@ -77,8 +77,8 @@ class HomeStreamRouteDialog : androidx.mediarouter.app.MediaRouteControllerDialo
             addView(activity.label(session?.castDevice?.friendlyName ?: "Your TV", 14f))
         } else activity.readyToCastView()
         return androidx.appcompat.app.AlertDialog.Builder(activity).setView(form)
-            .setPositiveButton(if (video) "Playback controls" else "Browse") { _, _ ->
-                if (video) startActivity(android.content.Intent(activity, CastControllerActivity::class.java))
+            .setPositiveButton("Remote controls") { _, _ ->
+                startActivity(android.content.Intent(activity, CastControllerActivity::class.java))
             }.setNeutralButton("Stop casting") { _, _ -> castContext(activity)?.sessionManager?.endCurrentSession(true) }
             .setNegativeButton("Close", null).create()
     }
@@ -88,6 +88,9 @@ class HomeStreamRouteDialog : androidx.mediarouter.app.MediaRouteControllerDialo
 class CastControllerActivity : ExpandedControllerActivity() {
     private var sdkPane: View? = null
     private var standbyPane: View? = null
+    private var idleVolume: android.widget.SeekBar? = null
+    private var idleMute: android.widget.Button? = null
+    private var idleLevel: android.widget.TextView? = null
     private val handler = android.os.Handler(android.os.Looper.getMainLooper())
     private val refresh = object : Runnable {
         override fun run() {
@@ -95,9 +98,14 @@ class CastControllerActivity : ExpandedControllerActivity() {
             val standby = !hasCastVideo(session?.remoteMediaClient)
             sdkPane?.visibility = if (standby) View.GONE else View.VISIBLE
             standbyPane?.visibility = if (standby) View.VISIBLE else View.GONE
-            if (standby) supportActionBar?.hide() else {
-                supportActionBar?.show(); supportActionBar?.title = "HomeStream"
-                supportActionBar?.subtitle = session?.castDevice?.friendlyName
+            supportActionBar?.show()
+            supportActionBar?.title = "HomeStream"
+            supportActionBar?.subtitle = session?.castDevice?.friendlyName
+            if (standby && session?.isConnected == true) runCatching {
+                val level = (session.volume * 100).toInt().coerceIn(0, 100)
+                if (idleVolume?.isPressed != true) idleVolume?.progress = level
+                idleLevel?.text = "Volume · $level%"
+                idleMute?.text = if (session.isMute) "Unmute" else "Mute"
             }
             handler.postDelayed(this, 750)
         }
@@ -124,19 +132,46 @@ class CastControllerActivity : ExpandedControllerActivity() {
             sdkPane = container.getChildAt(0)
             val pane = readyToCastView().apply {
                 setBackgroundColor(INK)
-                addView(action("Browse HomeStream") { finish() })
-                addView(action("Stop casting") {
-                    castContext(this@CastControllerActivity)?.sessionManager?.endCurrentSession(true)
-                    finish()
-                })
+                // Device controls only: the idle receiver has no playable media.
+                idleLevel = label("Volume", 14f).apply {
+                    setTextColor(MUTED); setPadding(0, dp(40), 0, dp(8))
+                }
+                addView(idleLevel)
+                idleVolume = android.widget.SeekBar(context).apply {
+                    max = 100
+                    contentDescription = "Cast device volume"
+                    progressTintList = android.content.res.ColorStateList.valueOf(RED)
+                    thumbTintList = android.content.res.ColorStateList.valueOf(android.graphics.Color.WHITE)
+                    setOnSeekBarChangeListener(object : android.widget.SeekBar.OnSeekBarChangeListener {
+                        override fun onStartTrackingTouch(bar: android.widget.SeekBar) {}
+                        override fun onProgressChanged(bar: android.widget.SeekBar, value: Int, fromUser: Boolean) {
+                            if (fromUser) idleLevel?.text = "Volume · $value%"
+                        }
+                        override fun onStopTrackingTouch(bar: android.widget.SeekBar) {
+                            runCatching {
+                                castContext(this@CastControllerActivity)?.sessionManager?.currentCastSession?.setVolume(bar.progress / 100.0)
+                            }.onFailure { android.widget.Toast.makeText(context, "Could not change TV volume", android.widget.Toast.LENGTH_SHORT).show() }
+                        }
+                    })
+                }
+                addView(idleVolume, android.widget.LinearLayout.LayoutParams(-1, dp(48)))
+                idleMute = action("Mute") {
+                    runCatching {
+                        castContext(this@CastControllerActivity)?.sessionManager?.currentCastSession?.let { it.setMute(!it.isMute) }
+                    }.onFailure { android.widget.Toast.makeText(context, "Could not change TV volume", android.widget.Toast.LENGTH_SHORT).show() }
+                }
+                addView(idleMute)
             }
             container.addView(pane, ViewGroup.LayoutParams(-1, -1)); standbyPane = pane
         }
     }
 
+    override fun onSupportNavigateUp(): Boolean { finish(); return true }
+
     override fun onCreateOptionsMenu(menu: android.view.Menu): Boolean {
         super.onCreateOptionsMenu(menu)
         supportActionBar?.title = "HomeStream"
+        supportActionBar?.setDisplayHomeAsUpEnabled(true)
         supportActionBar?.subtitle = castContext(this)?.sessionManager?.currentCastSession?.castDevice?.friendlyName
         menu.add(0, 9999, 0, "Stop Casting").apply {
             setShowAsAction(android.view.MenuItem.SHOW_AS_ACTION_ALWAYS)

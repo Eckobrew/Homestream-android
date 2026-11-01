@@ -141,3 +141,13 @@ Verification: local Android compilation, backend TypeScript compilation, code re
 - Verification: source review, local Android compilation and backend TypeScript compilation. User playback acceptance pending.
 
 - Log follow-up: phone logs at 12:31–12:32 contained “Could not save Cast progress” warnings before this follow-up installation. Confirm progress persistence after relaunch/reconnect; investigate if warnings recur.
+
+
+### Idle phone Cast remote
+
+- Idle “Ready to cast” screen contains only connection status, device volume, mute/unmute and the toolbar stop-casting action. No artwork, media title, slideshow playback controls or Browse button.
+- The Cast dialog’s Remote controls action opens this remote even when no media is playing.
+- Playing video uses the Google Cast expanded playback remote. TV receiver slideshow remains unchanged.
+- [ ] Open the remote while idle: volume/mute/stop work, with no media content displayed.
+- [ ] Start and stop a video: remote switches between idle device controls and Google playback controls.
+- Verification: local Android build; manual UI/playback acceptance remains with the user.
