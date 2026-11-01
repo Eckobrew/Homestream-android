@@ -796,7 +796,7 @@ class MainActivity : AppCompatActivity() {
             var queued = false
             val prefetched = mutableSetOf<Int>()
             fun reconcile() {
-                if (current != generation || !virtualHost.isAttachedToWindow) return
+                if (!virtualHost.isAttachedToWindow) return
                 var lastVisible = -1
                 slots.forEachIndexed { index, row ->
                     if (row.getGlobalVisibleRect(visible) || row.hasFocus()) {
