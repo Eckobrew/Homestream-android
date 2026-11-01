@@ -6,11 +6,28 @@ This is the current manual acceptance checklist. Older validation reports descri
 
 ## Current baseline
 
-- Android: `7bf88bd` — profile restyle, scrolling category rows and bounded artwork prefetch. Built locally and installed as **HomeStream Preview** on the Pixel 8a; original app preserved. Phone screen timeout restored to 30 seconds.
-- Backend: `1bc8df8` — deployed to LXC 111 using the GitHub-built Docker image; container reported healthy. No build performed in the LXC.
-- User confirmed: the “Connect to HomeStream to confirm your profile” blocker cleared after the matching backend deployment.
-- Android TV installation of the latest APK is not confirmed.
-- Functional checks below have not been performed by the coding agent. Latest Android APK assembly passed; backend CI passed. These are not substitutes for device testing.
+- Android: `1d2f678` — custom Cast receiver `75369D0A`, session-policy checks for both setup modes, TV Connect focus fix, simplified TV sidebar, phone top-tab removal and the earlier profile/category changes. Build passed; installation updates target **HomeStream Preview**, preserving pairing/settings.
+- Backend: `aefd1d2` — deployed to LXC 111 from its GitHub-built Docker image, healthy with clean startup logs. Includes the backend audit fixes and `/cast/receiver.html`. No LXC build.
+- Pixel 8a and Chromecast HD (`192.168.1.100`) are the current ADB deployment targets. Phone screen timeout is restored to 30 seconds after installation.
+- User confirmed the original profile-confirmation blocker cleared after matching the backend update. The TV reached Home after an explicitly requested assisted Connect press; its screenshot confirmed the focusable inactive server row and visually repeated sidebar icons.
+- These observations do not verify the replacement TV remote-focus/sidebar behavior, the custom receiver launch, codecs or audio sync. Those remain manual checks below.
+- Automatic backend CI passed for the deployed commit. Local Android APK assembly passed. Full backend lint still fails (113 errors/39 warnings in the audit snapshot); production dependency audit reported zero vulnerabilities. See the backend audit report for findings and limits.
+
+## Latest TV, receiver and audit checks — start here
+
+- [ ] On the TV, reopen **HomeStream Preview**. The primary rail should have unique Search, Home, TV Shows, Movies, Requests, More, My List, Profiles (local paired only) and Settings destinations. Settings should remain reachable; More contains A–Z libraries, categories, YouTube and eligible downloads.
+- [ ] Verify one selected rail destination at a time, a visible remote-focus outline, and readable labels when the rail expands. Check Back from a More destination.
+- [ ] On the next fresh TV setup (or a spare test setup), use only the D-pad to reach and press the discovered server's **Connect** button. Do not erase your working pairing just to perform this check.
+- [ ] In Google Cast Developer Console, confirm `75369D0A` points to `http://homeflix.eckonet.uk/cast/receiver.html` and the Chromecast test device is registered/restarted. Publication requires HTTPS.
+- [ ] Stop any old default-receiver session and reconnect from the phone. The TV should show a rotating background, HomeStream branding, Cast icon and **Ready to cast**; the phone should have no photo/slideshow transport controls.
+- [ ] Start a movie, pause, seek, change subtitles, play the next episode and stop. Playback controls should replace standby; stopping should restore the TV slideshow. The slideshow should keep rotating without the phone sending PHOTO loads.
+- [ ] Switch to Kids or tighten the active profile remotely: existing receiver artwork should clear before restricted content is shown. Empty eligible libraries must not leave adult artwork behind.
+- [ ] External Jellyfin-login accounts also confirm session policy before cached browsing, while keeping profile management hidden.
+- [ ] For an eligible Kids title, request-quality options should load; adult/unrated POST requests must still be rejected.
+- [ ] Playback progress should resume accurately; if Jellyfin cannot save it, the API should report a failure rather than claim success. Subtitle selection/preview should continue working through scoped URLs.
+- [ ] Arr webhook **Test** should succeed without modifying torrents when a valid webhook token is configured. Non-admin calls and invalid event/hash data must not change torrent priority.
+- [ ] Check search includes real Jellyfin library matches even if Seerr is unavailable, and avoids duplicate available/requestable copies of the same title.
+- [ ] Check quality options against the actual Radarr/Sonarr configuration, especially during a provider outage; legacy web fallback quality IDs remain a review item.
 
 ## First: latest UI and category loading
 
