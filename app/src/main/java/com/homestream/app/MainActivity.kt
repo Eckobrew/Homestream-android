@@ -2261,18 +2261,22 @@ class MainActivity : AppCompatActivity() {
                     orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
                     background = rounded(0x22FFFFFF.toInt(), radius = dp(6).toFloat())
                     setPadding(dp(10), dp(8), dp(10), dp(8))
-                    isClickable = true
+                    isClickable = false
+                    isFocusable = false
+                    descendantFocusability = ViewGroup.FOCUS_AFTER_DESCENDANTS
                 }
-                val info = column().apply { layoutParams = LinearLayout.LayoutParams(0, -2, 1f) }
+                val info = column().apply { layoutParams = LinearLayout.LayoutParams(0, -2, 1f); isFocusable = false }
                 info.addView(label(s.name, 13f, true))
                 info.addView(TextView(this@MainActivity).apply { text = s.url; textSize = 11f; setTextColor(MUTED) })
                 sCard.addView(info)
 
                 val pairBtn = Button(this@MainActivity).apply {
-                    text = "Connect"; textSize = 11.5f; setTextColor(Color.BLACK); isAllCaps = false
+                    text = "Connect"; textSize = 13f; setTextColor(Color.BLACK); isAllCaps = false
+                    isFocusable = true; isClickable = true
+                    contentDescription = "Connect to ${s.name}"
                     background = rounded(Color.WHITE, radius = dp(6).toFloat())
-                    minHeight = dp(32); minimumHeight = dp(32)
-                    setPadding(dp(12), 0, dp(12), 0)
+                    minHeight = dp(48); minimumHeight = dp(48)
+                    setPadding(dp(16), 0, dp(16), 0)
                     setOnClickListener {
                         isEnabled = false; text = "Pairing…"
                         lifecycleScope.launch {
@@ -2301,9 +2305,11 @@ class MainActivity : AppCompatActivity() {
                         }
                     }
                 }
-                sCard.addView(pairBtn, LinearLayout.LayoutParams(-2, dp(32)))
+                sCard.addView(pairBtn, LinearLayout.LayoutParams(-2, dp(48)))
+                if (isTelevision()) addTvFocusIndicators(sCard)
 
                 discoveredServersContainer.addView(sCard, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(6) })
+                if (isTelevision() && foundServers.size == 1 && dialog.isShowing && !form.hasFocus()) pairBtn.post { if (dialog.isShowing) pairBtn.requestFocus() }
             }
         }
 
@@ -2318,6 +2324,7 @@ class MainActivity : AppCompatActivity() {
         }
         discoverySection.addView(retry)
         dialog.show()
+        if (isTelevision()) addTvFocusIndicators(form)
     }
 
     private fun isWithin(view: View, ancestor: View): Boolean {
