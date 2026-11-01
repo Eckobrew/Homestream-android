@@ -103,7 +103,7 @@ Use the Chromecast with Google TV **HD**, Pixel 8a and an actual Android TV devi
 
 ## Playback, Cast remote and remote access fixes — 1 November 2026
 
-Android installed on Pixel 8a and Android TV: `c9a8527`. Backend pulled and deployed in LXC 111: `2b77a58`. Phone timeout restored to 30 seconds.
+Android installed on Pixel 8a: `ed54295` (Google Cast remote restored). Android TV: `c9a8527`. Backend pulled and deployed in LXC 111: `2b77a58`. Phone timeout restored to 30 seconds.
 Verification: local Android compilation, backend TypeScript compilation, code review and existing device/Jellyfin logs. No manual playback/UI acceptance tests performed by Codex.
 
 - [ ] Phone: resume an episode at least five minutes in, both locally and over Cast; it must resume at the saved position.
