@@ -384,7 +384,7 @@ class PlayerActivity : AppCompatActivity() {
         castCtx?.sessionManager?.addSessionManagerListener(sessionListener, CastSession::class.java)
         lifecycleScope.launch {
             try {
-                if (api.refreshProfilePolicy()) { finish(); return@launch }
+                if (api.refreshProfilePolicy()) { clearCastIdle(this@PlayerActivity); finish(); return@launch }
                 val session = castCtx?.sessionManager?.currentCastSession
                 if (session?.isConnected == true) cast(session) else {
                     remote?.unregisterCallback(remoteCallback); remote = null; startLocal()
@@ -401,7 +401,7 @@ class PlayerActivity : AppCompatActivity() {
                     try {
                         api.refreshProfilePolicy()
                         if (ServerSettings(this@PlayerActivity).policyRevision != playbackPolicy) {
-                            remote?.stop(); releaseLocal(); finish(); return@launch
+                            clearCastIdle(this@PlayerActivity); releaseLocal(); finish(); return@launch
                         }
                     } catch (e: Exception) {
                         if (e is kotlinx.coroutines.CancellationException) throw e

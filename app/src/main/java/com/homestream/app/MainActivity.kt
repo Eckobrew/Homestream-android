@@ -198,7 +198,7 @@ class MainActivity : AppCompatActivity() {
             while (true) {
                 delay(30_000)
                 if (settings.canUseProfiles && policyReady) {
-                    try { if (api.refreshProfilePolicy()) { policyReady = false; verifyProfilePolicy() } }
+                    try { if (api.refreshProfilePolicy()) { clearCastIdle(this@MainActivity); policyReady = false; verifyProfilePolicy() } }
                     catch (e: Exception) { if (e is kotlinx.coroutines.CancellationException) throw e; verifyProfilePolicy() }
                 }
             }
@@ -236,6 +236,7 @@ class MainActivity : AppCompatActivity() {
         policyCheck = lifecycleScope.launch {
             try {
                 val changed = api.refreshProfilePolicy()
+                if (changed) clearCastIdle(this@MainActivity)
                 if (changed || !policyReady) {
                     work?.cancel(); searchJob?.cancel(); categoryJob?.cancel()
                     catalogCache.clear(); heroItems = emptyList(); resetNavigationHistory()
