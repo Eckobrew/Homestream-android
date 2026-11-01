@@ -136,7 +136,7 @@ class ProfilesActivity : AppCompatActivity() {
                 val result = api.call("profiles/select", body = JSONObject().put("profileId", profile.getString("id")).put("parentPin", pin))
                 settings.applyProfilePolicy(result.getJSONObject("profile"), result.getString("revision"))
                 // A cast session must not carry adult playback into a restricted profile.
-                castContext(this@ProfilesActivity)?.sessionManager?.currentCastSession?.remoteMediaClient?.stop()
+                clearCastIdle(this@ProfilesActivity)
                 setResult(Activity.RESULT_OK); finish()
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
@@ -280,7 +280,7 @@ class ProfilesActivity : AppCompatActivity() {
                 saveJob = lifecycleScope.launch {
                     try {
                         val result = api.call("profiles", body = body)
-                        if (api.refreshProfilePolicy()) castContext(this@ProfilesActivity)?.sessionManager?.currentCastSession?.remoteMediaClient?.stop()
+                        if (api.refreshProfilePolicy()) clearCastIdle(this@ProfilesActivity)
                         setResult(Activity.RESULT_OK)
                         val message = when (result.optString("passwordMode")) {
                             "none" -> "Profile added. Jellyfin account created without a password."

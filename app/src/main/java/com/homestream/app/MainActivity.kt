@@ -880,6 +880,7 @@ class MainActivity : AppCompatActivity() {
     private fun syncCastIdle(item: Media) {
         val session = castContext(this)?.sessionManager?.currentCastSession ?: return
         val client = session.remoteMediaClient ?: return
+        if (sendCustomCastIdle(session, heroItems.ifEmpty { listOf(item) }, api)) return
         if (client.playerState == MediaStatus.PLAYER_STATE_IDLE) {
             val art = item.backdrop.ifBlank { item.poster }
             if (art.isNotBlank()) {

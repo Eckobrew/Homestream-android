@@ -1202,14 +1202,17 @@ class PlayerActivity : AppCompatActivity() {
         castTitleView.text = item.title
         castOverviewView.text = item.overview
 
-        // Also sync to Chromecast receiver so the TV screen cycles with "Ready to stream"!
+        castCtx?.sessionManager?.currentCastSession?.let { session ->
+            if (sendCustomCastIdle(session, availableContent.ifEmpty { listOf(item) }, api)) return
+        }
+        // Default receiver fallback for builds without a registered custom app ID.
         val client = remote
         if (client != null && client.playerState == MediaStatus.PLAYER_STATE_IDLE && art.isNotBlank()) {
             try {
                 val fullUrl = api.absolute(art)
                 val metadata = MediaMetadata(MediaMetadata.MEDIA_TYPE_PHOTO).apply {
                     putString(MediaMetadata.KEY_TITLE, item.title)
-                    putString(MediaMetadata.KEY_SUBTITLE, "Ready to stream")
+                    putString(MediaMetadata.KEY_SUBTITLE, "Ready to cast")
                     addImage(WebImage(Uri.parse(fullUrl)))
                 }
                 val photoInfo = MediaInfo.Builder(fullUrl)

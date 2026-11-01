@@ -1,6 +1,9 @@
 plugins { id("com.android.application"); id("org.jetbrains.kotlin.android") }
 val previewInstall = providers.gradleProperty("previewInstall").orNull == "true"
+val customCastReceiverId = providers.gradleProperty("castReceiverAppId").orNull.orEmpty().uppercase()
+require(customCastReceiverId.isEmpty() || customCastReceiverId.matches(Regex("[A-F0-9]{8}"))) { "castReceiverAppId must be an 8-character Cast application ID" }
 android {
+    buildFeatures { buildConfig = true }
     namespace = "com.homestream.app"
     compileSdk = 35
     defaultConfig {
@@ -8,6 +11,7 @@ android {
         manifestPlaceholders["appLabel"] = if (previewInstall) "HomeStream Preview" else "@string/app_name"
         minSdk = 26
         targetSdk = 35
+        buildConfigField("String", "CAST_RECEIVER_APP_ID", "\"$customCastReceiverId\"")
         versionCode = 3
         versionName = "1.1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"

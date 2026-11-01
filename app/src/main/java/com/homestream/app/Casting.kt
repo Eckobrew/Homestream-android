@@ -19,12 +19,32 @@ import com.google.android.gms.cast.framework.media.widget.ExpandedControllerActi
 
 class HomeStreamCastOptions : OptionsProvider {
     override fun getCastOptions(context: Context): CastOptions = CastOptions.Builder()
-        .setReceiverApplicationId(CastMediaControlIntent.DEFAULT_MEDIA_RECEIVER_APPLICATION_ID)
+        .setReceiverApplicationId(BuildConfig.CAST_RECEIVER_APP_ID.ifBlank { CastMediaControlIntent.DEFAULT_MEDIA_RECEIVER_APPLICATION_ID })
         .setCastMediaOptions(CastMediaOptions.Builder()
             .setExpandedControllerActivityClassName(CastControllerActivity::class.java.name).build())
         .build()
     override fun getAdditionalSessionProviders(context: Context): List<SessionProvider>? = null
 }
+internal fun clearCastIdle(context: Context) {
+    val session = castContext(context)?.sessionManager?.currentCastSession ?: return
+    if (BuildConfig.CAST_RECEIVER_APP_ID.isNotBlank()) {
+        session.sendMessage("urn:x-cast:uk.eckonet.homestream", org.json.JSONObject().put("type", "idle").put("items", org.json.JSONArray()).toString())
+    }
+    session.remoteMediaClient?.stop()
+}
+
+internal fun sendCustomCastIdle(session: com.google.android.gms.cast.framework.CastSession, items: List<Media>, api: HomeStreamApi): Boolean {
+    if (BuildConfig.CAST_RECEIVER_APP_ID.isBlank()) return false
+    if (hasCastVideo(session.remoteMediaClient)) return true
+    val slides = org.json.JSONArray()
+    items.distinctBy { it.id }.take(5).forEach { item ->
+        val art = item.backdrop.ifBlank { item.poster }
+        if (art.isNotBlank()) slides.put(org.json.JSONObject().put("title", item.title).put("artwork", api.absolute(art)))
+    }
+    session.sendMessage("urn:x-cast:uk.eckonet.homestream", org.json.JSONObject().put("type", "idle").put("items", slides).toString())
+    return true
+}
+
 internal fun hasCastVideo(client: com.google.android.gms.cast.framework.media.RemoteMediaClient?): Boolean {
     val media = client?.mediaInfo ?: return false
     val video = media.contentType?.startsWith("video/", ignoreCase = true) == true ||
