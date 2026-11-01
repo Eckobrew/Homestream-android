@@ -165,6 +165,7 @@ class PlayerActivity : AppCompatActivity() {
     }
 
     private fun describeStream(stream: JSONObject) {
+        if (stream.optLong("totalDurationTicks") > 0) knownDurationMs = ticksToMs(stream.optLong("totalDurationTicks"))
         playbackMethod = stream.optString("playMethod").ifBlank { if (stream.optBoolean("isTranscoding")) "Transcode" else "DirectPlay" }
         val hls = stream.optString("transport") == "HLS" || Uri.parse(stream.optString("streamUrl")).path.orEmpty().endsWith(".m3u8", ignoreCase = true)
         playbackDetails = listOf(
