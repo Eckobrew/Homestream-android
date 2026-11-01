@@ -780,17 +780,70 @@ class MainActivity : AppCompatActivity() {
             slot.setTag(R.id.browse_signature, data.toString())
             if (sections.length() == 0) return
             slot.addView(label("Browse categories", 20f, true).apply { setPadding(gutter, dp(20), gutter, dp(8)) })
-            val chips = LinearLayout(this).apply { setPadding(gutter, 0, gutter, 0) }
-            for (index in 0 until sections.length()) {
+            val virtualHost = column()
+            slot.addView(virtualHost)
+            // Keep lightweight row slots; instantiate artwork/cards only while on screen.
+            val slots = (0 until minOf(64, sections.length())).map { index ->
                 val section = sections.getJSONObject(index)
-                chips.addView(action(section.optString("title")) { loadCategories(type, section.optString("id")) })
+                column().apply {
+                    minimumHeight = dp(if (isTelevision()) 240 else 290)
+                    setTag(R.id.browse_key, "category:${section.optString("id")}")
+                    virtualHost.addView(this, LinearLayout.LayoutParams(-1, -2))
+                }
             }
-            slot.addView(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(chips) })
-            for (index in 0 until minOf(3, sections.length())) {
-                val section = sections.getJSONObject(index)
-                mediaRow(section.optString("title"), section.mediaList("items"), parent = slot)
+            val offsets = mutableMapOf<Int, Int>()
+            val visible = android.graphics.Rect()
+            var queued = false
+            val prefetched = mutableSetOf<Int>()
+            fun reconcile() {
+                if (current != generation || !virtualHost.isAttachedToWindow) return
+                var lastVisible = -1
+                slots.forEachIndexed { index, row ->
+                    if (row.getGlobalVisibleRect(visible) || row.hasFocus()) {
+                        lastVisible = index
+                        if (row.childCount == 0) {
+                            val section = sections.getJSONObject(index)
+                            mediaRow(section.optString("title"), section.mediaList("items").take(30), parent = row)
+                            (row.getChildAt(1) as? HorizontalScrollView)?.let { scroll ->
+                                scroll.post { scroll.scrollTo(offsets[index] ?: 0, 0) }
+                            }
+                        }
+                    } else if (row.childCount > 0) {
+                        offsets[index] = (row.getChildAt(1) as? HorizontalScrollView)?.scrollX ?: 0
+                        row.minimumHeight = maxOf(row.minimumHeight, row.height)
+                        row.removeAllViews()
+                    }
+                }
+                // Warm only the leading artwork of the next two rows; never fetch details here.
+                if (lastVisible >= 0) for (index in lastVisible + 1..minOf(lastVisible + 2, slots.lastIndex)) {
+                    if (prefetched.add(index)) {
+                        sections.getJSONObject(index).mediaList("items").take(4).forEach { item ->
+                            coil.Coil.imageLoader(this@MainActivity).enqueue(
+                                coil.request.ImageRequest.Builder(this@MainActivity)
+                                    .data(api.absolute(if (isTelevision()) item.backdrop else item.poster))
+                                    .size(if (isTelevision()) dp(240) else dp(140))
+                                    .build())
+                        }
+                    }
+                }
             }
-            slot.addView(action("Browse all ${sections.length()} categories") { loadCategories(type) })
+            val observer = android.view.ViewTreeObserver.OnScrollChangedListener {
+                if (!queued) { queued = true; slot.postOnAnimation { queued = false; reconcile() } }
+            }
+            virtualHost.addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
+                override fun onViewAttachedToWindow(view: View) {
+                    view.viewTreeObserver.addOnScrollChangedListener(observer)
+                    view.post { reconcile() }
+                }
+                override fun onViewDetachedFromWindow(view: View) {
+                    if (view.viewTreeObserver.isAlive) view.viewTreeObserver.removeOnScrollChangedListener(observer)
+                }
+            })
+            if (virtualHost.isAttachedToWindow) {
+                virtualHost.viewTreeObserver.addOnScrollChangedListener(observer)
+                slot.post { reconcile() }
+            }
+
         }
         val cached = api.cached("categories/$type")
         if (cached != null) render(cached)
