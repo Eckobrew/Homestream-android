@@ -229,7 +229,7 @@ class MainActivity : AppCompatActivity() {
             insets
         }
         mainContainer = column().apply { setBackgroundColor(INK) }
-        content = column().apply { setPadding(0, 0, 0, dp(90)) } // padding for bottom floating pill
+        content = column().apply { setPadding(0, 0, 0, dp(if (isTelevision()) 24 else 90)) } // phone floating navigation / TV safe bottom
 
         if (isTelevision()) televisionShell() else phoneShell()
 
@@ -1645,6 +1645,7 @@ class MainActivity : AppCompatActivity() {
         }, sort, filter)
         if (filtered.isEmpty()) { message("No titles found under '$selectedLetter'."); return }
         val grid = RecyclerView(this).apply {
+            setTag(R.id.browse_key, "catalog-list:$type")
             setPadding(gutter, 0, gutter, 0)
             clipToPadding = false
             val manager = GridLayoutManager(this@MainActivity, 1)
@@ -1706,6 +1707,7 @@ class MainActivity : AppCompatActivity() {
             if (sections == null || sections.length() == 0) { message("No categories found."); return@fetch }
             val positions = mutableMapOf<String, Int>()
             val list = RecyclerView(this).apply {
+                setTag(R.id.browse_key, "category-list:$type")
                 layoutManager = androidx.recyclerview.widget.LinearLayoutManager(this@MainActivity)
                 setItemViewCacheSize(0)
                 recycledViewPool.setMaxRecycledViews(0, 2)
@@ -2254,6 +2256,12 @@ class MainActivity : AppCompatActivity() {
         val viewport = visible.parent as? ScrollView
         val scrollY = viewport?.scrollY ?: 0
         val focused = currentFocus
+        val recyclerStates = mutableMapOf<String, android.os.Parcelable>()
+        fun eachRecycler(view: View, action: (RecyclerView, String) -> Unit) {
+            if (view is RecyclerView) view.getTag(R.id.browse_key)?.toString()?.let { action(view, it) }
+            else if (view is ViewGroup) for (index in 0 until view.childCount) eachRecycler(view.getChildAt(index), action)
+        }
+        eachRecycler(visible) { recycler, key -> recycler.layoutManager?.onSaveInstanceState()?.let { recyclerStates[key] = it } }
         val staged = column().apply { setPadding(visible.paddingLeft, visible.paddingTop, visible.paddingRight, visible.paddingBottom) }
         if (screen == "details") { trailerView?.apply { stopLoading(); destroy() }; trailerView = null }
         heroRotationJob?.cancel()
@@ -2286,6 +2294,7 @@ class MainActivity : AppCompatActivity() {
         reconcile(visible, staged)
         if (isTelevision()) addTvFocusIndicators(visible)
         visible.post {
+            eachRecycler(visible) { recycler, key -> recyclerStates[key]?.let { recycler.layoutManager?.onRestoreInstanceState(it) } }
             viewport?.scrollTo(0, scrollY)
             focused?.takeIf { it.isAttachedToWindow }?.requestFocus()
         }
