@@ -350,19 +350,6 @@ class MainActivity : AppCompatActivity() {
 
         mainContainer.addView(header)
 
-        // 2. Top quick-filter pills (TV Shows, Movies, Categories)
-        if (screen != "search" && screen != "details") {
-            val pillsScroll = HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false }
-            val pills = LinearLayout(this).apply {
-                id = R.id.phone_categories; setPadding(gutter, dp(2), gutter, dp(8))
-            }
-            pills.addView(categoryPill("TV Shows", currentTab == "series") { loadTab("series") })
-            pills.addView(categoryPill("Movies", currentTab == "movies") { loadTab("movies") })
-            pills.addView(categoryPill("Categories ⌄", false) { showCategoriesMenu() })
-            pillsScroll.addView(pills)
-            mainContainer.addView(pillsScroll)
-        }
-
         // 3. Scrollable content
         mainContainer.addView(browseViewport(),
             LinearLayout.LayoutParams(-1, 0, 1f))
