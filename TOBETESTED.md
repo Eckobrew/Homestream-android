@@ -128,3 +128,14 @@ Verification: local Android compilation, backend TypeScript compilation, code re
 - [ ] Check the Google remote’s play/pause, timeline, volume, subtitles and queue controls.
 - [ ] Back should return to browsing rather than another full-screen remote; resume/progress should continue to update while browsing.
 - Verification: local compilation and source review; manual device acceptance remains with the user.
+
+
+### Cast duration follow-up
+
+- Correct CAF MEDIA_STATUS interception: CAF passes one MediaStatus, rather than a response containing a status array.
+- Carry MIME type and transport separately from signed stream URLs, whose ticket paths hide the original HLS extension.
+- Receiver JavaScript is versioned to avoid reusing an old cached script on the next receiver launch.
+- [ ] Stop casting completely, reconnect, then play a title. The Google Cast remote must show the full library runtime rather than only a few seconds beyond the current position.
+- [ ] Resume and seek both forward and backward over a signed HLS stream; repeat from native TV.
+- [ ] Web playback and web Cast correctly recognize a signed HLS URL.
+- Verification: source review, local Android compilation and backend TypeScript compilation. User playback acceptance pending.
