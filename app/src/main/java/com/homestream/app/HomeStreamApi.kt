@@ -100,9 +100,9 @@ class HomeStreamApi(private val settings: ConnectionSettings) {
     /** Never render a previous profile's cache until the server confirms its policy. */
     suspend fun refreshProfilePolicy(): Boolean {
         val local = settings as? ServerSettings ?: return false
-        if (!local.canUseProfiles) return false
+        if (local.token.isBlank()) return false
         val before = "${local.profile}|${local.policyRevision}"
-        val status = call("profiles/status")
+        val status = call("session/status")
         local.applyProfilePolicy(status.optJSONObject("profile"), status.optString("revision"))
         return before != "${local.profile}|${local.policyRevision}"
     }

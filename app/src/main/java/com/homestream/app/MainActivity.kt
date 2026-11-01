@@ -143,7 +143,7 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         })
-        if (settings.baseUrl.isBlank() || settings.token.isBlank()) setup() else if (settings.canUseProfiles) {
+        if (settings.baseUrl.isBlank() || settings.token.isBlank()) setup() else if (settings.token.isNotBlank()) {
             setContentView(label("HomeStream").apply { setBackgroundColor(INK); gravity = Gravity.CENTER })
         } else if (!openLauncherItem(intent)) loadTab("home")
     }
@@ -151,7 +151,7 @@ class MainActivity : AppCompatActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        if (policyReady || !settings.canUseProfiles) openLauncherItem(intent)
+        if (policyReady || settings.token.isBlank()) openLauncherItem(intent)
     }
 
     private fun openLauncherItem(source: Intent): Boolean {
@@ -197,7 +197,7 @@ class MainActivity : AppCompatActivity() {
         policyMonitor = lifecycleScope.launch {
             while (true) {
                 delay(30_000)
-                if (settings.canUseProfiles && policyReady) {
+                if (settings.token.isNotBlank() && policyReady) {
                     try { if (api.refreshProfilePolicy()) { clearCastIdle(this@MainActivity); policyReady = false; verifyProfilePolicy() } }
                     catch (e: Exception) { if (e is kotlinx.coroutines.CancellationException) throw e; verifyProfilePolicy() }
                 }
@@ -221,7 +221,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        if (settings.canUseProfiles) { verifyProfilePolicy(); return }
+        if (settings.token.isNotBlank()) { verifyProfilePolicy(); return }
         trailerView?.onResume()
         if (playbackWasLaunched) {
             playbackWasLaunched = false

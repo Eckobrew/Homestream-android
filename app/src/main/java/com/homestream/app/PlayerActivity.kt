@@ -397,7 +397,7 @@ class PlayerActivity : AppCompatActivity() {
         timer = lifecycleScope.launch {
             while (true) {
                 delay(10_000)
-                if (ServerSettings(this@PlayerActivity).canUseProfiles) {
+                if (ServerSettings(this@PlayerActivity).token.isNotBlank()) {
                     try {
                         api.refreshProfilePolicy()
                         if (ServerSettings(this@PlayerActivity).policyRevision != playbackPolicy) {

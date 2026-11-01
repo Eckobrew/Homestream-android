@@ -115,7 +115,7 @@ object WatchNext {
     suspend fun sync(context: Context) {
         if (!context.isTelevision()) return
         val settings = ServerSettings(context)
-        if (settings.canUseProfiles && settings.token.isNotBlank()) {
+        if (settings.token.isNotBlank()) {
             try { HomeStreamApi(settings).refreshProfilePolicy() } catch (e: Exception) {
                 lock.withLock { rows(context).forEach { context.contentResolver.delete(ContentUris.withAppendedId(uri, it.id), null, null) } }
                 throw e
