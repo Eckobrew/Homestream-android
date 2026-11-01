@@ -63,6 +63,21 @@ class ServerSettings(context: Context, private val keyProvider: (() -> SecretKey
         get() = prefs.getString("profile", "").orEmpty()
         set(value) { prefs.edit().putString("profile", value).apply(); WatchNext.refresh(appContext) }
 
+    var policyRevision: String
+        get() = prefs.getString("policyRevision", "").orEmpty()
+        private set(value) { prefs.edit().putString("policyRevision", value).apply() }
+    var kidsRating: String
+        get() = prefs.getString("kidsRating", "").orEmpty()
+        private set(value) { prefs.edit().putString("kidsRating", value).apply() }
+
+    fun applyProfilePolicy(profile: org.json.JSONObject?, revision: String) {
+        val id = profile?.optString("id").orEmpty()
+        val rating = if (profile?.optBoolean("isKids") == true) profile.optString("kidsRating") else ""
+        val changed = this.profile != id || policyRevision != revision || kidsRating != rating
+        prefs.edit().putString("profile", id).putString("policyRevision", revision).putString("kidsRating", rating).apply()
+        if (changed) { BrowseCache.clear(); WatchNext.refresh(appContext) }
+    }
+
     private fun key(): SecretKey {
         keyProvider?.let { return it() }
         val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
@@ -104,7 +119,7 @@ class ServerSettings(context: Context, private val keyProvider: (() -> SecretKey
             .putString("localUrl", url.trimEnd('/'))
             .remove("externalUrl").remove("activeUrl").remove("keystore_fallback")
             .putString("authType", "device")
-            .remove("profile")
+            .remove("profile").remove("policyRevision").remove("kidsRating")
             .apply()
         WatchNext.refresh(appContext)
     }
@@ -127,7 +142,7 @@ class ServerSettings(context: Context, private val keyProvider: (() -> SecretKey
             .putString("authType", type)
             .putString("serverName", name)
             .remove("activeUrl").remove("keystore_fallback")
-            .remove("profile")
+            .remove("profile").remove("policyRevision").remove("kidsRating")
             .apply()
         WatchNext.refresh(appContext)
     }

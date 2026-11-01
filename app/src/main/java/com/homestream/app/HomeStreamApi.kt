@@ -24,7 +24,7 @@ class HomeStreamApi(private val settings: ConnectionSettings) {
     private fun cacheKey(path: String, params: Map<String, String>): String {
         val identity = (settings as? ServerSettings)?.serverIdentity ?: settings.baseUrl
         val token = java.security.MessageDigest.getInstance("SHA-256").digest(settings.token.toByteArray()).joinToString("") { "%02x".format(it) }
-        return "browse-v2|$identity|$token|${settings.profile}|$path|${params.toSortedMap()}"
+        return "browse-v3|$identity|$token|${settings.profile}|${(settings as? ServerSettings)?.policyRevision.orEmpty()}|$path|${params.toSortedMap()}"
     }
     fun cached(path: String, params: Map<String, String> = emptyMap()): JSONObject? =
         if (BrowseCache.supported(path)) BrowseCache.get(cacheKey(path, params)) else null
@@ -97,6 +97,16 @@ class HomeStreamApi(private val settings: ConnectionSettings) {
             checkNotNull(data)
         }
     }
+    /** Never render a previous profile's cache until the server confirms its policy. */
+    suspend fun refreshProfilePolicy(): Boolean {
+        val local = settings as? ServerSettings ?: return false
+        if (!local.canUseProfiles) return false
+        val before = "${local.profile}|${local.policyRevision}"
+        val status = call("profiles/status")
+        local.applyProfilePolicy(status.optJSONObject("profile"), status.optString("revision"))
+        return before != "${local.profile}|${local.policyRevision}"
+    }
+
     fun absolute(url: String): String {
         if (url.isBlank()) return ""
         val base = settings.baseUrl.toHttpUrl()

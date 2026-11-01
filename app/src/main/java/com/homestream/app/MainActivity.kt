@@ -62,6 +62,9 @@ class MainActivity : AppCompatActivity() {
     private var currentTab = "home"
     private var screen = "home"
     private var generation = 0
+    private var policyMonitor: Job? = null
+    private var policyCheck: Job? = null
+    private var policyReady = false
     private var playbackWasLaunched = false
     private var lastDetails: Media? = null
     private val gutter get() = dp(if (isTelevision()) 48 else 20)
@@ -140,13 +143,15 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         })
-        if (settings.baseUrl.isBlank() || settings.token.isBlank()) setup() else if (!openLauncherItem(intent)) loadTab("home")
+        if (settings.baseUrl.isBlank() || settings.token.isBlank()) setup() else if (settings.canUseProfiles) {
+            setContentView(label("HomeStream").apply { setBackgroundColor(INK); gravity = Gravity.CENTER })
+        } else if (!openLauncherItem(intent)) loadTab("home")
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        openLauncherItem(intent)
+        if (policyReady || !settings.canUseProfiles) openLauncherItem(intent)
     }
 
     private fun openLauncherItem(source: Intent): Boolean {
@@ -188,6 +193,16 @@ class MainActivity : AppCompatActivity() {
 
     override fun onStart() {
         super.onStart()
+        policyMonitor?.cancel()
+        policyMonitor = lifecycleScope.launch {
+            while (true) {
+                delay(30_000)
+                if (settings.canUseProfiles && policyReady) {
+                    try { if (api.refreshProfilePolicy()) { policyReady = false; verifyProfilePolicy() } }
+                    catch (e: Exception) { if (e is kotlinx.coroutines.CancellationException) throw e; verifyProfilePolicy() }
+                }
+            }
+        }
         if (isTelevision()) (application as HomeStreamApplication).playbackReports.launch {
             runCatching { WatchNext.sync(applicationContext) }
                 .onFailure { android.util.Log.w("HomeStreamWatchNext", "Launcher sync unavailable: ${it.javaClass.simpleName}") }
@@ -197,6 +212,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onStop() {
+        policyMonitor?.cancel(); policyCheck?.cancel()
         trailerView?.onPause()
         heroRotationJob?.cancel()
         super.onStop()
@@ -205,11 +221,43 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        if (settings.canUseProfiles) { verifyProfilePolicy(); return }
         trailerView?.onResume()
         if (playbackWasLaunched) {
             playbackWasLaunched = false
             catalogCache.clear()
             lastDetails?.takeIf { screen == "details" }?.let { details(it) } ?: loadTab(currentTab)
+        }
+    }
+
+    private fun verifyProfilePolicy() {
+        policyCheck?.cancel()
+        if (::root.isInitialized) root.visibility = View.INVISIBLE
+        policyCheck = lifecycleScope.launch {
+            try {
+                val changed = api.refreshProfilePolicy()
+                if (changed || !policyReady) {
+                    work?.cancel(); searchJob?.cancel(); categoryJob?.cancel()
+                    catalogCache.clear(); heroItems = emptyList(); resetNavigationHistory()
+                    policyReady = true
+                    if (!openLauncherItem(intent)) loadTab("home")
+                } else if (playbackWasLaunched) {
+                    playbackWasLaunched = false; catalogCache.clear()
+                    lastDetails?.takeIf { screen == "details" }?.let { details(it) } ?: loadTab(currentTab)
+                }
+                if (::root.isInitialized) root.visibility = View.VISIBLE
+                trailerView?.onResume()
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                val blocked = column().apply {
+                    setBackgroundColor(INK); gravity = Gravity.CENTER
+                    addView(label("Connect to HomeStream to confirm your profile"))
+                    addView(action("Retry") { verifyProfilePolicy() })
+                }
+                work?.cancel(); searchJob?.cancel(); categoryJob?.cancel(); heroRotationJob?.cancel()
+                trailerView?.onPause()
+                policyReady = false; sceneHost = null; setContentView(blocked)
+            }
         }
     }
 
@@ -1874,7 +1922,7 @@ class MainActivity : AppCompatActivity() {
 
     private val profilePage = registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()) { result ->
         if (result.resultCode == android.app.Activity.RESULT_OK) {
-            catalogCache.clear(); browseHistory.clear(); navigationKey = "home"; screen = "home"; lastDetails = null; loadTab("home")
+            policyReady = false; catalogCache.clear(); resetNavigationHistory(); verifyProfilePolicy()
         }
     }
 

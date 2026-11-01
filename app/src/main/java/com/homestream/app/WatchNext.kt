@@ -26,7 +26,7 @@ object WatchNext {
     private data class Row(val id: Long, val key: String, val position: Long, val browsable: Boolean)
 
     fun scope(settings: ServerSettings): String = MessageDigest.getInstance("SHA-256")
-        .digest("${settings.serverIdentity}|${settings.profile}".toByteArray()).joinToString("") { "%02x".format(it) }
+        .digest("${settings.serverIdentity}|${settings.profile}|${settings.policyRevision}".toByteArray()).joinToString("") { "%02x".format(it) }
 
     fun schedule(context: Context) {
         if (!context.isTelevision()) return
@@ -115,6 +115,12 @@ object WatchNext {
     suspend fun sync(context: Context) {
         if (!context.isTelevision()) return
         val settings = ServerSettings(context)
+        if (settings.canUseProfiles && settings.token.isNotBlank()) {
+            try { HomeStreamApi(settings).refreshProfilePolicy() } catch (e: Exception) {
+                lock.withLock { rows(context).forEach { context.contentResolver.delete(ContentUris.withAppendedId(uri, it.id), null, null) } }
+                throw e
+            }
+        }
         val identity = scope(settings)
         val connected = settings.token.isNotBlank()
         lock.withLock {

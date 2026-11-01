@@ -58,6 +58,7 @@ class PlayerActivity : AppCompatActivity() {
     private var player: ExoPlayer? = null
     private var position = 0L
     private var currentPlaybackId = ""
+    private var playbackPolicy = ""
     private var prepared = false
     private var reportedStartedId = ""
     private var transcode = false
@@ -377,16 +378,37 @@ class PlayerActivity : AppCompatActivity() {
     }
     override fun onStart() {
         super.onStart()
+        playbackPolicy = ServerSettings(this).policyRevision
         playbackStarted = true
         runCatching { registerReceiver(noisyReceiver, android.content.IntentFilter(android.media.AudioManager.ACTION_AUDIO_BECOMING_NOISY)) }
         castCtx?.sessionManager?.addSessionManagerListener(sessionListener, CastSession::class.java)
-        val session = castCtx?.sessionManager?.currentCastSession
-        if (session?.isConnected == true) cast(session) else {
-            remote?.unregisterCallback(remoteCallback); remote = null; startLocal()
+        lifecycleScope.launch {
+            try {
+                if (api.refreshProfilePolicy()) { finish(); return@launch }
+                val session = castCtx?.sessionManager?.currentCastSession
+                if (session?.isConnected == true) cast(session) else {
+                    remote?.unregisterCallback(remoteCallback); remote = null; startLocal()
+                }
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                showMessage(e.message ?: "Could not confirm profile")
+            }
         }
         timer = lifecycleScope.launch {
             while (true) {
                 delay(10_000)
+                if (ServerSettings(this@PlayerActivity).canUseProfiles) {
+                    try {
+                        api.refreshProfilePolicy()
+                        if (ServerSettings(this@PlayerActivity).policyRevision != playbackPolicy) {
+                            remote?.stop(); releaseLocal(); finish(); return@launch
+                        }
+                    } catch (e: Exception) {
+                        if (e is kotlinx.coroutines.CancellationException) throw e
+                        remote?.pause(); player?.pause()
+                        showMessage("Connect to HomeStream to confirm your profile")
+                    }
+                }
                 if (prepared || remote != null) report(false)
             }
         }
