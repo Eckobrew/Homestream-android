@@ -77,15 +77,23 @@ class ServerSettings(context: Context, private val keyProvider: (() -> SecretKey
         if (url == localUrl || url == externalUrl) prefs.edit().putString("activeUrl", url).apply()
     }
 
+    val canUseProfiles: Boolean get() = authType in listOf("device", "local") && token.startsWith("hst_dev_")
+
     val serverIdentity: String get() = localUrl.ifBlank { externalUrl.ifBlank { baseUrl } }
 
-    override val token: String get() = runCatching {
-        val encoded = prefs.getString("token", "").orEmpty().split(':')
-        if (encoded.size != 2) return@runCatching ""
-        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-        cipher.init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(128, Base64.decode(encoded[0], Base64.NO_WRAP)))
-        String(cipher.doFinal(Base64.decode(encoded[1], Base64.NO_WRAP)), Charsets.UTF_8)
-    }.getOrDefault("")
+    @Volatile private var decryptedToken: Pair<String, String>? = null
+    override val token: String get() {
+        val stored = prefs.getString("token", "").orEmpty()
+        decryptedToken?.takeIf { it.first == stored }?.let { return it.second }
+        return runCatching {
+            val encoded = stored.split(':')
+            if (encoded.size != 2) return@runCatching ""
+            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+            cipher.init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(128, Base64.decode(encoded[0], Base64.NO_WRAP)))
+            String(cipher.doFinal(Base64.decode(encoded[1], Base64.NO_WRAP)), Charsets.UTF_8)
+                .also { decryptedToken = stored to it }
+        }.getOrDefault("")
+    }
 
     fun save(url: String, token: String) {
         val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.ENCRYPT_MODE, key()) }

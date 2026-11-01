@@ -27,7 +27,9 @@ class ProfilesActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        settings = ServerSettings(this); api = HomeStreamApi(settings)
+        settings = ServerSettings(this)
+        if (!settings.canUseProfiles) { finish(); return }
+        api = HomeStreamApi(settings)
         WindowCompat.setDecorFitsSystemWindows(window, false)
         val root = column().apply { setBackgroundColor(INK) }
         val header = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL; setPadding(gutter, dp(12), gutter, dp(8)) }

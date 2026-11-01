@@ -77,6 +77,10 @@ class MainActivity : AppCompatActivity() {
     private var screenLoading = false
     private var screenLoader: (() -> Unit)? = null
 
+    private fun resetNavigationHistory() {
+        browseHistory.clear(); navigationKey = "home"; screen = "home"; lastDetails = null
+    }
+
     private fun rememberScreen(key: String, reload: () -> Unit) {
         if (::root.isInitialized && key != navigationKey) {
             // Detached screens retain scroll, query, filters and focused cards. Keep memory bounded.
@@ -294,7 +298,7 @@ class MainActivity : AppCompatActivity() {
         castButton(this)?.let { header.addView(it, LinearLayout.LayoutParams(dp(40), dp(40))) }
 
         // Profile switcher button
-        header.addView(iconButton("Profile", R.drawable.nav_profile) { profiles() })
+        if (settings.canUseProfiles) header.addView(iconButton("Profile", R.drawable.nav_profile) { profiles() })
 
         mainContainer.addView(header)
 
@@ -413,7 +417,7 @@ class MainActivity : AppCompatActivity() {
             Triple("My List", R.drawable.nav_list, { myHomeStream() }),
             Triple("Profiles", R.drawable.nav_profile, { profiles() }),
             Triple("Settings", R.drawable.nav_settings, { openServerSettingsDialog() })
-        )
+        ).filter { it.first != "Profiles" || settings.canUseProfiles }
 
         val buttons = entries.map { (title, icon, click) ->
             action("", click = click).apply {
@@ -580,6 +584,7 @@ class MainActivity : AppCompatActivity() {
 
         // Switch Profile Button
         val profileBtn = LinearLayout(this).apply {
+            visibility = if (settings.canUseProfiles) View.VISIBLE else View.GONE
             orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
             background = rounded(0x18FFFFFF.toInt())
             setPadding(dp(14), dp(12), dp(14), dp(12))
@@ -1050,6 +1055,7 @@ class MainActivity : AppCompatActivity() {
         api.seed(path, JSONObject().put("item", item.json))
         fetch(path) { data ->
             val full = Media(data.getJSONObject("item"))
+            lastDetails = full
 
             // 1. Trailer / Preview Header Area
             val headerArea = FrameLayout(this).apply {
@@ -1821,6 +1827,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun profiles() {
+        if (!settings.canUseProfiles) return
         profilePage.launch(Intent(this, ProfilesActivity::class.java))
         if (android.os.Build.VERSION.SDK_INT >= 34) overrideActivityTransition(OVERRIDE_TRANSITION_OPEN, android.R.anim.fade_in, android.R.anim.fade_out)
         else @Suppress("DEPRECATION") overridePendingTransition(android.R.anim.fade_in, android.R.anim.fade_out)
@@ -1859,6 +1866,16 @@ class MainActivity : AppCompatActivity() {
             isSingleLine = true
         }
         form.addView(extInput, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(14) })
+
+        form.addView(label("Cache limits: 256 MB artwork + 16 MB metadata on disk. Old entries are automatically evicted.", 12f).apply { setTextColor(MUTED) })
+        form.addView(action("Clear cache") {
+            (application as HomeStreamApplication).playbackReports.launch {
+                BrowseCache.clear()
+                coil.Coil.imageLoader(applicationContext).memoryCache?.clear()
+                coil.Coil.imageLoader(applicationContext).diskCache?.clear()
+                withContext(Dispatchers.Main) { toast("Cache cleared") }
+            }
+        })
 
         val dialog = AlertDialog.Builder(this)
             .setTitle("Server & Remote Settings")
@@ -2018,7 +2035,7 @@ class MainActivity : AppCompatActivity() {
                                 userObj?.optString("id")?.let { if (it.isNotBlank()) settings.profile = it }
                                 toast("Signed in as $username!")
                                 jDialog.dismiss()
-                                loadTab("home")
+                                resetNavigationHistory(); loadTab("home")
                             }
                         } else {
                             val errText = conn.errorStream?.bufferedReader()?.use { it.readText() }.orEmpty()
@@ -2084,7 +2101,7 @@ class MainActivity : AppCompatActivity() {
                 discoveryJob?.cancel()
                 if (first) finish()
             }
-            .apply { if (!first) setNeutralButton("Disconnect") { _, _ -> discoveryJob?.cancel(); settings.clear(); setup() } }.create()
+            .apply { if (!first) setNeutralButton("Disconnect") { _, _ -> discoveryJob?.cancel(); settings.clear(); resetNavigationHistory(); setup() } }.create()
 
         connectionDialog = dialog
         dialog.setOnDismissListener { discoveryJob?.cancel() }
@@ -2132,7 +2149,7 @@ class MainActivity : AppCompatActivity() {
                                 check(pairedToken.isNotBlank() && external.toHttpUrlOrNull() != null) { "Invalid pairing response" }
                                 if (dialog.isShowing) {
                                     settings.saveServer(s.url, external, pairedToken, name = s.name)
-                                    dialog.dismiss(); loadTab("home")
+                                    dialog.dismiss(); resetNavigationHistory(); loadTab("home")
                                 }
                             } catch (e: Exception) {
                                 if (e is kotlinx.coroutines.CancellationException) throw e
@@ -2241,9 +2258,17 @@ class MainActivity : AppCompatActivity() {
             draw(cached)
             if (isTelevision()) addTvFocusIndicators(content)
         } else browsePlaceholder()
-        val rendered = cached?.toString()
+        var rendered = cached?.toString()
+        if (cached != null && api.cacheFresh(path, params)) return
         work = lifecycleScope.launch {
             try {
+                if (cached == null || api.cacheSeeded(path, params)) api.diskCached(path, params)?.let { disk ->
+                    if (generation != current) return@launch
+                    content.removeAllViews(); draw(disk); screenLoading = false
+                    if (isTelevision()) addTvFocusIndicators(content)
+                    rendered = disk.toString()
+                }
+                if (rendered != null && api.cacheFresh(path, params)) return@launch
                 val data = api.call(path, params)
                 if (generation != current) return@launch
                 screenLoading = false
@@ -2270,7 +2295,7 @@ class MainActivity : AppCompatActivity() {
             } catch (e: Exception) {
                 if (generation != current) return@launch
                 screenLoading = false
-                if (cached != null) {
+                if (rendered != null) {
                     android.util.Log.w("HomeStream", "Keeping cached content while refresh is unavailable")
                     return@launch
                 }

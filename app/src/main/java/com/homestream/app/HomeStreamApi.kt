@@ -2,6 +2,7 @@ package com.homestream.app
 
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.withPermit
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.MediaType.Companion.toMediaType
@@ -15,6 +16,7 @@ import java.util.concurrent.TimeUnit
 class HomeStreamApi(private val settings: ConnectionSettings) {
     private class ResponseException(message: String) : IOException(message)
     companion object {
+        private val prefetchSlots = kotlinx.coroutines.sync.Semaphore(2)
         private val client = OkHttpClient.Builder().connectTimeout(6, TimeUnit.SECONDS)
             .readTimeout(45, TimeUnit.SECONDS).followRedirects(false).build()
     }
@@ -26,12 +28,17 @@ class HomeStreamApi(private val settings: ConnectionSettings) {
     }
     fun cached(path: String, params: Map<String, String> = emptyMap()): JSONObject? =
         if (BrowseCache.supported(path)) BrowseCache.get(cacheKey(path, params)) else null
-    fun seed(path: String, value: JSONObject) { if (BrowseCache.supported(path) && cached(path) == null) BrowseCache.put(cacheKey(path, emptyMap()), value) }
+    fun cacheSeeded(path: String, params: Map<String, String> = emptyMap()) = BrowseCache.seeded(cacheKey(path, params))
+    fun cacheFresh(path: String, params: Map<String, String> = emptyMap()) = BrowseCache.fresh(cacheKey(path, params), path)
+    suspend fun diskCached(path: String, params: Map<String, String> = emptyMap()): JSONObject? = withContext(Dispatchers.IO) {
+        if (BrowseCache.supported(path)) BrowseCache.readDisk(cacheKey(path, params)) else null
+    }
+    fun seed(path: String, value: JSONObject) { if (BrowseCache.supported(path) && cached(path) == null) BrowseCache.put(cacheKey(path, emptyMap()), value, seed = true) }
     suspend fun prefetch(path: String) {
-        if (!BrowseCache.supported(path) || cached(path) != null) return
+        if (!BrowseCache.supported(path) || cacheFresh(path)) return
         val key = cacheKey(path, emptyMap())
         if (!BrowseCache.start(key)) return
-        try { call(path) } finally { BrowseCache.finish(key) }
+        try { prefetchSlots.withPermit { if (!cacheFresh(path)) call(path) } } finally { BrowseCache.finish(key) }
     }
 
     suspend fun call(path: String, params: Map<String, String> = emptyMap(), body: JSONObject? = null): JSONObject = withContext(Dispatchers.IO) {

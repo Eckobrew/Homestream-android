@@ -6,6 +6,7 @@ import coil.ImageLoader
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 
@@ -15,7 +16,9 @@ class HomeStreamApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        BrowseCache.initialize(cacheDir.resolve("browse-metadata"))
         WatchNext.schedule(this)
+        playbackReports.launch { cacheDir.resolve("image_cache").takeIf { it.isDirectory }?.deleteRecursively() }
         val settings = ServerSettings(this)
         val imageClient = OkHttpClient.Builder()
             .addInterceptor { chain ->
@@ -32,6 +35,9 @@ class HomeStreamApplication : Application() {
         Coil.setImageLoader(
             ImageLoader.Builder(this)
                 .okHttpClient(imageClient)
+                .memoryCache(coil.memory.MemoryCache.Builder(this).maxSizeBytes(if (getSystemService(android.app.ActivityManager::class.java).isLowRamDevice) 16 * 1024 * 1024 else 32 * 1024 * 1024).build())
+                .diskCache(coil.disk.DiskCache.Builder().directory(cacheDir.resolve("artwork"))
+                    .maxSizeBytes(256L * 1024 * 1024).build())
                 .crossfade(true)
                 .build()
         )
