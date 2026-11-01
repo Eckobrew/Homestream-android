@@ -645,7 +645,7 @@ class PlayerActivity : AppCompatActivity() {
                 }
                 currentPlaybackId = targetId
                 loadEpisodeContext()
-                val isTranscodingStream = Uri.parse(url).path.orEmpty().endsWith(".m3u8", ignoreCase = true)
+                val isTranscodingStream = stream.optString("transport") == "HLS" || Uri.parse(url).path.orEmpty().endsWith(".m3u8", ignoreCase = true)
                 if (isTranscodingStream && !transcode) {
                     transcode = true
                     updateModeBadge()
@@ -899,14 +899,14 @@ class PlayerActivity : AppCompatActivity() {
             .setSubtype(MediaTrack.SUBTYPE_SUBTITLES).setContentId(track.uri.toString()).setContentType("text/vtt")
             .setName(track.label ?: "Subtitle").setLanguage(track.language ?: "und").build() }
         return MediaInfo.Builder(api.absolute(stream.getString("streamUrl")))
-            .setContentType(when {
+            .setContentType(stream.optString("contentType").ifBlank { when {
                 Uri.parse(stream.getString("streamUrl")).path.orEmpty().endsWith(".m3u8", ignoreCase = true) -> "application/x-mpegURL"
                 Uri.parse(stream.getString("streamUrl")).path.orEmpty().endsWith(".webm", ignoreCase = true) -> "video/webm"
                 else -> "video/mp4"
-            })
+            } })
             .setStreamType(MediaInfo.STREAM_TYPE_BUFFERED).setMetadata(metadata).setMediaTracks(tracks)
             .setCustomData(JSONObject().put("itemId", id).put("media", item.json).put("playback", JSONObject(stream.toString()).apply {
-                put("transport", if (Uri.parse(stream.optString("streamUrl")).path.orEmpty().endsWith(".m3u8", ignoreCase = true)) "HLS" else "file")
+                put("transport", stream.optString("transport").ifBlank { if (Uri.parse(stream.optString("streamUrl")).path.orEmpty().endsWith(".m3u8", ignoreCase = true)) "HLS" else "file" })
                 remove("streamUrl")
             }))
             .apply { if (stream.optDouble("durationSeconds") > 0) setStreamDuration((stream.getDouble("durationSeconds") * 1000).toLong()) }.build()
