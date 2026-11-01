@@ -37,7 +37,7 @@ fun Context.badgePill(value: String) = TextView(this).apply {
 }
 fun View.focusableCard(color: Int = 0xFF202020.toInt()) {
     isFocusable = true; isClickable = true
-    defaultFocusHighlightEnabled = false
+    setDefaultFocusHighlightEnabled(false)
     background = StateListDrawable().apply {
         addState(intArrayOf(android.R.attr.state_focused), rounded(color, Color.WHITE))
         addState(intArrayOf(android.R.attr.state_pressed), rounded(color, RED))

@@ -481,7 +481,7 @@ class MainActivity : AppCompatActivity() {
                 }
                 setCompoundDrawablesWithIntrinsicBounds(icon, 0, 0, 0); compoundDrawablePadding = 0
                 setPadding(dp(10), 0, dp(10), 0)
-                defaultFocusHighlightEnabled = false
+                setDefaultFocusHighlightEnabled(false)
                 background = android.graphics.drawable.StateListDrawable().apply {
                     addState(intArrayOf(android.R.attr.state_focused), rounded(0xFF383838.toInt(), Color.WHITE))
                     addState(intArrayOf(android.R.attr.state_selected), rounded(0x33E50914, RED))
