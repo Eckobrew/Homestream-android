@@ -36,8 +36,12 @@ class ProfilesActivity : AppCompatActivity() {
         WindowCompat.setDecorFitsSystemWindows(window, false)
         val root = column().apply { setBackgroundColor(INK) }
         val header = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL; setPadding(gutter, dp(12), gutter, dp(8)) }
-        header.addView(action("Back") { finish() })
-        header.addView(label("Profiles", if (isTelevision()) 30f else 26f, true), LinearLayout.LayoutParams(0, -2, 1f))
+        header.addView(ImageButton(this).apply {
+            setImageResource(R.drawable.ic_arrow_back); imageTintList = android.content.res.ColorStateList.valueOf(Color.WHITE)
+            contentDescription = "Back"; background = rounded(0xFF202020.toInt(), radius = dp(24).toFloat())
+            setOnClickListener { finish() }; isFocusable = true
+        }, LinearLayout.LayoutParams(dp(48), dp(48)).apply { marginEnd = dp(16) })
+        header.addView(label("HomeStream", if (isTelevision()) 24f else 20f, true).apply { setTextColor(RED) }, LinearLayout.LayoutParams(0, -2, 1f))
         root.addView(header)
         page = column().apply { setPadding(gutter, dp(12), gutter, dp(28)) }
         root.addView(ScrollView(this).apply { addView(page) }, LinearLayout.LayoutParams(-1, 0, 1f))
@@ -55,7 +59,7 @@ class ProfilesActivity : AppCompatActivity() {
         val resource = resources.getIdentifier("profile_$name", "drawable", packageName)
         scaleType = ImageView.ScaleType.CENTER_CROP
         contentDescription = "$name profile picture"
-        background = rounded(0xFF292929.toInt(), radius = dp(size / 2).toFloat())
+        background = rounded(0xFF292929.toInt(), radius = dp(12).toFloat())
         clipToOutline = true
         load(if (resource == 0) R.drawable.nav_profile else resource) { size(256) }
     }
@@ -64,13 +68,13 @@ class ProfilesActivity : AppCompatActivity() {
         page.removeAllViews(); page.addView(label("Loading profiles…"))
         lifecycleScope.launch {
             try {
-                val cached: JSONObject? = null
                 val response = api.call("profiles")
                 parentPinConfigured = response.optBoolean("parentPinConfigured")
                 val list = response.optJSONArray("profiles")
                 val canManage = response.optBoolean("canManage")
                 page.removeAllViews()
-                page.addView(label("Choose a profile to continue", 16f).apply { setTextColor(MUTED) })
+                page.addView(label("Who’s watching?", if (isTelevision()) 38f else 30f, true).apply { setPadding(dp(6), dp(16), 0, dp(8)) })
+                page.addView(label("Your own favourites, progress and recommendations.", 14f).apply { setTextColor(MUTED); setPadding(dp(6), 0, 0, dp(20)) })
                 val grid = GridLayout(this@ProfilesActivity).apply { columnCount = if (isTelevision()) 4 else 2 }
                 val current = response.optString("activeProfileId").ifBlank { settings.profile }.ifBlank { list?.optJSONObject(0)?.optString("id").orEmpty() }
                 for (index in 0 until (list?.length() ?: 0)) {
@@ -78,7 +82,7 @@ class ProfilesActivity : AppCompatActivity() {
                     if (profile.optString("id") == current) activeProfile = profile
                     val cell = column()
                     val card = column().apply {
-                        gravity = Gravity.CENTER; setPadding(dp(12), dp(16), dp(12), dp(16)); focusableCard()
+                        gravity = Gravity.CENTER; setPadding(dp(12), dp(16), dp(12), dp(16)); focusableCard(0xFF141414.toInt())
                         contentDescription = "${profile.optString("name")}${if (profile.optString("id") == current) ", current profile" else ""}"
                         setOnClickListener {
                             selectProfile(profile)
@@ -87,7 +91,7 @@ class ProfilesActivity : AppCompatActivity() {
                     val stock = profile.optString("avatarId").ifBlank { avatars[index % avatars.size] }
                     val size = if (isTelevision()) 112 else 88
                     card.addView(avatarImage(stock, size), LinearLayout.LayoutParams(dp(size), dp(size)))
-                    card.addView(label((if (profile.optString("id") == current) "✓ " else "") + profile.optString("name"), 17f, true).apply {
+                    card.addView(label((if (profile.optString("id") == current) "" else "") + profile.optString("name"), 17f, true).apply {
                         gravity = Gravity.CENTER; maxLines = 2; setPadding(0, dp(10), 0, 0)
                     })
                     if (profile.optBoolean("isKids")) card.addView(label("Kids · ${profile.optString("kidsRating")}", 13f).apply { gravity = Gravity.CENTER; setTextColor(MUTED) })
@@ -101,11 +105,6 @@ class ProfilesActivity : AppCompatActivity() {
                 if (canManage) page.addView(action("+ Add profile", primary = true) { edit(null, true) })
                 else page.addView(label("Sign in with a paired household device to add or link profiles.", 13f).apply { setTextColor(MUTED) })
                 if ((list?.length() ?: 0) == 0) page.addView(label("No profiles yet. Add your first profile to get started.", 15f))
-                if (cached != null) lifecycleScope.launch {
-                    runCatching { api.call("profiles") }.onSuccess { fresh ->
-                        if (fresh.toString() != cached.toString()) refresh()
-                    }
-                }
                 if (isTelevision()) page.post {
                     val targets = ArrayList<View>(); page.addFocusables(targets, View.FOCUS_FORWARD)
                     targets.firstOrNull()?.requestFocus()
