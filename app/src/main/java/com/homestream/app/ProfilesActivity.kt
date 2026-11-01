@@ -59,7 +59,8 @@ class ProfilesActivity : AppCompatActivity() {
         page.removeAllViews(); page.addView(label("Loading profiles…"))
         lifecycleScope.launch {
             try {
-                val response = api.call("profiles")
+                val cached = api.cached("profiles")
+                val response = cached ?: api.call("profiles")
                 val list = response.optJSONArray("profiles")
                 val canManage = response.optBoolean("canManage")
                 page.removeAllViews()
@@ -93,6 +94,14 @@ class ProfilesActivity : AppCompatActivity() {
                 if (canManage) page.addView(action("+ Add profile", primary = true) { edit(null, true) })
                 else page.addView(label("Sign in with a paired household device to add or link profiles.", 13f).apply { setTextColor(MUTED) })
                 if ((list?.length() ?: 0) == 0) page.addView(label("No profiles yet. Add your first profile to get started.", 15f))
+                if (canManage) (application as HomeStreamApplication).playbackReports.launch {
+                    runCatching { api.prefetch("profiles/users") }
+                }
+                if (cached != null) lifecycleScope.launch {
+                    runCatching { api.call("profiles") }.onSuccess { fresh ->
+                        if (fresh.toString() != cached.toString()) refresh()
+                    }
+                }
                 if (isTelevision()) page.post {
                     val targets = ArrayList<View>(); page.addFocusables(targets, View.FOCUS_FORWARD)
                     targets.firstOrNull()?.requestFocus()
@@ -108,7 +117,7 @@ class ProfilesActivity : AppCompatActivity() {
     private fun edit(profile: JSONObject?, canManage: Boolean) {
         lifecycleScope.launch {
             try {
-                val users = if (canManage) api.call("profiles/users").optJSONArray("users") else null
+                val users = if (canManage) (api.cached("profiles/users") ?: api.call("profiles/users")).optJSONArray("users") else null
                 showEditor(profile, canManage, (0 until (users?.length() ?: 0)).map { users!!.getJSONObject(it) })
             } catch (e: Exception) {
                 if (e is CancellationException) throw e

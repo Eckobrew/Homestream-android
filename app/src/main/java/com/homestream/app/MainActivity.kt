@@ -1418,130 +1418,74 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun renderCollectionTab(full: Media, container: LinearLayout) {
-        container.addView(TextView(this).apply {
-            text = "Loading movie collection…"; textSize = 13f; setTextColor(MUTED)
-            setPadding(0, dp(14), 0, dp(14))
-        })
+    private fun renderDetailsGrid(items: List<Media>, container: LinearLayout, title: String? = null) {
+        val viewport = content.parent as? ScrollView
+        val scroll = viewport?.scrollY ?: 0
+        container.removeAllViews()
+        if (!title.isNullOrBlank()) container.addView(label(title, 16f, true).apply { setPadding(0, dp(10), 0, dp(8)) })
+        if (items.isEmpty()) { container.addView(label("No titles available.", 13f).apply { setTextColor(MUTED) }); return }
+        val grid = GridLayout(this).apply { columnCount = if (isTelevision()) 5 else 3 }
+        items.forEachIndexed { index, item ->
+            val card = column().apply {
+                setPadding(dp(4), dp(4), dp(4), dp(6)); focusableCard()
+                contentDescription = item.title
+                setOnClickListener { details(item) }
+                val style = onFocusChangeListener
+                setOnFocusChangeListener { view, focused -> style?.onFocusChange(view, focused); if (focused) prefetchDetails(item) }
+            }
+            val poster = FrameLayout(this).apply { background = rounded(0xFF222222.toInt()); clipToOutline = true }
+            poster.addView(ImageView(this).apply {
+                scaleType = ImageView.ScaleType.CENTER_CROP
+                load(api.absolute(item.poster)) { error(R.drawable.ic_homestream) }
+            }, FrameLayout.LayoutParams(-1, -1))
+            if (!item.playable && (item.id.startsWith("seerr-") || item.source == "seerr")) poster.addView(label("Request", 9f, true).apply {
+                background = rounded(RED); setPadding(dp(5), dp(2), dp(5), dp(2))
+            }, FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.START).apply { setMargins(dp(4), dp(4), 0, 0) })
+            card.addView(poster, LinearLayout.LayoutParams(-1, dp(145))); posterAspect(poster)
+            card.addView(label(item.title, 11f, true).apply { maxLines = 2; setPadding(dp(2), dp(5), dp(2), 0) })
+            grid.addView(card, GridLayout.LayoutParams(GridLayout.spec(index / grid.columnCount), GridLayout.spec(index % grid.columnCount, GridLayout.FILL, 1f)).apply {
+                width = 0; height = -2; setMargins(dp(3), dp(6), dp(3), dp(6))
+            })
+        }
+        container.addView(grid, LinearLayout.LayoutParams(-1, -2))
+        container.post { viewport?.scrollTo(0, scroll) }
+    }
 
+    private fun detailsGridRequest(path: String, params: Map<String, String>, container: LinearLayout, collection: Boolean) {
+        fun render(data: JSONObject) {
+            if (collection) {
+                val value = data.optJSONObject("collection")
+                renderDetailsGrid(value?.mediaList("parts").orEmpty(), container, value?.optString("name"))
+            } else renderDetailsGrid(data.mediaList("recommendations"), container)
+        }
+        val cached = api.cached(path, params)
+        if (cached != null) render(cached) else {
+            val row = LinearLayout(this)
+            repeat(if (isTelevision()) 5 else 3) {
+                row.addView(View(this).apply { background = rounded(0xFF202020.toInt()) },
+                    LinearLayout.LayoutParams(0, dp(150), 1f).apply { setMargins(dp(4), dp(12), dp(4), dp(6)) })
+            }
+            container.addView(row, LinearLayout.LayoutParams(-1, -2))
+        }
         lifecycleScope.launch {
             try {
-                val colData = api.call("media/${android.net.Uri.encode(full.id)}/collection")
-                val col = colData.optJSONObject("collection")
-                val parts = col?.mediaList("parts").orEmpty()
-                container.removeAllViews()
-
-                if (parts.isNotEmpty()) {
-                    val colTitle = col?.optString("name", "Movie Collection") ?: "Movie Collection"
-                    container.addView(label(colTitle, 16f, true).apply { setPadding(0, dp(6), 0, dp(8)) })
-
-                    val grid = GridLayout(this@MainActivity).apply {
-                        columnCount = if (isTelevision()) 5 else 3
-                    }
-                    parts.forEachIndexed { index, part ->
-                        val card = column().apply {
-                            setPadding(dp(4), dp(4), dp(4), dp(6)); focusableCard()
-                            setOnClickListener { details(part) }
-                        }
-                        val img = ImageView(this@MainActivity).apply {
-                            scaleType = ImageView.ScaleType.CENTER_CROP
-                            load(api.absolute(part.poster)) { crossfade(true); error(R.drawable.ic_homestream) }
-                        }
-                        card.addView(img, LinearLayout.LayoutParams(-1, dp(145))); posterAspect(img)
-                        card.addView(label(part.title, 11f, bold = true).apply {
-                            maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
-                            setPadding(dp(2), dp(4), dp(2), 0)
-                        })
-                        grid.addView(card, GridLayout.LayoutParams(GridLayout.spec(index / grid.columnCount), GridLayout.spec(index % grid.columnCount, GridLayout.FILL, 1f)).apply {
-                            width = 0; height = -2; setMargins(dp(3), dp(6), dp(3), dp(6))
-                        })
-                    }
-                    container.addView(grid, LinearLayout.LayoutParams(-1, -2))
-                } else {
-                    container.addView(TextView(this@MainActivity).apply {
-                        text = "This movie is not part of a boxset collection."; textSize = 13f; setTextColor(MUTED)
-                        setPadding(0, dp(14), 0, dp(14))
-                    })
-                }
-            } catch (_: Exception) {
-                container.removeAllViews()
-                container.addView(TextView(this@MainActivity).apply {
-                    text = "No collection information available."; textSize = 13f; setTextColor(MUTED)
-                })
+                val fresh = api.call(path, params)
+                if (cached == null || cached.toString() != fresh.toString()) render(fresh)
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                if (cached == null) { container.removeAllViews(); container.addView(label("Could not refresh titles.", 13f)) }
             }
         }
     }
 
+    private fun renderCollectionTab(full: Media, container: LinearLayout) {
+        detailsGridRequest("media/${Uri.encode(full.id)}/collection", emptyMap(), container, collection = true)
+    }
+
     private fun renderMoreLikeThisTab(full: Media, container: LinearLayout) {
-        container.addView(TextView(this).apply {
-            text = "Loading recommendations…"; textSize = 13f; setTextColor(MUTED)
-            setPadding(0, dp(14), 0, dp(14))
-        })
-
-        lifecycleScope.launch {
-            try {
-                val params = mutableMapOf<String, String>()
-                params["type"] = if (full.type == "Series" || full.type == "Episode") "tv" else "movie"
-                val tmdb = full.json.optInt("tmdbId").takeIf { it > 0 } ?: full.tmdbId
-                if (tmdb > 0) {
-                    params["tmdbId"] = tmdb.toString()
-                }
-                val recData = api.call("media/${android.net.Uri.encode(full.id)}/recommendations", params)
-                val recs = recData.mediaList("recommendations")
-                container.removeAllViews()
-
-                if (recs.isNotEmpty()) {
-                    val grid = GridLayout(this@MainActivity).apply {
-                        columnCount = if (isTelevision()) 5 else 3
-                    }
-                    recs.forEachIndexed { index, rec ->
-                        val card = column().apply {
-                            setPadding(dp(4), dp(4), dp(4), dp(6)); focusableCard()
-                            setOnClickListener { details(rec) }
-                        }
-                        val posterBox = FrameLayout(this@MainActivity).apply {
-                            background = rounded(0xFF222222.toInt(), radius = dp(6).toFloat())
-                            clipToOutline = true
-                        }
-                        val img = ImageView(this@MainActivity).apply {
-                            scaleType = ImageView.ScaleType.CENTER_CROP
-                            load(api.absolute(rec.poster)) { crossfade(true); error(R.drawable.ic_homestream) }
-                        }
-                        posterBox.addView(img, FrameLayout.LayoutParams(-1, -1))
-
-                        // If item is from Seerr / not in local library, show a neat Request badge
-                        if (!rec.playable && (rec.id.startsWith("seerr-") || rec.source == "seerr")) {
-                            val reqBadge = TextView(this@MainActivity).apply {
-                                text = "Request"; textSize = 8.5f; setTextColor(Color.WHITE)
-                                typeface = android.graphics.Typeface.DEFAULT_BOLD
-                                background = rounded(RED, radius = dp(4).toFloat())
-                                setPadding(dp(4), dp(1), dp(4), dp(1))
-                            }
-                            posterBox.addView(reqBadge, FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.START).apply {
-                                setMargins(dp(4), dp(4), 0, 0)
-                            })
-                        }
-
-                        card.addView(posterBox, LinearLayout.LayoutParams(-1, dp(145))); posterAspect(posterBox)
-                        card.addView(label(rec.title, 11f, bold = true).apply {
-                            maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
-                            setPadding(dp(2), dp(4), dp(2), 0)
-                        })
-                        grid.addView(card, GridLayout.LayoutParams(GridLayout.spec(index / grid.columnCount), GridLayout.spec(index % grid.columnCount, GridLayout.FILL, 1f)).apply {
-                            width = 0; height = -2; setMargins(dp(3), dp(6), dp(3), dp(6))
-                        })
-                    }
-                    container.addView(grid, LinearLayout.LayoutParams(-1, -2))
-                } else {
-                    container.addView(TextView(this@MainActivity).apply {
-                        text = "No recommendations found for this title."; textSize = 13f; setTextColor(MUTED)
-                        setPadding(0, dp(14), 0, dp(14))
-                    })
-                }
-            } catch (_: Exception) {
-                container.removeAllViews()
-            }
-        }
+        val params = mutableMapOf("type" to if (full.type in listOf("Series", "Episode")) "tv" else "movie")
+        if (full.tmdbId > 0) params["tmdbId"] = full.tmdbId.toString()
+        detailsGridRequest("media/${Uri.encode(full.id)}/recommendations", params, container, collection = false)
     }
 
     // -----------------------------------------------------------------------------------------
