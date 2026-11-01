@@ -93,7 +93,7 @@ class CastControllerActivity : AppCompatActivity() {
         if (hasCastVideo(session?.remoteMediaClient) && media != null) {
             startActivity(android.content.Intent(this, PlayerActivity::class.java)
                 .putExtra("media", media.toString())
-                .addFlags(android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP or android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP))
+                .addFlags(android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP))
             finish()
             return
         }
