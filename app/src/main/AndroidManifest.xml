@@ -26,6 +26,7 @@
                 <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
             </intent-filter>
         </activity>
+        <activity android:name=".ProfilesActivity" android:exported="false" />
         <activity android:name=".PlayerActivity" android:exported="false"
             android:supportsPictureInPicture="true"
             android:screenOrientation="unspecified"

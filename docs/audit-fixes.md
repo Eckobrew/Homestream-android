@@ -113,3 +113,32 @@ Manual TV checks (no interactive testing was performed during implementation):
    confirm stale/completed/dismissed cards do not return unexpectedly.
 7. Change progress on another device, reopen the TV app (or allow scheduled sync),
    and verify the launcher progress refreshes. Offline sync should preserve cards.
+
+## Profiles and phone navigation follow-up
+
+- Replaced the profile list dialog with a full profile page on phone and TV, using
+  eight bundled generated avatars. Add Profile supports linking an existing
+  Jellyfin account or creating a new one. Edit Profile supports renaming, avatar
+  selection and changing the linked account for paired household devices.
+- Profile creation prefers a passwordless Jellyfin user; if creation is rejected,
+  it retries with the Jellyfin username as password. Existing account passwords
+  are never changed. External Jellyfin sessions remain bound to their own user;
+  they can customize their avatar without listing/linking other household users.
+- Back navigation now retains bounded view history on phone as well as TV,
+  preserving scroll, search query, filters and focused cards. Brief directional
+  transitions and content fades respect Android's animation setting.
+- Watched/unwatched is styled as a translucent secondary media action. Collection
+  and recommendation grids use equal-width columns and correctly sized posters,
+  with three columns on phones and five on TV.
+
+Additional manual checks:
+1. On phone and TV, add a profile linked to an existing Jellyfin account, choose
+   one of the eight pictures, and switch into it. Confirm its watch history is used.
+2. Add a profile with a new Jellyfin account, then verify the account in Jellyfin.
+   Creation reports whether it used no password or the username-password fallback.
+3. Rename a profile, change its picture/link, and reopen the profile page on the
+   other device. Existing passwords and other users' histories should stay intact.
+4. Check phone Back from search, catalog and nested recommendations preserves the
+   previous screen and position. Check transitions with system animations disabled.
+5. Check the watched action matches adjacent controls, updates after tapping, and
+   recommendations/collections fill the width with three/five poster columns.

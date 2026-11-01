@@ -14,13 +14,38 @@ import java.util.concurrent.TimeUnit
 
 class HomeStreamApi(private val settings: ConnectionSettings) {
     private class ResponseException(message: String) : IOException(message)
-    private val client = OkHttpClient.Builder().connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(60, TimeUnit.SECONDS).followRedirects(false).build()
+    companion object {
+        private val client = OkHttpClient.Builder().connectTimeout(6, TimeUnit.SECONDS)
+            .readTimeout(45, TimeUnit.SECONDS).followRedirects(false).build()
+    }
+
+    private fun cacheKey(path: String, params: Map<String, String>): String {
+        val identity = (settings as? ServerSettings)?.serverIdentity ?: settings.baseUrl
+        val token = java.security.MessageDigest.getInstance("SHA-256").digest(settings.token.toByteArray()).joinToString("") { "%02x".format(it) }
+        return "$identity|$token|${settings.profile}|$path|${params.toSortedMap()}"
+    }
+    fun cached(path: String, params: Map<String, String> = emptyMap()): JSONObject? =
+        if (BrowseCache.supported(path)) BrowseCache.get(cacheKey(path, params)) else null
+    fun seed(path: String, value: JSONObject) { if (BrowseCache.supported(path) && cached(path) == null) BrowseCache.put(cacheKey(path, emptyMap()), value) }
+    suspend fun prefetch(path: String) {
+        if (!BrowseCache.supported(path) || cached(path) != null) return
+        val key = cacheKey(path, emptyMap())
+        if (!BrowseCache.start(key)) return
+        try { call(path) } finally { BrowseCache.finish(key) }
+    }
 
     suspend fun call(path: String, params: Map<String, String> = emptyMap(), body: JSONObject? = null): JSONObject = withContext(Dispatchers.IO) {
         val primaryBase = settings.baseUrl
+        val profile = settings.profile
+        val token = settings.token
+        val cache = if (body == null && BrowseCache.supported(path)) cacheKey(path, params) else null
+        fun remember(value: JSONObject): JSONObject {
+            if (cache != null) BrowseCache.put(cache, value)
+            if (body != null && path in setOf("watched", "profiles") || (body != null && path == "progress" && body.optBoolean("isStopped"))) BrowseCache.clear()
+            return value
+        }
         try {
-            executeCall(primaryBase, path, params, body).also {
+            remember(executeCall(primaryBase, path, params, body, profile, token)).also {
                 (settings as? ServerSettings)?.rememberSuccessfulUrl(primaryBase)
             }
         } catch (e: IOException) {
@@ -32,7 +57,7 @@ class HomeStreamApi(private val settings: ConnectionSettings) {
 
             if (altBase != null && altBase != primaryBase) {
                 try {
-                    executeCall(altBase, path, params, body).also { serverSettings?.rememberSuccessfulUrl(altBase) }
+                    remember(executeCall(altBase, path, params, body, profile, token)).also { serverSettings?.rememberSuccessfulUrl(altBase) }
                 } catch (_: Exception) {
                     throw e
                 }
@@ -42,20 +67,21 @@ class HomeStreamApi(private val settings: ConnectionSettings) {
         }
     }
 
-    private fun executeCall(baseUrl: String, path: String, params: Map<String, String>, body: JSONObject?): JSONObject {
+    private fun executeCall(baseUrl: String, path: String, params: Map<String, String>, body: JSONObject?, profile: String, token: String): JSONObject {
         val url = (baseUrl.trimEnd('/') + "/api/mobile/v1/" + path).toHttpUrl().newBuilder()
-        if (settings.profile.isNotBlank()) url.addQueryParameter("userId", settings.profile)
+        if (profile.isNotBlank()) url.addQueryParameter("userId", profile)
         params.forEach { (key, value) -> url.addQueryParameter(key, value) }
-        val request = Request.Builder().url(url.build()).header("Authorization", "Bearer ${settings.token}")
+        val request = Request.Builder().url(url.build()).header("Authorization", "Bearer $token")
             .header("Accept", "application/json")
         if (body != null) {
-            val payload = JSONObject(body.toString()).put("userId", settings.profile)
+            val payload = JSONObject(body.toString()).put("userId", profile)
             request.post(payload.toString().toRequestBody("application/json".toMediaType()))
         }
         return client.newCall(request.build()).execute().use { response ->
             val text = response.body?.string().orEmpty()
             val data = runCatching { JSONObject(text) }.getOrNull()
             if (response.isSuccessful && data == null) throw ResponseException("Server returned an invalid response (${response.code}). Check the HomeStream URL.")
+            if (response.code == 401) BrowseCache.clear()
             if (!response.isSuccessful) throw ResponseException(when (response.code) {
                 401 -> "Pairing token rejected. Check Settings."
                 503 -> "Service unavailable. Check the mobile token and Jellyfin configuration."

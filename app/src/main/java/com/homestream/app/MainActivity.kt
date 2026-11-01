@@ -53,6 +53,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var mainContainer: LinearLayout
     private var sidebarDrawer: FrameLayout? = null
     private var trailerView: WebView? = null
+    private var sceneHost: FrameLayout? = null
     private var work: Job? = null
     private var searchJob: Job? = null
     private var categoryJob: Job? = null
@@ -65,24 +66,51 @@ class MainActivity : AppCompatActivity() {
     private var lastDetails: Media? = null
     private val gutter get() = dp(if (isTelevision()) 48 else 20)
 
-    private data class TvBrowseState(
+    private data class BrowseState(
         val root: FrameLayout, val main: LinearLayout, val content: LinearLayout,
         val drawer: FrameLayout?, val screen: String, val tab: String, val focus: View?,
-        val heroItems: List<Media>, val heroIndex: Int, val heroContainer: FrameLayout?
+        val heroItems: List<Media>, val heroIndex: Int, val heroContainer: FrameLayout?,
+        val details: Media?, val key: String, val loading: Boolean, val reload: (() -> Unit)?
     )
-    private var tvBrowseState: TvBrowseState? = null
+    private val browseHistory = java.util.ArrayDeque<BrowseState>()
+    private var navigationKey = "home"
+    private var screenLoading = false
+    private var screenLoader: (() -> Unit)? = null
 
-    private fun returnFromDetails(): Boolean {
-        val saved = tvBrowseState ?: return false
-        if (!isTelevision() || screen != "details") return false
+    private fun rememberScreen(key: String, reload: () -> Unit) {
+        if (::root.isInitialized && key != navigationKey) {
+            // Detached screens retain scroll, query, filters and focused cards. Keep memory bounded.
+            trailerView?.apply { (parent as? ViewGroup)?.removeView(this); stopLoading(); destroy() }
+            trailerView = null
+            browseHistory.addLast(BrowseState(root, mainContainer, content, sidebarDrawer, screen, currentTab,
+                currentFocus, heroItems, currentHeroIndex, heroContainer, lastDetails, navigationKey, screenLoading, screenLoader))
+            while (browseHistory.size > 6) browseHistory.removeFirst()
+        }
+        navigationKey = key; screenLoader = reload
+    }
+
+    private fun returnToPreviousScreen(): Boolean {
+        val saved = browseHistory.pollLast() ?: return false
         work?.cancel(); searchJob?.cancel(); categoryJob?.cancel(); heroRotationJob?.cancel(); ++generation
         trailerView?.apply { stopLoading(); destroy() }; trailerView = null
         root = saved.root; mainContainer = saved.main; content = saved.content; sidebarDrawer = saved.drawer
         screen = saved.screen; currentTab = saved.tab; heroItems = saved.heroItems
-        currentHeroIndex = saved.heroIndex; heroContainer = saved.heroContainer
-        tvBrowseState = null; lastDetails = null
-        setContentView(root)
-        root.post { saved.focus?.takeIf { it.isAttachedToWindow }?.requestFocus() }
+        currentHeroIndex = saved.heroIndex; heroContainer = saved.heroContainer; lastDetails = saved.details
+        navigationKey = saved.key; screenLoader = saved.reload; screenLoading = saved.loading
+        showScene(root, backwards = true)
+        if (screen == "search") {
+            fun findQuery(view: View): EditText? {
+                if (view is EditText) return view
+                if (view is ViewGroup) for (index in 0 until view.childCount) findQuery(view.getChildAt(index))?.let { return it }
+                return null
+            }
+            findQuery(content)?.takeIf { it.text.isNotBlank() }?.let { input ->
+                val text = input.text.toString(); val cursor = input.selectionStart
+                input.setText(text); input.setSelection(cursor.coerceIn(0, text.length))
+            }
+        }
+        if (saved.loading) saved.reload?.invoke()
+        else root.post { saved.focus?.takeIf { it.isAttachedToWindow }?.requestFocus() }
         return true
     }
 
@@ -99,7 +127,7 @@ class MainActivity : AppCompatActivity() {
                 if (sidebarDrawer?.visibility == View.VISIBLE) {
                     closeSidebar(); return
                 }
-                if (returnFromDetails()) return
+                if (returnToPreviousScreen()) return
                 if (screen != "home") {
                     loadTab("home")
                 } else {
@@ -123,6 +151,7 @@ class MainActivity : AppCompatActivity() {
         val id = link.getQueryParameter("id") ?: return false
         if (!id.matches(Regex("[A-Za-z0-9-]{1,200}")) || link.getQueryParameter("scope") != WatchNext.scope(settings)) return false
         source.data = null
+        browseHistory.clear(); navigationKey = "home"; screen = "home"; lastDetails = null
         loadTab("home")
         lifecycleScope.launch {
             try {
@@ -181,7 +210,6 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun shell() {
-        if (screen != "details") tvBrowseState = null
         searchJob?.cancel(); categoryJob?.cancel()
         trailerView?.apply { stopLoading(); destroy() }; trailerView = null
         heroRotationJob?.cancel()
@@ -203,7 +231,42 @@ class MainActivity : AppCompatActivity() {
 
         root.addView(mainContainer, FrameLayout.LayoutParams(-1, -1))
         setupSidebarDrawer()
-        setContentView(root)
+        showScene(root)
+    }
+
+    private fun showScene(incoming: FrameLayout, backwards: Boolean = false) {
+        val host = sceneHost ?: FrameLayout(this).apply {
+            setBackgroundColor(INK); sceneHost = this
+            setContentView(this)
+        }
+        val outgoing = (0 until host.childCount).map { host.getChildAt(it) }.lastOrNull()
+        if (outgoing === incoming) return
+        for (index in 0 until host.childCount) host.getChildAt(index).animate().cancel()
+        host.removeAllViews()
+        incoming.animate().cancel(); incoming.alpha = 1f; incoming.translationX = 0f
+        incoming.descendantFocusability = ViewGroup.FOCUS_AFTER_DESCENDANTS
+        incoming.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_AUTO
+        val animate = outgoing != null && android.animation.ValueAnimator.areAnimatorsEnabled()
+        if (animate) {
+            outgoing!!.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+            (outgoing as? ViewGroup)?.descendantFocusability = ViewGroup.FOCUS_BLOCK_DESCENDANTS
+            outgoing.alpha = 1f; outgoing.translationX = 0f
+            host.addView(outgoing, FrameLayout.LayoutParams(-1, -1))
+        }
+        (incoming.parent as? ViewGroup)?.removeView(incoming)
+        host.addView(incoming, FrameLayout.LayoutParams(-1, -1))
+        ViewCompat.requestApplyInsets(incoming)
+        if (animate) {
+            val direction = if (backwards) -1 else 1
+            incoming.alpha = 0f; incoming.translationX = dp(if (isTelevision()) 8 else 18) * direction.toFloat()
+            incoming.animate().alpha(1f).translationX(0f).setDuration(180)
+                .setInterpolator(android.view.animation.DecelerateInterpolator()).start()
+            outgoing!!.animate().alpha(0f).translationX((-dp(8) * direction).toFloat()).setDuration(160)
+                .withEndAction {
+                    if (outgoing.parent === host && outgoing !== root) host.removeView(outgoing)
+                    outgoing.alpha = 1f; outgoing.translationX = 0f
+                }.start()
+        }
     }
 
     private fun browseViewport(): View = if (screen.startsWith("catalog-")) content else
@@ -527,7 +590,7 @@ class MainActivity : AppCompatActivity() {
             setImageResource(R.drawable.nav_profile); imageTintList = ColorStateList.valueOf(Color.WHITE)
         }, LinearLayout.LayoutParams(dp(20), dp(20)))
         val profText = column().apply { setPadding(dp(12), 0, 0, 0) }
-        profText.addView(label("Who's Watching?", 13.5f, true))
+        profText.addView(label("Profiles", 13.5f, true))
         profText.addView(TextView(this).apply { text = "Switch user profile"; textSize = 11f; setTextColor(MUTED) })
         profileBtn.addView(profText)
         panel.addView(profileBtn, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
@@ -549,6 +612,7 @@ class MainActivity : AppCompatActivity() {
     // Top Tabs Loading: Home, TV Shows, Movies, Requests
     // -----------------------------------------------------------------------------------------
     private fun loadTab(tab: String) {
+        rememberScreen(tab) { loadTab(tab) }
         heroRotationJob?.cancel()
         currentTab = tab
         screen = tab
@@ -904,13 +968,23 @@ class MainActivity : AppCompatActivity() {
 
     private fun mediaRow(title: String, items: List<Media>, isContinueWatching: Boolean = false, parent: LinearLayout = content) {
         if (items.isEmpty()) return
-        parent.addView(label(title, 20f, true).apply { setPadding(gutter, dp(22), gutter, dp(8)) })
+        parent.addView(label(title, 20f, true).apply { setPadding(gutter, dp(22), gutter, dp(8)); setTag(R.id.browse_key, "heading:$title"); setTag(R.id.browse_signature, title) })
         val row = LinearLayout(this).apply { setPadding(gutter, dp(6), gutter, dp(10)); clipChildren = false }
 
         items.forEach { item ->
             val card = column().apply {
                 setPadding(dp(4), dp(4), dp(4), dp(6)); focusableCard()
                 contentDescription = "${item.title}, ${item.type}, ${item.metadata}"
+                setTag(R.id.browse_key, "media:${item.id}"); setTag(R.id.browse_signature, item.json.toString())
+                val focusStyle = onFocusChangeListener
+                setOnFocusChangeListener { view, focused ->
+                    focusStyle?.onFocusChange(view, focused)
+                    if (focused) prefetchDetails(item)
+                }
+                setOnTouchListener { _, event ->
+                    if (event.actionMasked == android.view.MotionEvent.ACTION_DOWN) prefetchDetails(item)
+                    false
+                }
                 setOnClickListener {
                     // Tapping Continue Watching jumps straight to playback at saved position!
                     if (isContinueWatching) {
@@ -960,6 +1034,7 @@ class MainActivity : AppCompatActivity() {
 
         parent.addView(HorizontalScrollView(this).apply {
             isHorizontalScrollBarEnabled = false; clipChildren = false; addView(row)
+            setTag(R.id.browse_key, "row:$title")
         })
     }
 
@@ -967,14 +1042,13 @@ class MainActivity : AppCompatActivity() {
     // Full Netflix Media Details Modal / Screen
     // -----------------------------------------------------------------------------------------
     private fun details(item: Media) {
-        if (isTelevision() && screen != "details" && ::root.isInitialized) {
-            tvBrowseState = TvBrowseState(root, mainContainer, content, sidebarDrawer, screen, currentTab,
-                currentFocus, heroItems, currentHeroIndex, heroContainer)
-        }
+        rememberScreen("details:${item.id}") { details(item) }
         heroRotationJob?.cancel()
         lastDetails = item
         screen = "details"
-        fetch("media/${android.net.Uri.encode(item.id)}") { data ->
+        val path = "media/${android.net.Uri.encode(item.id)}"
+        api.seed(path, JSONObject().put("item", item.json))
+        fetch(path) { data ->
             val full = Media(data.getJSONObject("item"))
 
             // 1. Trailer / Preview Header Area
@@ -1023,7 +1097,7 @@ class MainActivity : AppCompatActivity() {
                 setImageResource(R.drawable.ic_close); imageTintList = ColorStateList.valueOf(Color.WHITE)
                 background = rounded(0x88000000.toInt(), radius = dp(18).toFloat())
                 setPadding(dp(8), dp(8), dp(8), dp(8))
-                setOnClickListener { if (!returnFromDetails()) loadTab(currentTab) }
+                setOnClickListener { if (!returnToPreviousScreen()) loadTab(currentTab) }
             }
             headerArea.addView(closeBtn, FrameLayout.LayoutParams(dp(36), dp(36), Gravity.TOP or Gravity.END).apply {
                 setMargins(dp(12), dp(12), dp(12), dp(12))
@@ -1092,20 +1166,31 @@ class MainActivity : AppCompatActivity() {
                 }
                 btnRow.addView(dlBtn, LinearLayout.LayoutParams(0, dp(40), 1f))
             }
+            metaSection.addView(btnRow)
             if (full.isAvailableForPlayback && !full.isDownload) {
-                metaSection.addView(action(if (full.json.optBoolean("played")) "Mark unwatched" else "Mark watched") {
-                    lifecycleScope.launch {
-                        try {
-                            api.call("watched", body = JSONObject().put("itemId", full.playbackId).put("played", !full.json.optBoolean("played")))
-                            catalogCache.clear(); details(full)
-                        } catch (e: Exception) {
-                            if (e is kotlinx.coroutines.CancellationException) throw e
-                            toast(e.message ?: "Could not update watched status")
+                val watched = Button(this).apply {
+                    text = if (full.json.optBoolean("played")) "✓ Watched · Mark unwatched" else "Mark as watched"
+                    textSize = 12.5f; isAllCaps = false; setTextColor(Color.WHITE)
+                    background = rounded(0x33FFFFFF.toInt(), radius = dp(8).toFloat())
+                    minHeight = dp(40); minimumHeight = dp(40)
+                    setOnClickListener {
+                        isEnabled = false
+                        lifecycleScope.launch {
+                            try {
+                                val played = !full.json.optBoolean("played")
+                                api.call("watched", body = JSONObject().put("itemId", full.playbackId).put("played", played))
+                                catalogCache.clear()
+                                if (isTelevision()) WatchNext.refresh(applicationContext)
+                                details(Media(JSONObject(full.json.toString()).put("played", played)))
+                            } catch (e: Exception) {
+                                if (e is kotlinx.coroutines.CancellationException) throw e
+                                toast(e.message ?: "Could not update watched status")
+                            } finally { isEnabled = true }
                         }
                     }
-                })
+                }
+                metaSection.addView(watched, LinearLayout.LayoutParams(-1, dp(40)).apply { topMargin = dp(8) })
             }
-            metaSection.addView(btnRow)
 
             // Synopsis
             metaSection.addView(TextView(this).apply {
@@ -1297,6 +1382,19 @@ class MainActivity : AppCompatActivity() {
                 }
 
                 epCard.addView(topRow, LinearLayout.LayoutParams(-1, -2))
+                val total = ep.json.optLong("totalDurationTicks")
+                val percent = if (ep.json.optBoolean("played")) 100 else if (total > 0)
+                    ((ep.json.optLong("playbackPositionTicks").toDouble() / total) * 100).toInt().coerceIn(0, 100)
+                    else ep.json.optInt("progressPercent").coerceIn(0, 100)
+                epCard.addView(ProgressBar(this@MainActivity, null, android.R.attr.progressBarStyleHorizontal).apply {
+                    max = 100; progress = percent
+                    progressTintList = ColorStateList.valueOf(RED)
+                    progressBackgroundTintList = ColorStateList.valueOf(0x44FFFFFF)
+                    isFocusable = false; contentDescription = "$percent percent watched"
+                }, LinearLayout.LayoutParams(-1, dp(4)).apply { topMargin = dp(10) })
+                epCard.addView(label(if (percent == 100) "Watched" else "$percent% watched", 10.5f).apply {
+                    setTextColor(MUTED); setPadding(0, dp(4), 0, 0)
+                })
                 episodesContainer.addView(epCard, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
             }
         }
@@ -1305,6 +1403,19 @@ class MainActivity : AppCompatActivity() {
         container.addView(seasonPillsScroll)
         container.addView(episodesContainer)
         showEpisodesForSeason(0)
+    }
+
+    private fun prefetchDetails(item: Media) {
+        (application as HomeStreamApplication).playbackReports.launch {
+            runCatching { api.prefetch("media/${Uri.encode(item.id)}") }
+        }
+    }
+
+    private fun posterAspect(view: View) {
+        view.addOnLayoutChangeListener { target, left, _, right, _, _, _, _, _ ->
+            val height = ((right - left) * 1.5f).toInt()
+            if (height > 0 && target.layoutParams.height != height) target.layoutParams = target.layoutParams.apply { this.height = height }
+        }
     }
 
     private fun renderCollectionTab(full: Media, container: LinearLayout) {
@@ -1327,7 +1438,7 @@ class MainActivity : AppCompatActivity() {
                     val grid = GridLayout(this@MainActivity).apply {
                         columnCount = if (isTelevision()) 5 else 3
                     }
-                    parts.forEach { part ->
+                    parts.forEachIndexed { index, part ->
                         val card = column().apply {
                             setPadding(dp(4), dp(4), dp(4), dp(6)); focusableCard()
                             setOnClickListener { details(part) }
@@ -1336,14 +1447,16 @@ class MainActivity : AppCompatActivity() {
                             scaleType = ImageView.ScaleType.CENTER_CROP
                             load(api.absolute(part.poster)) { crossfade(true); error(R.drawable.ic_homestream) }
                         }
-                        card.addView(img, LinearLayout.LayoutParams(dp(100), dp(145)))
+                        card.addView(img, LinearLayout.LayoutParams(-1, dp(145))); posterAspect(img)
                         card.addView(label(part.title, 11f, bold = true).apply {
                             maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
                             setPadding(dp(2), dp(4), dp(2), 0)
                         })
-                        grid.addView(card)
+                        grid.addView(card, GridLayout.LayoutParams(GridLayout.spec(index / grid.columnCount), GridLayout.spec(index % grid.columnCount, GridLayout.FILL, 1f)).apply {
+                            width = 0; height = -2; setMargins(dp(3), dp(6), dp(3), dp(6))
+                        })
                     }
-                    container.addView(grid)
+                    container.addView(grid, LinearLayout.LayoutParams(-1, -2))
                 } else {
                     container.addView(TextView(this@MainActivity).apply {
                         text = "This movie is not part of a boxset collection."; textSize = 13f; setTextColor(MUTED)
@@ -1381,7 +1494,7 @@ class MainActivity : AppCompatActivity() {
                     val grid = GridLayout(this@MainActivity).apply {
                         columnCount = if (isTelevision()) 5 else 3
                     }
-                    recs.forEach { rec ->
+                    recs.forEachIndexed { index, rec ->
                         val card = column().apply {
                             setPadding(dp(4), dp(4), dp(4), dp(6)); focusableCard()
                             setOnClickListener { details(rec) }
@@ -1409,14 +1522,16 @@ class MainActivity : AppCompatActivity() {
                             })
                         }
 
-                        card.addView(posterBox, LinearLayout.LayoutParams(dp(100), dp(145)))
+                        card.addView(posterBox, LinearLayout.LayoutParams(-1, dp(145))); posterAspect(posterBox)
                         card.addView(label(rec.title, 11f, bold = true).apply {
                             maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
                             setPadding(dp(2), dp(4), dp(2), 0)
                         })
-                        grid.addView(card)
+                        grid.addView(card, GridLayout.LayoutParams(GridLayout.spec(index / grid.columnCount), GridLayout.spec(index % grid.columnCount, GridLayout.FILL, 1f)).apply {
+                            width = 0; height = -2; setMargins(dp(3), dp(6), dp(3), dp(6))
+                        })
                     }
-                    container.addView(grid)
+                    container.addView(grid, LinearLayout.LayoutParams(-1, -2))
                 } else {
                     container.addView(TextView(this@MainActivity).apply {
                         text = "No recommendations found for this title."; textSize = 13f; setTextColor(MUTED)
@@ -1433,6 +1548,7 @@ class MainActivity : AppCompatActivity() {
     // In-Page Netflix Search (No AlertDialog)
     // -----------------------------------------------------------------------------------------
     private fun openSearch() {
+        rememberScreen("search") { openSearch() }; screenLoading = false
         heroRotationJob?.cancel()
         work?.cancel(); ++generation
         screen = "search"
@@ -1513,11 +1629,12 @@ class MainActivity : AppCompatActivity() {
     // A–Z Library Catalog View
     // -----------------------------------------------------------------------------------------
     private fun loadCatalog(type: String, selectedLetter: String = "All") {
+        rememberScreen("catalog-$type") { loadCatalog(type, selectedLetter) }
         screen = "catalog-$type"
         val cacheKey = "${settings.baseUrl}|${settings.profile}|$type"
         val cached = catalogCache[cacheKey]
         if (cached != null) {
-            work?.cancel(); ++generation; shell()
+            work?.cancel(); ++generation; shell(); screenLoading = false
             renderCatalog(type, selectedLetter, cached)
         } else fetch("library/$type") { data ->
             val items = data.mediaList("items")
@@ -1610,6 +1727,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun loadCategories(type: String) {
+        rememberScreen("categories-$type") { loadCategories(type) }
         screen = "categories-$type"
         fetch("categories/$type") { data ->
             heading(if (type == "movies") "Movie Categories" else "TV Categories")
@@ -1624,6 +1742,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun loadDownloads() {
+        rememberScreen("downloads") { loadDownloads() }
         screen = "downloads"
         fetch("downloads") { data ->
             heading("Active Downloads")
@@ -1634,6 +1753,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun myHomeStream() {
+        rememberScreen("mine") { myHomeStream() }
         screen = "mine"
         fetch("home") { data ->
             heading(if (isTelevision()) "My List" else "My HomeStream", 26f)
@@ -1750,20 +1870,16 @@ class MainActivity : AppCompatActivity() {
             .putExtra("fromBeginning", fromBeginning))
     }
 
-    private fun profiles() {
-        lifecycleScope.launch {
-            try {
-                val profiles = api.call("profiles").optJSONArray("profiles")
-                if (profiles == null || profiles.length() == 0) {
-                    toast("Create profiles in the HomeStream web app first."); return@launch
-                }
-                val names = Array(profiles.length()) { profiles.getJSONObject(it).optString("name") }
-                AlertDialog.Builder(this@MainActivity).setTitle("Who's watching?").setItems(names) { _, index ->
-                    settings.profile = profiles.getJSONObject(index).getString("id"); catalogCache.clear(); loadTab(currentTab)
-
-                }.show()
-            } catch (e: Exception) { toast(e.message ?: "Could not load profiles") }
+    private val profilePage = registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()) { result ->
+        if (result.resultCode == android.app.Activity.RESULT_OK) {
+            catalogCache.clear(); browseHistory.clear(); navigationKey = "home"; screen = "home"; lastDetails = null; loadTab("home")
         }
+    }
+
+    private fun profiles() {
+        profilePage.launch(Intent(this, ProfilesActivity::class.java))
+        if (android.os.Build.VERSION.SDK_INT >= 34) overrideActivityTransition(OVERRIDE_TRANSITION_OPEN, android.R.anim.fade_in, android.R.anim.fade_out)
+        else @Suppress("DEPRECATION") overridePendingTransition(android.R.anim.fade_in, android.R.anim.fade_out)
     }
 
     private fun openServerSettingsDialog() {
@@ -2122,28 +2238,98 @@ class MainActivity : AppCompatActivity() {
         if (view is ViewGroup) for (index in 0 until view.childCount) addTvFocusIndicators(view.getChildAt(index))
     }
 
+    private fun updateBrowseContent(data: JSONObject, draw: (JSONObject) -> Unit) {
+        val visible = content
+        val viewport = visible.parent as? ScrollView
+        val scrollY = viewport?.scrollY ?: 0
+        val focused = currentFocus
+        val staged = column().apply { setPadding(visible.paddingLeft, visible.paddingTop, visible.paddingRight, visible.paddingBottom) }
+        if (screen == "details") { trailerView?.apply { stopLoading(); destroy() }; trailerView = null }
+        heroRotationJob?.cancel()
+        content = staged
+        try { draw(data) } finally { content = visible }
+        fun key(view: View, index: Int): String = view.getTag(R.id.browse_key)?.toString()
+            ?: if (view.id != View.NO_ID) "id:${view.id}" else "${view.javaClass.name}:$index"
+        fun reconcile(old: android.view.ViewGroup, fresh: android.view.ViewGroup) {
+            val previous = (0 until old.childCount).associate { index -> key(old.getChildAt(index), index) to old.getChildAt(index) }
+            val chosen = (0 until fresh.childCount).map { index ->
+                val incoming = fresh.getChildAt(index)
+                val prior = previous[key(incoming, index)]
+                val signature = incoming.getTag(R.id.browse_signature)
+                when {
+                    prior != null && signature != null && prior.getTag(R.id.browse_signature) == signature -> prior
+                    prior is HorizontalScrollView && incoming is HorizontalScrollView && incoming.getTag(R.id.browse_key) != null -> {
+                        val oldRow = prior.getChildAt(0) as? LinearLayout
+                        val newRow = incoming.getChildAt(0) as? LinearLayout
+                        if (oldRow != null && newRow != null) reconcile(oldRow, newRow)
+                        prior
+                    }
+                    else -> incoming
+                }
+            }
+            old.removeAllViews()
+            chosen.forEach { view -> (view.parent as? ViewGroup)?.removeView(view); old.addView(view) }
+        }
+        if (android.animation.ValueAnimator.areAnimatorsEnabled()) android.transition.TransitionManager.beginDelayedTransition(visible,
+            android.transition.AutoTransition().apply { duration = 140 })
+        reconcile(visible, staged)
+        if (isTelevision()) addTvFocusIndicators(visible)
+        visible.post {
+            viewport?.scrollTo(0, scrollY)
+            focused?.takeIf { it.isAttachedToWindow }?.requestFocus()
+        }
+    }
+
+    private fun browsePlaceholder() {
+        val row = LinearLayout(this).apply { setPadding(gutter, dp(24), gutter, dp(16)) }
+        repeat(if (isTelevision()) 5 else 3) {
+            row.addView(View(this).apply { background = rounded(0xFF202020.toInt(), radius = dp(8).toFloat()) },
+                LinearLayout.LayoutParams(0, dp(if (isTelevision()) 200 else 150), 1f).apply { marginEnd = dp(8) })
+        }
+        content.addView(row, LinearLayout.LayoutParams(-1, -2))
+    }
+
     private fun fetch(path: String, params: Map<String, String> = emptyMap(), draw: (JSONObject) -> Unit) {
         work?.cancel(); val current = ++generation
-        shell(); message("Loading…")
+        val cached = api.cached(path, params)
+        shell(); screenLoading = cached == null
+        if (cached != null) {
+            draw(cached)
+            if (isTelevision()) addTvFocusIndicators(content)
+        } else browsePlaceholder()
+        val rendered = cached?.toString()
         work = lifecycleScope.launch {
             try {
                 val data = api.call(path, params)
                 if (generation != current) return@launch
+                screenLoading = false
+                if (rendered != null) {
+                    if (rendered != data.toString()) updateBrowseContent(data, draw)
+                    return@launch
+                }
                 content.removeAllViews(); draw(data)
                 if (isTelevision()) addTvFocusIndicators(content)
+                content.animate().cancel()
+                if (android.animation.ValueAnimator.areAnimatorsEnabled()) {
+                    content.alpha = 0.3f; content.translationY = dp(6).toFloat()
+                    content.animate().alpha(1f).translationY(0f).setDuration(160).start()
+                }
                 val expectedContent = content
                 if (isTelevision()) content.post {
                     if (content !== expectedContent || generation != current) return@post
-                    // Initial content focus is allowed only while focus is still in the content pane.
                     val focused = currentFocus
                     if (focused != null && !isWithin(focused, content)) return@post
-                    val targets = ArrayList<View>()
-                    content.addFocusables(targets, View.FOCUS_FORWARD)
+                    val targets = ArrayList<View>(); content.addFocusables(targets, View.FOCUS_FORWARD)
                     targets.firstOrNull()?.requestFocus()
                 }
             } catch (_: kotlinx.coroutines.CancellationException) {
             } catch (e: Exception) {
                 if (generation != current) return@launch
+                screenLoading = false
+                if (cached != null) {
+                    android.util.Log.w("HomeStream", "Keeping cached content while refresh is unavailable")
+                    return@launch
+                }
                 content.removeAllViews(); heading("Unable to connect")
                 message(e.message ?: "Check your HomeStream connection.")
                 content.addView(action("Retry") { fetch(path, params, draw) })

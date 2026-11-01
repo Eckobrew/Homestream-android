@@ -5,4 +5,6 @@
     <item name="phone_bottom_navigation" type="id" />
     <item name="tv_navigation_rail" type="id" />
     <item name="featured_card" type="id" />
+    <item name="browse_key" type="id" />
+    <item name="browse_signature" type="id" />
 </resources>
