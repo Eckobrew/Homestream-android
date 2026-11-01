@@ -15,7 +15,6 @@ import com.google.android.gms.cast.framework.CastOptions
 import com.google.android.gms.cast.framework.OptionsProvider
 import com.google.android.gms.cast.framework.SessionProvider
 import com.google.android.gms.cast.framework.media.CastMediaOptions
-import com.google.android.gms.cast.framework.media.widget.ExpandedControllerActivity
 
 class HomeStreamCastOptions : OptionsProvider {
     override fun getCastOptions(context: Context): CastOptions = CastOptions.Builder()
@@ -84,77 +83,36 @@ class HomeStreamRouteDialog : androidx.mediarouter.app.MediaRouteControllerDialo
     }
 }
 
-class CastControllerActivity : ExpandedControllerActivity() {
-    private var sdkPane: View? = null
-    private var standbyPane: View? = null
-    private val handler = android.os.Handler(android.os.Looper.getMainLooper())
-    private val refresh = object : Runnable {
-        override fun run() {
-            val session = castContext(this@CastControllerActivity)?.sessionManager?.currentCastSession
-            val standby = !hasCastVideo(session?.remoteMediaClient)
-            sdkPane?.visibility = if (standby) View.GONE else View.VISIBLE
-            standbyPane?.visibility = if (standby) View.VISIBLE else View.GONE
-            if (standby) supportActionBar?.hide() else {
-                supportActionBar?.show(); supportActionBar?.title = "HomeStream"
-                supportActionBar?.subtitle = session?.castDevice?.friendlyName
-            }
-            handler.postDelayed(this, 750)
-        }
-    }
-    override fun onStart() { super.onStart(); handler.removeCallbacks(refresh); refresh.run() }
-    override fun onStop() { handler.removeCallbacks(refresh); super.onStop() }
+/** All Cast entry points lead to the same HomeStream playback controls. */
+class CastControllerActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: android.os.Bundle?) {
-        requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
         super.onCreate(savedInstanceState)
-        androidx.core.view.WindowCompat.setDecorFitsSystemWindows(window, false)
-        val content = findViewById<View>(android.R.id.content)
-        val left = content.paddingLeft
-        val top = content.paddingTop
-        val right = content.paddingRight
-        val bottom = content.paddingBottom
-        androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(content) { view, insets ->
+        requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+        val session = castContext(this)?.sessionManager?.currentCastSession
+        val media = session?.remoteMediaClient?.mediaInfo?.customData?.optJSONObject("media")
+        if (hasCastVideo(session?.remoteMediaClient) && media != null) {
+            startActivity(android.content.Intent(this, PlayerActivity::class.java)
+                .putExtra("media", media.toString())
+                .addFlags(android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP or android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP))
+            finish()
+            return
+        }
+        val pane = readyToCastView().apply {
+            setBackgroundColor(INK)
+            addView(action("Browse HomeStream") { finish() })
+            addView(action("Stop casting") {
+                castContext(this@CastControllerActivity)?.sessionManager?.endCurrentSession(true)
+                finish()
+            })
+        }
+        setContentView(pane)
+        androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(pane) { view, insets ->
             val safe = insets.getInsets(androidx.core.view.WindowInsetsCompat.Type.systemBars() or
                 androidx.core.view.WindowInsetsCompat.Type.displayCutout())
-            view.setPadding(left + safe.left, top + safe.top, right + safe.right, bottom + safe.bottom)
-            androidx.core.view.WindowInsetsCompat.CONSUMED
+            view.setPadding(dp(24) + safe.left, dp(28) + safe.top, dp(24) + safe.right, dp(28) + safe.bottom)
+            insets
         }
-        androidx.core.view.ViewCompat.requestApplyInsets(content)
-        (content as? ViewGroup)?.let { container ->
-            sdkPane = container.getChildAt(0)
-            val pane = readyToCastView().apply {
-                setBackgroundColor(INK)
-                addView(action("Browse HomeStream") { finish() })
-                addView(action("Stop casting") {
-                    castContext(this@CastControllerActivity)?.sessionManager?.endCurrentSession(true)
-                    finish()
-                })
-            }
-            container.addView(pane, ViewGroup.LayoutParams(-1, -1)); standbyPane = pane
-        }
-    }
-
-    override fun onCreateOptionsMenu(menu: android.view.Menu): Boolean {
-        super.onCreateOptionsMenu(menu)
-        supportActionBar?.title = "HomeStream"
-        supportActionBar?.subtitle = castContext(this)?.sessionManager?.currentCastSession?.castDevice?.friendlyName
-        menu.add(0, 9999, 0, "Stop Casting").apply {
-            setShowAsAction(android.view.MenuItem.SHOW_AS_ACTION_ALWAYS)
-            val btn = android.widget.Button(this@CastControllerActivity).apply {
-                text = "Stop Casting"
-                isAllCaps = false
-                textSize = 12f
-                typeface = android.graphics.Typeface.DEFAULT_BOLD
-                setTextColor(android.graphics.Color.WHITE)
-                background = rounded(RED, radius = dp(8).toFloat())
-                setPadding(dp(14), dp(4), dp(14), dp(4))
-                setOnClickListener {
-                    CastContext.getSharedInstance(this@CastControllerActivity).sessionManager.endCurrentSession(true)
-                    finish()
-                }
-            }
-            actionView = btn
-        }
-        return true
+        androidx.core.view.ViewCompat.requestApplyInsets(pane)
     }
 }
 

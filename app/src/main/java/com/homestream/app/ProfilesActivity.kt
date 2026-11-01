@@ -41,7 +41,7 @@ class ProfilesActivity : AppCompatActivity() {
             contentDescription = "Back"; background = rounded(0xFF202020.toInt(), radius = dp(24).toFloat())
             setOnClickListener { finish() }; isFocusable = true
         }, LinearLayout.LayoutParams(dp(48), dp(48)).apply { marginEnd = dp(16) })
-        header.addView(label("HomeStream", if (isTelevision()) 24f else 20f, true).apply { setTextColor(RED) }, LinearLayout.LayoutParams(0, -2, 1f))
+        header.addView(label("HOMESTREAM", if (isTelevision()) 24f else 20f, true).apply { setTextColor(RED) }, LinearLayout.LayoutParams(0, -2, 1f))
         root.addView(header)
         page = column().apply { setPadding(gutter, dp(12), gutter, dp(28)) }
         root.addView(ScrollView(this).apply { addView(page) }, LinearLayout.LayoutParams(-1, 0, 1f))
@@ -91,9 +91,10 @@ class ProfilesActivity : AppCompatActivity() {
                     val stock = profile.optString("avatarId").ifBlank { avatars[index % avatars.size] }
                     val size = if (isTelevision()) 112 else 88
                     card.addView(avatarImage(stock, size), LinearLayout.LayoutParams(dp(size), dp(size)))
-                    card.addView(label((if (profile.optString("id") == current) "" else "") + profile.optString("name"), 17f, true).apply {
+                    card.addView(label(profile.optString("name"), 17f, true).apply {
                         gravity = Gravity.CENTER; maxLines = 2; setPadding(0, dp(10), 0, 0)
                     })
+                    if (profile.optString("id") == current) card.addView(label("Current profile", 12f).apply { gravity = Gravity.CENTER; setTextColor(MUTED) })
                     if (profile.optBoolean("isKids")) card.addView(label("Kids · ${profile.optString("kidsRating")}", 13f).apply { gravity = Gravity.CENTER; setTextColor(MUTED) })
                     cell.addView(card, LinearLayout.LayoutParams(-1, -2))
                     cell.addView(action("Edit profile") { edit(profile, canManage) }, LinearLayout.LayoutParams(-1, dp(48)))

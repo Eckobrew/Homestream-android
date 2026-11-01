@@ -56,7 +56,11 @@ class PlayerActivity : AppCompatActivity() {
     private lateinit var playerView: PlayerView
     private lateinit var overlay: LinearLayout
     private var player: ExoPlayer? = null
+    private var displayedCastItem = ""
+    private var knownDurationMs = 0L
+    private var castTimeline: LinearLayout? = null
     private var position = 0L
+    private var refreshInitialResume = true
     private var currentPlaybackId = ""
     private var playbackPolicy = ""
     private var prepared = false
@@ -117,7 +121,7 @@ class PlayerActivity : AppCompatActivity() {
                 if (received != null && received.playbackId != currentPlaybackId) {
                     val oldId = currentPlaybackId
                     val oldPosition = position
-                    (application as HomeStreamApplication).playbackReports.launch { runCatching { api.progress(oldId, oldPosition, false, true) } }
+                    (application as HomeStreamApplication).enqueuePlaybackReport { runCatching { api.progress(oldId, oldPosition, false, true) } }
                     media = received; currentPlaybackId = received.playbackId; updateEpisodeControls()
                     client.mediaInfo?.customData?.optJSONObject("playback")?.let { describeStream(it) }
                 }
@@ -220,9 +224,11 @@ class PlayerActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         media = runCatching { Media(JSONObject(savedInstanceState?.getString("media") ?: intent.getStringExtra("media") ?: "")) }.getOrElse { finish(); return }
         isStreamingDownload = intent.getBooleanExtra("isStreamingDownload", false) || media.json.optBoolean("isStreamingDownload")
+        knownDurationMs = ticksToMs(media.json.optLong("totalDurationTicks"))
         currentPlaybackId = media.playbackId
         castCompatible = playbackPrefs.getBoolean("cast-compatible", false)
         api = HomeStreamApi(ServerSettings(this))
+        refreshInitialResume = savedInstanceState == null && !intent.getBooleanExtra("fromBeginning", false)
         position = savedInstanceState?.getLong("position") ?: if (intent.getBooleanExtra("fromBeginning", false)) 0 else media.resumeMs
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         setPlaybackPresentation(castCtx?.sessionManager?.currentCastSession?.isConnected == true && !media.isDownload)
@@ -291,6 +297,7 @@ class PlayerActivity : AppCompatActivity() {
         // Stream format toggle badge (Direct vs Transcode)
         if (!media.isDownload) {
             val badge = TextView(this).apply {
+                visibility = if (isTelevision()) View.GONE else View.VISIBLE
                 text = "DIRECT"
                 textSize = 11f
                 typeface = android.graphics.Typeface.DEFAULT_BOLD
@@ -357,11 +364,11 @@ class PlayerActivity : AppCompatActivity() {
         val episodeBar = LinearLayout(this).apply {
             gravity = Gravity.END
             addView(previousButton); addView(nextButton); addView(autoplayButton)
-            addView(action("Episodes") { showEpisodeQueue() }.apply { contentDescription = "Episode queue" })
+            addView(action("Episodes") { showEpisodeQueue() }.apply { contentDescription = "Episode queue"; visibility = if (media.type in listOf("Episode", "Series")) View.VISIBLE else View.GONE })
             addView(action("Subtitles") { showCastSubtitles() }.apply { visibility = if (castCtx != null) View.VISIBLE else View.GONE })
         }
         overlay.addView(bar)
-        overlay.addView(android.widget.HorizontalScrollView(this).apply {
+        if (!isTelevision()) overlay.addView(android.widget.HorizontalScrollView(this).apply {
             isHorizontalScrollBarEnabled = false
             addView(episodeBar)
         })
@@ -650,6 +657,7 @@ class PlayerActivity : AppCompatActivity() {
                         }.getOrDefault("h264"),
                         "audioCodecs" to audioCodecs
                     ) + if (isTelevision()) mapOf("receiver" to "native-tv", "videoCapabilities" to televisionVideoProfiles().toString()) else emptyMap())
+                applyInitialResume(stream)
                 describeStream(stream)
                 val url = stream.optString("streamUrl")
                 if (url.isBlank()) {
@@ -688,7 +696,10 @@ class PlayerActivity : AppCompatActivity() {
                     .setMediaSourceFactory(mediaSourceFactory)
                     .setAudioAttributes(audioAttributes, /* handleAudioFocus= */ true)
                     .build().also { exo ->
-                    playerView.player = exo
+                    playerView.player = object : androidx.media3.common.ForwardingPlayer(exo) {
+                        override fun getDuration(): Long = knownDurationMs.takeIf { it > 0 } ?: super.getDuration()
+                        override fun getContentDuration(): Long = knownDurationMs.takeIf { it > 0 } ?: super.getContentDuration()
+                    }
                     exo.addListener(object : Player.Listener {
                         override fun onPlaybackStateChanged(state: Int) {
                             if (state == Player.STATE_READY) { prepared = true; clearMessages(); reportStarted() }
@@ -798,7 +809,8 @@ class PlayerActivity : AppCompatActivity() {
         val client = session.remoteMediaClient ?: return
         val receiverMedia = client.mediaInfo?.customData?.optJSONObject("media")?.let { Media(it) }
         if (!forceReload && receiverMedia != null && receiverMedia.json.optString("seriesId").isNotBlank() &&
-            receiverMedia.json.optString("seriesId") == media.json.optString("seriesId")) {
+            receiverMedia.json.optString("seriesId") == media.json.optString("seriesId") &&
+            (media.type == "Series" || receiverMedia.playbackId == media.playbackId)) {
             media = receiverMedia; currentPlaybackId = media.playbackId; updateEpisodeControls(); loadEpisodeContext()
             client.mediaInfo?.customData?.optJSONObject("playback")?.let { describeStream(it) }
         }
@@ -825,7 +837,7 @@ class PlayerActivity : AppCompatActivity() {
                 val firstNext = upcoming.firstOrNull()?.let { next ->
                     runCatching { castQueueItem(castMediaInfo(next, next.playbackId), true) }.getOrNull()
                 }
-                val queue = listOf(castQueueItem(info, wantsPlay)) + listOfNotNull(firstNext)
+                val queue = listOf(castQueueItem(info, wantsPlay, position)) + listOfNotNull(firstNext)
                 client.queueLoad(queue.toTypedArray(), 0, MediaStatus.REPEAT_MODE_REPEAT_OFF, position, null)
                     .setResultCallback { result ->
                         if (generation != castGeneration || !playbackStarted) return@setResultCallback
@@ -883,15 +895,22 @@ class PlayerActivity : AppCompatActivity() {
             ?.let { longArrayOf(it.id) } ?: longArrayOf()
     }
 
-    private fun castQueueItem(info: MediaInfo, play: Boolean) = MediaQueueItem.Builder(info)
-        .setAutoplay(play).setPreloadTime(10.0).setActiveTrackIds(subtitleIds(info)).build()
+    private fun applyInitialResume(stream: JSONObject) {
+        if (stream.optLong("totalDurationTicks") > 0) knownDurationMs = ticksToMs(stream.optLong("totalDurationTicks"))
+        if (!refreshInitialResume) return
+        refreshInitialResume = false
+        if (stream.has("resumePositionTicks")) position = ticksToMs(stream.optLong("resumePositionTicks")).coerceAtLeast(0)
+    }
+
+    private fun castQueueItem(info: MediaInfo, play: Boolean, startMs: Long = 0) = MediaQueueItem.Builder(info)
+        .setStartTime(startMs.coerceAtLeast(0) / 1000.0).setAutoplay(play).setPreloadTime(10.0).setActiveTrackIds(subtitleIds(info)).build()
 
     private suspend fun castMediaInfo(item: Media, id: String): MediaInfo {
         val compatible = castCompatible || id in castRejectedItems
         val stream = api.call("playback", mapOf("itemId" to id, "forceTranscode" to compatible.toString(),
             "receiver" to "cast", "videoCodecs" to if (receiverProfile.hevc) "h264,hevc,vp8,vp9,av1" else "h264,vp8",
             "maxWidth" to receiverProfile.width.toString(), "maxHeight" to receiverProfile.height.toString(), "audioCodecs" to "aac,mp3,opus,vorbis"))
-        if (id == currentPlaybackId) { describeStream(stream); transcode = stream.optBoolean("isTranscoding"); updateModeBadge() }
+        if (id == currentPlaybackId) { applyInitialResume(stream); describeStream(stream); transcode = stream.optBoolean("isTranscoding"); updateModeBadge() }
         val metadata = MediaMetadata(if (item.type == "Episode") MediaMetadata.MEDIA_TYPE_TV_SHOW else MediaMetadata.MEDIA_TYPE_MOVIE).apply {
             putString(MediaMetadata.KEY_TITLE, item.title)
             if (item.json.optString("seriesName").isNotBlank()) putString(MediaMetadata.KEY_SERIES_TITLE, item.json.optString("seriesName"))
@@ -1072,49 +1091,66 @@ class PlayerActivity : AppCompatActivity() {
             bottomMargin = dp(18)
         })
 
+        val seek = android.widget.SeekBar(this).apply {
+            max = 1000
+            progressTintList = ColorStateList.valueOf(RED)
+            thumbTintList = ColorStateList.valueOf(Color.WHITE)
+            contentDescription = "Playback position"
+            setOnSeekBarChangeListener(object : android.widget.SeekBar.OnSeekBarChangeListener {
+                override fun onStartTrackingTouch(bar: android.widget.SeekBar) {}
+                override fun onProgressChanged(bar: android.widget.SeekBar, value: Int, fromUser: Boolean) {}
+                override fun onStopTrackingTouch(bar: android.widget.SeekBar) {
+                    remote?.let { client ->
+                        val target = castDuration(client) * bar.progress / 1000L
+                        client.seek(com.google.android.gms.cast.MediaSeekOptions.Builder().setPosition(target).build())
+                    }
+                }
+            })
+        }
+        val time = label("", 13f).apply { setTextColor(MUTED) }
+        castTimeline = column().apply {
+            addView(time)
+            addView(seek, LinearLayout.LayoutParams(-1, dp(48)))
+        }
+        infoCol.addView(castTimeline)
+        val updateSeek = object : Runnable {
+            override fun run() {
+                remote?.let { client ->
+                    if (!seek.isPressed && castDuration(client) > 0)
+                        seek.progress = (client.approximateStreamPosition * 1000 / castDuration(client)).toInt()
+                    controlsBtn.text = if (client.isPlaying) "Pause" else "Play"
+                    fun format(ms: Long): String {
+                        val seconds = ms.coerceAtLeast(0) / 1000
+                        return if (seconds >= 3600) "%d:%02d:%02d".format(seconds / 3600, seconds / 60 % 60, seconds % 60)
+                            else "%d:%02d".format(seconds / 60, seconds % 60)
+                    }
+                    time.text = "${format(client.approximateStreamPosition)} / ${format(castDuration(client))}"
+                }
+                if (seek.isAttachedToWindow) seek.postDelayed(this, 1000)
+            }
+        }
+        seek.addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
+            override fun onViewAttachedToWindow(view: View) { seek.post(updateSeek) }
+            override fun onViewDetachedFromWindow(view: View) { seek.removeCallbacks(updateSeek) }
+        })
+
         val btnRow = LinearLayout(this).apply {
             orientation = if (isTelevision()) LinearLayout.HORIZONTAL else LinearLayout.VERTICAL
             gravity = Gravity.CENTER_VERTICAL
         }
 
-        playThisBtn = android.widget.Button(this).apply {
-            text = "▶  Play Now"
-            isAllCaps = false
-            textSize = 14f
-            typeface = android.graphics.Typeface.DEFAULT_BOLD
-            setTextColor(Color.BLACK)
-            background = rounded(Color.WHITE, radius = dp(8).toFloat())
-            setPadding(dp(22), dp(8), dp(22), dp(8))
-            setOnClickListener {
-                currentCycledItem?.let { playCycledItem(it) }
-            }
+        playThisBtn = action("Play now", primary = true) {
+            currentCycledItem?.let { playCycledItem(it) }
         }
         btnRow.addView(playThisBtn, LinearLayout.LayoutParams(-2, dp(44)).apply { marginEnd = dp(12) })
 
-        controlsBtn = android.widget.Button(this).apply {
-            text = "Remote Controls"
-            isAllCaps = false
-            textSize = 14f
-            setTextColor(Color.WHITE)
-            background = rounded(0xFF2E2E2E.toInt(), radius = dp(8).toFloat())
-            setPadding(dp(18), dp(8), dp(18), dp(8))
-            setOnClickListener {
-                startActivity(android.content.Intent(this@PlayerActivity, CastControllerActivity::class.java))
-            }
+        controlsBtn = action("Play / Pause", primary = true) {
+            remote?.let { if (it.isPlaying) it.pause() else it.play() }
         }
         btnRow.addView(controlsBtn, LinearLayout.LayoutParams(-2, dp(44)).apply { marginEnd = dp(12) })
 
-        stopCastBtn = android.widget.Button(this).apply {
-            text = "Stop Casting"
-            isAllCaps = false
-            textSize = 14f
-            typeface = android.graphics.Typeface.DEFAULT_BOLD
-            setTextColor(Color.WHITE)
-            background = rounded(RED, radius = dp(8).toFloat())
-            setPadding(dp(22), dp(8), dp(22), dp(8))
-            setOnClickListener {
-                castCtx?.sessionManager?.endCurrentSession(true)
-            }
+        stopCastBtn = action("Stop casting") {
+            castCtx?.sessionManager?.endCurrentSession(true)
         }
         btnRow.addView(stopCastBtn, LinearLayout.LayoutParams(-2, dp(44)))
         btnRow.addView(action("Play here") {
@@ -1123,7 +1159,7 @@ class PlayerActivity : AppCompatActivity() {
             wantsPlay = client.isPlaying
             castCtx?.sessionManager?.endCurrentSession(true)
         })
-        btnRow.addView(action("Device") { castCtx?.sessionManager?.currentCastSession?.let { chooseCastProfile(it) } })
+        btnRow.addView(action("Playback compatibility") { castCtx?.sessionManager?.currentCastSession?.let { chooseCastProfile(it) } })
 
         if (!isTelevision()) {
             for (index in 0 until btnRow.childCount) btnRow.getChildAt(index).layoutParams =
@@ -1145,7 +1181,15 @@ class PlayerActivity : AppCompatActivity() {
         reportStarted()
     }
 
+    private fun castDuration(client: RemoteMediaClient): Long {
+        val seconds = client.mediaInfo?.customData?.optJSONObject("playback")?.optDouble("durationSeconds", 0.0) ?: 0.0
+        return if (seconds > 0) (seconds * 1000).toLong() else knownDurationMs.takeIf { it > 0 } ?: client.streamDuration
+    }
+
     private fun showNowPlayingCastUI() {
+        if (displayedCastItem == currentPlaybackId && castOverlay.visibility == View.VISIBLE && controlsBtn.visibility == View.VISIBLE) return
+        displayedCastItem = currentPlaybackId
+        castTimeline?.visibility = View.VISIBLE
         castOverlay.visibility = View.VISIBLE
         val session = castCtx?.sessionManager?.currentCastSession
         val deviceName = session?.castDevice?.friendlyName ?: "Chromecast"
@@ -1167,6 +1211,7 @@ class PlayerActivity : AppCompatActivity() {
         if (idleCycleJob?.isActive == true) return
 
         castOverlay.visibility = View.VISIBLE
+        castTimeline?.visibility = View.GONE
         castBadgeView.text = "Ready to cast"
         playThisBtn.visibility = View.VISIBLE
         controlsBtn.visibility = View.GONE
@@ -1297,11 +1342,11 @@ class PlayerActivity : AppCompatActivity() {
         val paused = client?.isPaused ?: (player?.isPlaying == false)
         val launcherItem = episodes.items.firstOrNull { it.playbackId == activeId } ?: media
         val launcherMedia = Media(JSONObject(launcherItem.json.toString()).put("id", activeId).put("jellyfinId", activeId))
-        val launcherDuration = player?.duration?.takeIf { it > 0 }
+        val launcherDuration = knownDurationMs.takeIf { it > 0 } ?: player?.duration?.takeIf { it > 0 }
             ?: ticksToMs(launcherMedia.json.optLong("totalDurationTicks"))
         val launcherScope = if (isTelevision()) WatchNext.scope(ServerSettings(this)) else ""
         // A final report must survive Activity destruction (Back/rotation).
-        (application as HomeStreamApplication).playbackReports.launch {
+        (application as HomeStreamApplication).enqueuePlaybackReport {
             if (launcherScope.isNotBlank()) runCatching { WatchNext.record(applicationContext, launcherMedia, snapshot, launcherDuration, launcherScope) }
             runCatching { api.progress(activeId, snapshot, paused, stopped, started) }
         }
@@ -1339,6 +1384,8 @@ class PlayerActivity : AppCompatActivity() {
         super.onStop()
     }
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (event.action == KeyEvent.ACTION_DOWN && event.keyCode == KeyEvent.KEYCODE_MEDIA_NEXT) { changeEpisode(1); return true }
+        if (event.action == KeyEvent.ACTION_DOWN && event.keyCode == KeyEvent.KEYCODE_MEDIA_PREVIOUS) { changeEpisode(-1); return true }
         if (playerView.dispatchKeyEvent(event)) return true
         return super.dispatchKeyEvent(event)
     }
