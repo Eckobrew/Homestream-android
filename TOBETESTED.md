@@ -99,3 +99,22 @@ Use the Chromecast with Google TV **HD**, Pixel 8a and an actual Android TV devi
 | Device / build | Steps and title | Expected | Actual / approximate time | Status |
 | --- | --- | --- | --- | --- |
 | | | | | |
+
+
+## Playback, Cast remote and remote access fixes — 1 November 2026
+
+Android implementation: `a8e3bc0`. Backend implementation: `c5e130a` (deployment recorded below when complete).
+Verification: local Android compilation, backend TypeScript compilation, code review and existing device/Jellyfin logs. No manual playback/UI acceptance tests performed by Codex.
+
+- [ ] Phone: resume an episode at least five minutes in, both locally and over Cast; it must resume at the saved position.
+- [ ] Series details: Resume should choose the in-progress episode rather than the first episode. Check an episode from a later season.
+- [ ] Cast: header Cast button and the mini-player open the same remote; no second full-screen controller or “Remote Controls” detour.
+- [ ] Cast: play/pause and seeking work; the total duration stays at the library runtime while the stream buffers. Artwork/title must not flash with progress updates.
+- [ ] Cast queue: next episode updates title, runtime and progress to the new episode.
+- [ ] Native Android TV: standard transport controls, without the phone action-button row or debug stream-mode toggle; hardware next/previous keys still skip episodes.
+- [ ] Phone/TV profile screen: current profile is identified; dark surfaces, white text, red branding, clear TV focus and cutout-safe phone layout.
+- [ ] Web HTTP and HTTPS: Jellyfin login persists after reload; incorrect credentials show an error. External sessions cannot switch household profiles.
+- [ ] LAN/Tailscale via homeflix.eckonet.uk: auth status reports the verified client/router address instead of an empty string. With subnet SNAT, the Proxmox LAN address is expected rather than the original 100.x address.
+- [ ] Internet without Tailscale: still requires login. A forged forwarding header must not grant household access.
+- [ ] Kids restrictions and parent PIN remain enforced. Identifying a trusted network does not bypass child restrictions.
+- [ ] Continue Watching reflects progress for the selected household profile after leaving playback and reopening the app.
