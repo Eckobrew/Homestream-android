@@ -428,6 +428,20 @@ class MainActivity : AppCompatActivity() {
         return pill
     }
 
+    private fun showTvBrowseMenu() {
+        val destinations = listOf(
+            "A–Z Movies" to { loadCatalog("movies") },
+            "A–Z Series" to { loadCatalog("tv") },
+            "Movie Categories" to { loadCategories("movies") },
+            "TV Categories" to { loadCategories("tv") },
+            "YouTube Library" to { loadCatalog("youtube") },
+            "Active Downloads" to { loadDownloads() }
+        ).filter { it.first != "Active Downloads" || settings.kidsRating.isBlank() }
+        AlertDialog.Builder(this).setTitle("Browse more")
+            .setItems(destinations.map { it.first }.toTypedArray()) { _, index -> destinations[index].second() }
+            .setNegativeButton("Back", null).show()
+    }
+
     private fun televisionShell() {
         val stage = FrameLayout(this)
         stage.addView(browseViewport(),
@@ -435,7 +449,7 @@ class MainActivity : AppCompatActivity() {
 
         val rail = column().apply {
             id = R.id.tv_navigation_rail; gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(8), dp(24), dp(8), dp(24))
+            setPadding(dp(8), dp(12), dp(8), dp(12))
             background = GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT,
                 intArrayOf(INK, 0xF0080808.toInt(), 0xDD080808.toInt()))
         }
@@ -445,11 +459,8 @@ class MainActivity : AppCompatActivity() {
             Triple("Home", R.drawable.nav_home, { loadTab("home") }),
             Triple("TV Shows", R.drawable.nav_series, { loadTab("series") }),
             Triple("Movies", R.drawable.nav_movies, { loadTab("movies") }),
-            Triple("Requests", R.drawable.ic_download, { loadTab("requests") }),
-            Triple("A–Z Movies", R.drawable.nav_movies, { loadCatalog("movies") }),
-            Triple("A–Z Series", R.drawable.nav_series, { loadCatalog("tv") }),
-            Triple("Categories", R.drawable.nav_movies, { loadCategories("movies") }),
-            Triple("Downloads", R.drawable.ic_download, { loadDownloads() }),
+            Triple("Requests", R.drawable.nav_new, { loadTab("requests") }),
+            Triple("More", R.drawable.ic_menu, { showTvBrowseMenu() }),
             Triple("My List", R.drawable.nav_list, { myHomeStream() }),
             Triple("Profiles", R.drawable.nav_profile, { profiles() }),
             Triple("Settings", R.drawable.nav_settings, { openServerSettingsDialog() })
@@ -458,10 +469,20 @@ class MainActivity : AppCompatActivity() {
         val buttons = entries.map { (title, icon, click) ->
             action("", click = click).apply {
                 contentDescription = title; tag = title; gravity = Gravity.CENTER_VERTICAL
+                isSelected = when (title) {
+                    "Home" -> screen == "home" && currentTab == "home"
+                    "Movies" -> currentTab == "movies" && screen != "search"
+                    "TV Shows" -> currentTab == "series" && screen != "search"
+                    "Requests" -> currentTab == "requests" && screen != "search"
+                    "Search" -> screen == "search"
+                    "My List" -> screen == "mine"
+                    else -> false
+                }
                 setCompoundDrawablesWithIntrinsicBounds(icon, 0, 0, 0); compoundDrawablePadding = dp(18)
                 setPadding(dp(12), 0, dp(8), 0)
                 background = android.graphics.drawable.StateListDrawable().apply {
-                    addState(intArrayOf(android.R.attr.state_focused), rounded(0xFF383838.toInt()))
+                    addState(intArrayOf(android.R.attr.state_focused), rounded(0xFF383838.toInt(), Color.WHITE))
+                    addState(intArrayOf(android.R.attr.state_selected), rounded(0x33E50914, RED))
                     addState(intArrayOf(), rounded(Color.TRANSPARENT))
                 }
                 setTextColor(Color.WHITE)
