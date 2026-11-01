@@ -1145,7 +1145,7 @@ class PlayerActivity : AppCompatActivity() {
         if (idleCycleJob?.isActive == true) return
 
         castOverlay.visibility = View.VISIBLE
-        castBadgeView.text = "Ready to stream"
+        castBadgeView.text = "Ready to cast"
         playThisBtn.visibility = View.VISIBLE
         controlsBtn.visibility = View.GONE
         stopCastBtn.visibility = View.VISIBLE
