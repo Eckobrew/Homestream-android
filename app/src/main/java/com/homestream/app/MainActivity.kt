@@ -448,7 +448,7 @@ class MainActivity : AppCompatActivity() {
             FrameLayout.LayoutParams(-1, -1).apply { marginStart = dp(76) })
 
         val rail = column().apply {
-            id = R.id.tv_navigation_rail; gravity = Gravity.CENTER_VERTICAL
+            id = R.id.tv_navigation_rail; gravity = Gravity.CENTER
             setPadding(dp(8), dp(12), dp(8), dp(12))
             background = GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT,
                 intArrayOf(INK, 0xF0080808.toInt(), 0xDD080808.toInt()))
@@ -479,15 +479,16 @@ class MainActivity : AppCompatActivity() {
                     "More" -> screen.startsWith("catalog-") || screen.startsWith("categories-") || screen == "downloads"
                     else -> false
                 }
-                setCompoundDrawablesWithIntrinsicBounds(icon, 0, 0, 0); compoundDrawablePadding = dp(18)
-                setPadding(dp(12), 0, dp(8), 0)
+                setCompoundDrawablesWithIntrinsicBounds(icon, 0, 0, 0); compoundDrawablePadding = 0
+                setPadding(dp(10), 0, dp(10), 0)
+                defaultFocusHighlightEnabled = false
                 background = android.graphics.drawable.StateListDrawable().apply {
                     addState(intArrayOf(android.R.attr.state_focused), rounded(0xFF383838.toInt(), Color.WHITE))
                     addState(intArrayOf(android.R.attr.state_selected), rounded(0x33E50914, RED))
                     addState(intArrayOf(), rounded(Color.TRANSPARENT))
                 }
                 setTextColor(Color.WHITE)
-                layoutParams = LinearLayout.LayoutParams(-1, dp(44)).apply { bottomMargin = dp(4) }
+                layoutParams = LinearLayout.LayoutParams(dp(44), dp(44)).apply { gravity = Gravity.CENTER_HORIZONTAL; bottomMargin = dp(4) }
                 rail.addView(this)
             }
         }
@@ -501,7 +502,12 @@ class MainActivity : AppCompatActivity() {
             val width = dp(if (inside) 210 else 76)
             if (railViewport.layoutParams.width != width) {
                 railViewport.layoutParams = (railViewport.layoutParams as FrameLayout.LayoutParams).apply { this.width = width }
-                buttons.forEach { it.text = if (inside) it.tag.toString() else "" }
+                buttons.forEach { button ->
+                    button.text = if (inside) button.tag.toString() else ""
+                    button.compoundDrawablePadding = if (inside) dp(18) else 0
+                    button.setPadding(dp(if (inside) 12 else 10), 0, dp(if (inside) 8 else 10), 0)
+                    button.layoutParams = (button.layoutParams as LinearLayout.LayoutParams).apply { this.width = if (inside) -1 else dp(44) }
+                }
             }
         }
 
@@ -1165,7 +1171,7 @@ class MainActivity : AppCompatActivity() {
                 setPadding(dp(2), dp(5), dp(2), 0)
             })
 
-            row.addView(card, LinearLayout.LayoutParams(-2, -2).apply { setMargins(0, 0, dp(10), 0) })
+            row.addView(card, LinearLayout.LayoutParams(cardWidth + card.paddingLeft + card.paddingRight, -2).apply { setMargins(0, 0, dp(10), 0) })
         }
 
         parent.addView(HorizontalScrollView(this).apply {

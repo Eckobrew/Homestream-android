@@ -37,13 +37,15 @@ fun Context.badgePill(value: String) = TextView(this).apply {
 }
 fun View.focusableCard(color: Int = 0xFF202020.toInt()) {
     isFocusable = true; isClickable = true
+    defaultFocusHighlightEnabled = false
     background = StateListDrawable().apply {
         addState(intArrayOf(android.R.attr.state_focused), rounded(color, Color.WHITE))
         addState(intArrayOf(android.R.attr.state_pressed), rounded(color, RED))
         addState(intArrayOf(), rounded(color))
     }
     setOnFocusChangeListener { view, focused ->
-        view.animate().scaleX(if (focused) 1.035f else 1f).scaleY(if (focused) 1.035f else 1f).setDuration(120).start()
+        val scale = if (focused && !context.isTelevision()) 1.035f else 1f
+        view.animate().scaleX(scale).scaleY(scale).setDuration(120).start()
     }
 }
 fun Context.action(title: String, primary: Boolean = false, click: () -> Unit) = Button(this).apply {
