@@ -465,7 +465,7 @@ class MainActivity : AppCompatActivity() {
             Triple("My List", R.drawable.nav_list, { myHomeStream() }),
             Triple("Profiles", R.drawable.nav_profile, { profiles() }),
             Triple("Settings", R.drawable.nav_settings, { openServerSettingsDialog() })
-        ).filter { it.first != "Profiles" || settings.canUseProfiles }
+        ).filter { (it.first != "Profiles" || settings.canUseProfiles) && (it.first != "Downloads" || settings.kidsRating.isBlank()) }
 
         val buttons = entries.map { (title, icon, click) ->
             action("", click = click).apply {
@@ -1733,12 +1733,12 @@ class MainActivity : AppCompatActivity() {
     // Categories & Other Helpers
     // -----------------------------------------------------------------------------------------
     private fun showCategoriesMenu() {
-        val options = arrayOf("Movie Categories", "TV Categories", "Active Downloads", "My List")
-        AlertDialog.Builder(this).setTitle("Browse Categories").setItems(options) { _, idx ->
-            when (idx) {
-                0 -> loadCategories("movies")
-                1 -> loadCategories("tv")
-                2 -> loadDownloads()
+        val options = listOf("Movie Categories", "TV Categories", "Active Downloads", "My List").filter { it != "Active Downloads" || settings.kidsRating.isBlank() }
+        AlertDialog.Builder(this).setTitle("Browse Categories").setItems(options.toTypedArray()) { _, idx ->
+            when (options[idx]) {
+                "Movie Categories" -> loadCategories("movies")
+                "TV Categories" -> loadCategories("tv")
+                "Active Downloads" -> loadDownloads()
                 else -> myHomeStream()
             }
         }.show()
@@ -1792,6 +1792,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun loadDownloads() {
+        if (settings.kidsRating.isNotBlank()) { toast("Downloading torrents are unavailable in Kids mode"); return }
         rememberScreen("downloads") { loadDownloads() }
         screen = "downloads"
         fetch("downloads") { data ->

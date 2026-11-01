@@ -416,7 +416,7 @@ class PlayerActivity : AppCompatActivity() {
     private fun showUnDownloadedUI(reason: String = "This title has not been downloaded yet.") {
         clearMessages()
         showMessage(reason)
-        overlay.addView(action("▶  Stream with qBittorrent") {
+        if (ServerSettings(this).kidsRating.isBlank()) overlay.addView(action("▶  Stream with qBittorrent") {
             startStreamingDownloadPipeline()
         })
         overlay.addView(action("←  Back to Browse") { finish() })
