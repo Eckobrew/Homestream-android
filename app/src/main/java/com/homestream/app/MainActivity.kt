@@ -471,11 +471,12 @@ class MainActivity : AppCompatActivity() {
                 contentDescription = title; tag = title; gravity = Gravity.CENTER_VERTICAL
                 isSelected = when (title) {
                     "Home" -> screen == "home" && currentTab == "home"
-                    "Movies" -> currentTab == "movies" && screen != "search"
-                    "TV Shows" -> currentTab == "series" && screen != "search"
-                    "Requests" -> currentTab == "requests" && screen != "search"
+                    "Movies" -> currentTab == "movies" && screen == "home"
+                    "TV Shows" -> currentTab == "series" && screen == "home"
+                    "Requests" -> currentTab == "requests" && screen == "home"
                     "Search" -> screen == "search"
                     "My List" -> screen == "mine"
+                    "More" -> screen.startsWith("catalog-") || screen.startsWith("categories-") || screen == "downloads"
                     else -> false
                 }
                 setCompoundDrawablesWithIntrinsicBounds(icon, 0, 0, 0); compoundDrawablePadding = dp(18)
