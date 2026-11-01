@@ -18,6 +18,7 @@ interface ConnectionSettings {
 }
 
 class ServerSettings(context: Context, private val keyProvider: (() -> SecretKey)? = null) : ConnectionSettings {
+    private val appContext = context.applicationContext
     private val prefs = context.getSharedPreferences("server", Context.MODE_PRIVATE)
 
     var localUrl: String
@@ -60,7 +61,7 @@ class ServerSettings(context: Context, private val keyProvider: (() -> SecretKey
 
     override var profile: String
         get() = prefs.getString("profile", "").orEmpty()
-        set(value) { prefs.edit().putString("profile", value).apply() }
+        set(value) { prefs.edit().putString("profile", value).apply(); WatchNext.refresh(appContext) }
 
     private fun key(): SecretKey {
         keyProvider?.let { return it() }
@@ -97,6 +98,7 @@ class ServerSettings(context: Context, private val keyProvider: (() -> SecretKey
             .putString("authType", "device")
             .remove("profile")
             .apply()
+        WatchNext.refresh(appContext)
     }
 
     fun saveServer(
@@ -119,11 +121,12 @@ class ServerSettings(context: Context, private val keyProvider: (() -> SecretKey
             .remove("activeUrl").remove("keystore_fallback")
             .remove("profile")
             .apply()
+        WatchNext.refresh(appContext)
     }
 
     fun updateExternalUrl(external: String) {
         prefs.edit().putString("externalUrl", external.trim().trimEnd('/')).apply()
     }
 
-    fun clear() { prefs.edit().clear().apply() }
+    fun clear() { prefs.edit().clear().apply(); WatchNext.refresh(appContext) }
 }

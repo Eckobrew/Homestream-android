@@ -15,6 +15,7 @@ class HomeStreamApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        WatchNext.schedule(this)
         val settings = ServerSettings(this)
         val imageClient = OkHttpClient.Builder()
             .addInterceptor { chain ->

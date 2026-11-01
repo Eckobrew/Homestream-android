@@ -78,3 +78,38 @@ Final local verification: Android debug assembly, all 40 unit/Robolectric tests
 and Android lint passed. The matching backend production build, standalone
 production integration checks and browser capability checks passed. No updated
 APK or backend image was installed on a live device/service during this task.
+
+## Android TV follow-up and launcher Continue watching
+
+- TV Back restores the prior browse view, scroll positions, search text and focused
+  card. The navigation rail opens actual server settings. Async content loading
+  no longer takes focus away from the rail; details and rotating hero actions
+  receive explicit focus styles. These behavior changes are TV-only.
+- TV playback reports per-decoder resolution and H.264/HEVC profile bounds to the
+  backend. It keeps native MKV/container support and compatibility conversion.
+- Added the platform Watch Next integration for compatible Android TV/Google TV
+  launchers. Movie/episode cards contain progress, duration, artwork and an explicit
+  deep link to resume the actual item. Entries are scoped to the current server
+  and HomeStream profile; only one episode per series is published.
+- TV playback reports update launcher progress and remove completed cards. App
+  startup and a persisted, network-constrained JobScheduler task refresh Jellyfin
+  resume history (periodic work runs approximately every 15 minutes, subject to
+  Android scheduling). Offline failures preserve existing cards. Dismissed cards
+  are respected; profile changes and disconnect clear stale cards.
+- The launcher controls card visibility/order. Writing Watch Next data does not
+  guarantee placement on every Google TV launcher/version. This integration does
+  not submit a public Google Media Actions catalog or commercial partner feed.
+
+Manual TV checks (no interactive testing was performed during implementation):
+1. Open a title from a scrolled library/search, press Back, and check focus/position.
+2. Move to the rail while content loads; check focus stays there. Check all details
+   actions have visible focus, including changing the details tab.
+3. Open Settings and check server information and external URL are accessible.
+4. Play compatible 1080p and incompatible 4K/profile titles on an HD TV device;
+   inspect playback details for direct play versus required conversion.
+5. Watch a movie/episode for over two minutes, leave playback, then check launcher
+   Continue watching. Select its card and verify the correct title resumes.
+6. Finish/mark watched, switch profile, disconnect, and dismiss a launcher card;
+   confirm stale/completed/dismissed cards do not return unexpectedly.
+7. Change progress on another device, reopen the TV app (or allow scheduled sync),
+   and verify the launcher progress refreshes. Offline sync should preserve cards.

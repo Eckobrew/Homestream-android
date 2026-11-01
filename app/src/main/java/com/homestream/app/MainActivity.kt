@@ -65,6 +65,27 @@ class MainActivity : AppCompatActivity() {
     private var lastDetails: Media? = null
     private val gutter get() = dp(if (isTelevision()) 48 else 20)
 
+    private data class TvBrowseState(
+        val root: FrameLayout, val main: LinearLayout, val content: LinearLayout,
+        val drawer: FrameLayout?, val screen: String, val tab: String, val focus: View?,
+        val heroItems: List<Media>, val heroIndex: Int, val heroContainer: FrameLayout?
+    )
+    private var tvBrowseState: TvBrowseState? = null
+
+    private fun returnFromDetails(): Boolean {
+        val saved = tvBrowseState ?: return false
+        if (!isTelevision() || screen != "details") return false
+        work?.cancel(); searchJob?.cancel(); categoryJob?.cancel(); heroRotationJob?.cancel(); ++generation
+        trailerView?.apply { stopLoading(); destroy() }; trailerView = null
+        root = saved.root; mainContainer = saved.main; content = saved.content; sidebarDrawer = saved.drawer
+        screen = saved.screen; currentTab = saved.tab; heroItems = saved.heroItems
+        currentHeroIndex = saved.heroIndex; heroContainer = saved.heroContainer
+        tvBrowseState = null; lastDetails = null
+        setContentView(root)
+        root.post { saved.focus?.takeIf { it.isAttachedToWindow }?.requestFocus() }
+        return true
+    }
+
     // Hero rotation state
     private var heroItems: List<Media> = emptyList()
     private var currentHeroIndex = 0
@@ -78,6 +99,7 @@ class MainActivity : AppCompatActivity() {
                 if (sidebarDrawer?.visibility == View.VISIBLE) {
                     closeSidebar(); return
                 }
+                if (returnFromDetails()) return
                 if (screen != "home") {
                     loadTab("home")
                 } else {
@@ -86,7 +108,33 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         })
-        if (settings.baseUrl.isBlank() || settings.token.isBlank()) setup() else loadTab("home")
+        if (settings.baseUrl.isBlank() || settings.token.isBlank()) setup() else if (!openLauncherItem(intent)) loadTab("home")
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        openLauncherItem(intent)
+    }
+
+    private fun openLauncherItem(source: Intent): Boolean {
+        val link = source.data ?: return false
+        if (!isTelevision() || source.action != Intent.ACTION_VIEW || link.scheme != "homestream" || link.host != "watch") return false
+        val id = link.getQueryParameter("id") ?: return false
+        if (!id.matches(Regex("[A-Za-z0-9-]{1,200}")) || link.getQueryParameter("scope") != WatchNext.scope(settings)) return false
+        source.data = null
+        loadTab("home")
+        lifecycleScope.launch {
+            try {
+                val item = Media(api.call("media/${Uri.encode(id)}").getJSONObject("item"))
+                if (item.isAvailableForPlayback && item.playbackId == id) play(item)
+                else details(item)
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                toast("Could not open launcher title. Check your server connection.")
+            }
+        }
+        return true
     }
 
     private val castSessionListener = object : SessionManagerListener<CastSession> {
@@ -107,6 +155,10 @@ class MainActivity : AppCompatActivity() {
 
     override fun onStart() {
         super.onStart()
+        if (isTelevision()) (application as HomeStreamApplication).playbackReports.launch {
+            runCatching { WatchNext.sync(applicationContext) }
+                .onFailure { android.util.Log.w("HomeStreamWatchNext", "Launcher sync unavailable: ${it.javaClass.simpleName}") }
+        }
         castContext(this)?.sessionManager?.addSessionManagerListener(castSessionListener, CastSession::class.java)
         if (screen == "home" && heroItems.size > 1) setupDynamicHero(heroItems)
     }
@@ -129,6 +181,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun shell() {
+        if (screen != "details") tvBrowseState = null
         searchJob?.cancel(); categoryJob?.cancel()
         trailerView?.apply { stopLoading(); destroy() }; trailerView = null
         heroRotationJob?.cancel()
@@ -296,7 +349,7 @@ class MainActivity : AppCompatActivity() {
             Triple("Downloads", R.drawable.ic_download, { loadDownloads() }),
             Triple("My List", R.drawable.nav_list, { myHomeStream() }),
             Triple("Profiles", R.drawable.nav_profile, { profiles() }),
-            Triple("Settings", R.drawable.nav_settings, { setup() })
+            Triple("Settings", R.drawable.nav_settings, { openServerSettingsDialog() })
         )
 
         val buttons = entries.map { (title, icon, click) ->
@@ -635,6 +688,8 @@ class MainActivity : AppCompatActivity() {
                     if (screen != "home" || content.findViewById<View>(R.id.featured_card) == null) {
                         break
                     }
+                    val featured = content.findViewById<View>(R.id.featured_card)
+                    if (isTelevision() && featured != null && currentFocus?.let { isWithin(it, featured) } == true) continue
                     if (heroItems.isNotEmpty()) {
                         currentHeroIndex = (currentHeroIndex + 1) % heroItems.size
                         val nextItem = heroItems[currentHeroIndex]
@@ -673,7 +728,10 @@ class MainActivity : AppCompatActivity() {
     private fun hero(item: Media, showActions: Boolean = true) {
         if (screen != "home") return
         content.findViewById<View>(R.id.featured_card)?.let { content.removeView(it) }
-        if (isTelevision()) televisionHero(item, showActions) else phoneHero(item, showActions)
+        if (isTelevision()) {
+            televisionHero(item, showActions)
+            content.findViewById<View>(R.id.featured_card)?.let { addTvFocusIndicators(it) }
+        } else phoneHero(item, showActions)
     }
 
     private fun phoneHero(item: Media, showActions: Boolean) {
@@ -909,6 +967,10 @@ class MainActivity : AppCompatActivity() {
     // Full Netflix Media Details Modal / Screen
     // -----------------------------------------------------------------------------------------
     private fun details(item: Media) {
+        if (isTelevision() && screen != "details" && ::root.isInitialized) {
+            tvBrowseState = TvBrowseState(root, mainContainer, content, sidebarDrawer, screen, currentTab,
+                currentFocus, heroItems, currentHeroIndex, heroContainer)
+        }
         heroRotationJob?.cancel()
         lastDetails = item
         screen = "details"
@@ -961,7 +1023,7 @@ class MainActivity : AppCompatActivity() {
                 setImageResource(R.drawable.ic_close); imageTintList = ColorStateList.valueOf(Color.WHITE)
                 background = rounded(0x88000000.toInt(), radius = dp(18).toFloat())
                 setPadding(dp(8), dp(8), dp(8), dp(8))
-                setOnClickListener { loadTab(currentTab) }
+                setOnClickListener { if (!returnFromDetails()) loadTab(currentTab) }
             }
             headerArea.addView(closeBtn, FrameLayout.LayoutParams(dp(36), dp(36), Gravity.TOP or Gravity.END).apply {
                 setMargins(dp(12), dp(12), dp(12), dp(12))
@@ -1076,14 +1138,15 @@ class MainActivity : AppCompatActivity() {
                 text = tab1Title; textSize = 14f; typeface = android.graphics.Typeface.DEFAULT_BOLD
                 setTextColor(if (selectedTab == 0) Color.WHITE else MUTED)
                 setPadding(0, dp(8), dp(20), dp(8))
-                setOnClickListener { selectedTab = 0; updateTabs() }
+                setOnClickListener { selectedTab = 0; updateTabs(); if (isTelevision()) tabHeader.getChildAt(0)?.requestFocus() }
             }
             val t2 = TextView(this).apply {
                 text = tab2Title; textSize = 14f; typeface = android.graphics.Typeface.DEFAULT_BOLD
                 setTextColor(if (selectedTab == 1) Color.WHITE else MUTED)
                 setPadding(dp(10), dp(8), dp(20), dp(8))
-                setOnClickListener { selectedTab = 1; updateTabs() }
+                setOnClickListener { selectedTab = 1; updateTabs(); if (isTelevision()) tabHeader.getChildAt(1)?.requestFocus() }
             }
+            if (isTelevision()) { t1.focusableCard(); t2.focusableCard() }
             tabHeader.addView(t1)
             tabHeader.addView(t2)
 
@@ -1697,6 +1760,7 @@ class MainActivity : AppCompatActivity() {
                 val names = Array(profiles.length()) { profiles.getJSONObject(it).optString("name") }
                 AlertDialog.Builder(this@MainActivity).setTitle("Who's watching?").setItems(names) { _, index ->
                     settings.profile = profiles.getJSONObject(index).getString("id"); catalogCache.clear(); loadTab(currentTab)
+
                 }.show()
             } catch (e: Exception) { toast(e.message ?: "Could not load profiles") }
         }
@@ -2036,6 +2100,28 @@ class MainActivity : AppCompatActivity() {
         dialog.show()
     }
 
+    private fun isWithin(view: View, ancestor: View): Boolean {
+        var current: android.view.ViewParent? = view.parent
+        if (view === ancestor) return true
+        while (current != null) { if (current === ancestor) return true; current = current.parent }
+        return false
+    }
+
+    private fun addTvFocusIndicators(view: View) {
+        if (view is Button || (view is TextView && view.isClickable)) {
+            val normal = view.background
+            view.isFocusable = true
+            view.background = android.graphics.drawable.StateListDrawable().apply {
+                addState(intArrayOf(android.R.attr.state_focused), rounded(0xFF383838.toInt(), Color.WHITE))
+                addState(intArrayOf(), normal ?: rounded(Color.TRANSPARENT))
+            }
+            (view as TextView).setTextColor(ColorStateList(
+                arrayOf(intArrayOf(android.R.attr.state_focused), intArrayOf()),
+                intArrayOf(Color.WHITE, view.currentTextColor)))
+        }
+        if (view is ViewGroup) for (index in 0 until view.childCount) addTvFocusIndicators(view.getChildAt(index))
+    }
+
     private fun fetch(path: String, params: Map<String, String> = emptyMap(), draw: (JSONObject) -> Unit) {
         work?.cancel(); val current = ++generation
         shell(); message("Loading…")
@@ -2044,7 +2130,13 @@ class MainActivity : AppCompatActivity() {
                 val data = api.call(path, params)
                 if (generation != current) return@launch
                 content.removeAllViews(); draw(data)
+                if (isTelevision()) addTvFocusIndicators(content)
+                val expectedContent = content
                 if (isTelevision()) content.post {
+                    if (content !== expectedContent || generation != current) return@post
+                    // Initial content focus is allowed only while focus is still in the content pane.
+                    val focused = currentFocus
+                    if (focused != null && !isWithin(focused, content)) return@post
                     val targets = ArrayList<View>()
                     content.addFocusables(targets, View.FOCUS_FORWARD)
                     targets.firstOrNull()?.requestFocus()

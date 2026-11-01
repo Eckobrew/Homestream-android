@@ -627,7 +627,7 @@ class PlayerActivity : AppCompatActivity() {
                                 .filter { !it.isEncoder }.flatMap { it.supportedTypes.toList() })
                         }.getOrDefault("h264"),
                         "audioCodecs" to audioCodecs
-                    ))
+                    ) + if (isTelevision()) mapOf("receiver" to "native-tv", "videoCapabilities" to televisionVideoProfiles().toString()) else emptyMap())
                 describeStream(stream)
                 val url = stream.optString("streamUrl")
                 if (url.isBlank()) {
@@ -1270,8 +1270,14 @@ class PlayerActivity : AppCompatActivity() {
         if (client != null) position = client.approximateStreamPosition else player?.let { position = it.currentPosition }
         val snapshot = position
         val paused = client?.isPaused ?: (player?.isPlaying == false)
+        val launcherItem = episodes.items.firstOrNull { it.playbackId == activeId } ?: media
+        val launcherMedia = Media(JSONObject(launcherItem.json.toString()).put("id", activeId).put("jellyfinId", activeId))
+        val launcherDuration = player?.duration?.takeIf { it > 0 }
+            ?: ticksToMs(launcherMedia.json.optLong("totalDurationTicks"))
+        val launcherScope = if (isTelevision()) WatchNext.scope(ServerSettings(this)) else ""
         // A final report must survive Activity destruction (Back/rotation).
         (application as HomeStreamApplication).playbackReports.launch {
+            if (launcherScope.isNotBlank()) runCatching { WatchNext.record(applicationContext, launcherMedia, snapshot, launcherDuration, launcherScope) }
             runCatching { api.progress(activeId, snapshot, paused, stopped, started) }
         }
     }
