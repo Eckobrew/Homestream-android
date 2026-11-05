@@ -1295,20 +1295,20 @@ class MainActivity : AppCompatActivity() {
                 setOnClickListener { text = if (list.toggle(full)) "✓ My List" else "+ My List" }
             }
             btnRow.addView(listBtn, LinearLayout.LayoutParams(0, dp(40), 1f).apply {
-                if (full.isAvailableForPlayback) marginEnd = dp(8)
+                marginEnd = dp(8)
             })
 
-            // Download Button (aligned to right) - ONLY shown for currently downloaded titles!
-            if (full.isAvailableForPlayback) {
-                val dlBtn = Button(this).apply {
-                    text = "⬇ Download"; textSize = 12.5f
-                    setTextColor(Color.WHITE); isAllCaps = false
-                    background = rounded(0x33FFFFFF.toInt(), radius = dp(8).toFloat())
-                    minHeight = dp(40); minimumHeight = dp(40)
-                    setOnClickListener { triggerDownload(full) }
+            val dlBtn = Button(this).apply {
+                text = if (full.isAvailableForPlayback) "⬇ Save to device" else "⬇ Download"
+                textSize = 12.5f
+                setTextColor(Color.WHITE); isAllCaps = false
+                background = rounded(0x33FFFFFF.toInt(), radius = dp(8).toFloat())
+                minHeight = dp(40); minimumHeight = dp(40)
+                setOnClickListener {
+                    if (full.isAvailableForPlayback) triggerDownload(full) else requestMediaTitle(full)
                 }
-                btnRow.addView(dlBtn, LinearLayout.LayoutParams(0, dp(40), 1f))
             }
+            btnRow.addView(dlBtn, LinearLayout.LayoutParams(0, dp(40), 1f))
             metaSection.addView(btnRow)
             if (full.isAvailableForPlayback && !full.isDownload) {
                 val watched = Button(this).apply {

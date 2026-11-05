@@ -15,13 +15,13 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class PlayerNavigationTest {
-    @Test fun showingCastStatusDoesNotLaunchAnotherActivity() {
+    @Test fun showingCastStatusWithoutRemoteDoesNotOpenController() {
         val media = JSONObject().put("id", "movie").put("title", "Movie").put("type", "Movie")
         val intent = Intent(RuntimeEnvironment.getApplication(), PlayerActivity::class.java).putExtra("media", media.toString())
         Robolectric.buildActivity(PlayerActivity::class.java, intent).create().use { controller ->
             val activity = controller.get()
             PlayerActivity::class.java.getDeclaredMethod("showCastControls").apply { isAccessible = true }.invoke(activity)
-            assertNull("Returning from Cast controls must not launch them again", shadowOf(activity).nextStartedActivity)
+            assertNull("Cast controls require an active remote player", shadowOf(activity).nextStartedActivity)
         }
     }
     @Test fun recreationRestoresTheAdvancedEpisodeAndItsPosition() {

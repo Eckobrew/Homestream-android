@@ -408,7 +408,7 @@ class PlayerActivity : AppCompatActivity() {
         overlay.addView(action("←  Back to Browse") { finish() })
     }
 
-    private fun startStreamingDownloadPipeline() {
+    private fun startStreamingDownloadPipeline(sendRequest: Boolean = true) {
         isStreamingDownload = true
         downloadPollingJob?.cancel()
         negotiation?.cancel()
@@ -429,8 +429,9 @@ class PlayerActivity : AppCompatActivity() {
         val timeBar = playerView.findViewById<androidx.media3.ui.DefaultTimeBar>(androidx.media3.ui.R.id.exo_progress)
         timeBar?.setDuration(totalDurationMs)
 
+        showMessage("Waiting for download to start…")
         downloadPollingJob = lifecycleScope.launch {
-            if (tmdb > 0) {
+            if (sendRequest && tmdb > 0) {
                 try {
                     val body = JSONObject()
                         .put("mediaType", if (isTv) "tv" else "movie")
@@ -438,15 +439,16 @@ class PlayerActivity : AppCompatActivity() {
                     if (isTv) body.put("seasons", org.json.JSONArray().put(sNum))
                     api.call("request", body = body)
                 } catch (e: Exception) {
+                    if (e is kotlinx.coroutines.CancellationException) throw e
                     android.util.Log.w("HomeStream", "Download request trigger: ${e.message}")
                 }
             }
 
             var attempts = 0
             val cleanMediaTitle = sTitle.lowercase().replace(Regex("[^a-z0-9]"), "")
-            var matchedHash: String? = null
+            var matchedHash = media.json.optString("torrentHash").takeIf { it.isNotBlank() }
 
-            while (isActive) {
+            while (isActive && attempts++ < 30) {
                 try {
                     val res = api.call("downloads")
                     val items = res.optJSONArray("items")
@@ -456,9 +458,12 @@ class PlayerActivity : AppCompatActivity() {
                         for (i in 0 until items.length()) {
                             val t = items.getJSONObject(i)
                             val tHash = t.optString("hash")
-                            if (matchedHash != null && tHash.equals(matchedHash, ignoreCase = true)) {
-                                matchedTorrent = t
-                                break
+                            if (matchedHash != null) {
+                                if (tHash.equals(matchedHash, ignoreCase = true)) {
+                                    matchedTorrent = t
+                                    break
+                                }
+                                continue
                             }
                             val tName = t.optString("name").lowercase().replace(Regex("[^a-z0-9]"), "")
                             if (cleanMediaTitle.isNotBlank() && tName.isNotBlank() && (tName.contains(cleanMediaTitle) || cleanMediaTitle.contains(tName))) {
@@ -479,7 +484,7 @@ class PlayerActivity : AppCompatActivity() {
                         timeBar?.setBufferedPosition(bufferedMs)
 
                         val minBufferBytes = 10L * 1024L * 1024L
-                        if (downloadedBytes >= minBufferBytes || progress >= 0.01 || progress >= 0.99) {
+                        if (matchedTorrent.optString("streamUrl").isNotBlank() || downloadedBytes >= minBufferBytes || progress >= 0.01) {
                             val streamPath = buildString {
                                 append("stream/download?hash=").append(hash)
                                 if (isTv) {
@@ -490,15 +495,8 @@ class PlayerActivity : AppCompatActivity() {
                             launchStreamUrl(streamPath)
                             return@launch
                         }
-                    } else {
-                        attempts++
-                        if (attempts > 30) {
-                            clearMessages()
-                            showMessage("Download queued in Sonarr/Radarr.\nqBittorrent has not started the torrent yet.")
-                            overlay.addView(action("Keep Waiting") { startStreamingDownloadPipeline() })
-                            overlay.addView(action("←  Back to Browse") { finish() })
-                            return@launch
-                        }
+                        clearMessages()
+                        showMessage("Buffering download (${matchedTorrent.optInt("progressPercent")}%)…")
                     }
                 } catch (e: Exception) {
                     if (e is kotlinx.coroutines.CancellationException) throw e
@@ -506,6 +504,10 @@ class PlayerActivity : AppCompatActivity() {
                 }
                 delay(2000)
             }
+            clearMessages()
+            showMessage("The download has not buffered enough to start playback.")
+            overlay.addView(action("Keep Waiting") { startStreamingDownloadPipeline(sendRequest = false) })
+            overlay.addView(action("←  Back to Browse") { finish() })
         }
     }
 
@@ -515,6 +517,11 @@ class PlayerActivity : AppCompatActivity() {
         val playUri = Uri.parse(api.absolute(fullPath)).buildUpon()
             .appendQueryParameter(if (compatible) "transcode" else "native", "1").build()
 
+        clearMessages()
+        showMessage("Buffering download stream…")
+        describeStream(JSONObject().put("streamUrl", playUri.toString())
+            .put("playMethod", if (compatible) "Transcode" else "DirectPlay"))
+        var bufferRetries = 0
         val item = MediaItem.Builder()
             .setUri(playUri)
             .apply { if (compatible) setMimeType(MimeTypes.VIDEO_MP4) }
@@ -566,6 +573,14 @@ class PlayerActivity : AppCompatActivity() {
                         transcode = true
                         showMessage("Preparing compatible download stream…")
                         launchStreamUrl(streamPath, compatible = true)
+                        return
+                    }
+                    val status = (error.cause as? androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException)?.responseCode
+                    if (status != 425 || bufferRetries++ >= 10) {
+                        clearMessages()
+                        showMessage("Download playback failed (${status ?: error.errorCodeName}).")
+                        overlay.addView(action("Retry") { launchStreamUrl(streamPath, compatible) })
+                        overlay.addView(action("←  Back to Browse") { finish() })
                         return
                     }
                     retryJob?.cancel()
@@ -1014,7 +1029,7 @@ class PlayerActivity : AppCompatActivity() {
     }
 
     private fun openCastController() {
-        if (castControllerOpened) return
+        if (remote == null || castControllerOpened) return
         castControllerOpened = true
         startActivity(android.content.Intent(this, CastControllerActivity::class.java)
             .addFlags(android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP or android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP))
