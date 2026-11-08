@@ -85,9 +85,6 @@ class PlayerActivity : AppCompatActivity() {
     private var episodeJob: Job? = null
     private var queueJob: Job? = null
     private var titleColumn: LinearLayout? = null
-    private var nextButton: android.widget.Button? = null
-    private var previousButton: android.widget.Button? = null
-    private var autoplayButton: android.widget.Button? = null
     private val playbackPrefs by lazy { getSharedPreferences("playback", MODE_PRIVATE) }
     private var autoplay: Boolean
         get() = playbackPrefs.getBoolean("autoplay", true)
@@ -326,33 +323,20 @@ class PlayerActivity : AppCompatActivity() {
                 bar.addView(castContainer, LinearLayout.LayoutParams(dp(40), dp(40)))
             }
         }
-        previousButton = action("Previous") { changeEpisode(-1) }.apply { contentDescription = "Previous episode"; visibility = View.GONE }
-        nextButton = action("Next") { changeEpisode(1) }.apply { contentDescription = "Next episode"; visibility = View.GONE }
-        autoplayButton = action(if (autoplay) "Autoplay on" else "Autoplay off") {
-            autoplay = !autoplay
-            autoplayButton?.text = if (autoplay) "Autoplay on" else "Autoplay off"
-            val session = castCtx?.sessionManager?.currentCastSession
-            if (remote != null && session?.isConnected == true) {
-                position = remote?.approximateStreamPosition ?: position
-                wantsPlay = remote?.isPlaying == true
-                remote?.unregisterCallback(remoteCallback); remote = null
-                cast(session, forceReload = true)
-            }
-        }.apply { contentDescription = "Toggle next episode autoplay"; visibility = View.GONE }
-        val episodeBar = LinearLayout(this).apply {
-            gravity = Gravity.END
-            addView(previousButton); addView(nextButton); addView(autoplayButton)
-            addView(action("Episodes") { showEpisodeQueue() }.apply { contentDescription = "Episode queue"; visibility = if (media.type in listOf("Episode", "Series")) View.VISIBLE else View.GONE })
-            addView(action("Subtitles") { showCastSubtitles() }.apply { visibility = if (castCtx != null) View.VISIBLE else View.GONE })
-        }
         overlay.addView(bar)
-        if (!isTelevision()) overlay.addView(android.widget.HorizontalScrollView(this).apply {
-            isHorizontalScrollBarEnabled = false
-            addView(episodeBar)
-        })
+        playerView.findViewById<View>(androidx.media3.ui.R.id.exo_prev)?.apply {
+            contentDescription = "Previous episode"
+            setOnClickListener { changeEpisode(-1) }
+        }
+        playerView.findViewById<View>(androidx.media3.ui.R.id.exo_next)?.apply {
+            contentDescription = "Next episode"
+            setOnClickListener { changeEpisode(1) }
+        }
+        updateEpisodeNavigation()
         frame.addView(overlay, FrameLayout.LayoutParams(-1, -2, Gravity.TOP))
         playerView.setControllerVisibilityListener(PlayerView.ControllerVisibilityListener { visible ->
             overlay.visibility = if (visible == View.VISIBLE || remote != null) View.VISIBLE else View.GONE
+            updateEpisodeNavigation()
         })
         setContentView(frame)
         ViewCompat.setOnApplyWindowInsetsListener(frame) { view, insets ->
@@ -543,6 +527,7 @@ class PlayerActivity : AppCompatActivity() {
             .setAudioAttributes(audioAttributes, true)
             .build().also { exo ->
             playerView.player = exo
+            observeEpisodeNavigation(exo)
             exo.addListener(object : Player.Listener {
                 override fun onPlaybackStateChanged(state: Int) {
                     if (state == Player.STATE_READY) {
@@ -603,10 +588,12 @@ class PlayerActivity : AppCompatActivity() {
     }
 
     private suspend fun resolvePlaybackId(): String {
-        if (media.isDownload || (media.type != "Series" && !media.playbackId.startsWith("seerr-"))) return media.playbackId
+        if (media.isDownload) return media.playbackId
+        if (media.type in listOf("Series", "Season") && media.playableEpisodeId.isNotBlank()) return media.playableEpisodeId
+        if (media.type !in listOf("Series", "Season") && !media.playbackId.startsWith("seerr-")) return media.playbackId
         val item = api.call("media/${Uri.encode(media.id)}").optJSONObject("item") ?: return media.playbackId
         item.optString("playableEpisodeId").takeIf { it.isNotBlank() }?.let { return it }
-        if (media.type != "Series") item.optString("jellyfinId").takeIf { it.isNotBlank() }?.let { return it }
+        if (media.type !in listOf("Series", "Season")) item.optString("jellyfinId").takeIf { it.isNotBlank() }?.let { return it }
         val seasons = item.optJSONArray("seasons") ?: return media.playbackId
         for (i in 0 until seasons.length()) {
             val episodes = seasons.getJSONObject(i).optJSONArray("episodes") ?: continue
@@ -626,7 +613,8 @@ class PlayerActivity : AppCompatActivity() {
             launchStreamUrl(media.downloadUrl)
             return
         }
-        if (isStreamingDownload || !media.isAvailableForPlayback) {
+        val hasResumeEpisode = media.type in listOf("Series", "Season") && media.playableEpisodeId.isNotBlank()
+        if (isStreamingDownload || (!media.isAvailableForPlayback && !hasResumeEpisode)) {
             startStreamingDownloadPipeline()
             return
         }
@@ -659,7 +647,8 @@ class PlayerActivity : AppCompatActivity() {
                     return@launch
                 }
                 currentPlaybackId = targetId
-                loadEpisodeContext()
+                // Resolve the resumed episode and its queue before playback can end.
+                loadEpisodeContextNow(targetId)
                 val isTranscodingStream = stream.optString("transport") == "HLS" || Uri.parse(url).path.orEmpty().endsWith(".m3u8", ignoreCase = true)
                 if (isTranscodingStream && !transcode) {
                     transcode = true
@@ -694,6 +683,7 @@ class PlayerActivity : AppCompatActivity() {
                         override fun getDuration(): Long = knownDurationMs.takeIf { it > 0 } ?: super.getDuration()
                         override fun getContentDuration(): Long = knownDurationMs.takeIf { it > 0 } ?: super.getContentDuration()
                     }
+                    observeEpisodeNavigation(exo)
                     exo.addListener(object : Player.Listener {
                         override fun onPlaybackStateChanged(state: Int) {
                             if (state == Player.STATE_READY) { prepared = true; clearMessages(); reportStarted() }
@@ -928,7 +918,7 @@ class PlayerActivity : AppCompatActivity() {
     }
 
     private suspend fun loadEpisodeContextNow(id: String = currentPlaybackId) {
-        if (media.type != "Episode" && media.type != "Series") return
+        if (media.type !in listOf("Episode", "Series", "Season")) return
         if (episodes.index(id) >= 0) return
         try {
             val result = EpisodeQueue(api.call("episodes", mapOf("itemId" to id)).mediaList("items"))
@@ -946,11 +936,32 @@ class PlayerActivity : AppCompatActivity() {
         episodeJob = lifecycleScope.launch { loadEpisodeContextNow() }
     }
 
+    // Media3 updates these buttons for its single-item timeline. Restore episode
+    // availability after those updates while keeping its native transport layout.
+    private fun observeEpisodeNavigation(exo: ExoPlayer) {
+        exo.addListener(object : Player.Listener {
+            override fun onEvents(player: Player, events: Player.Events) {
+                playerView.post { updateEpisodeNavigation() }
+            }
+        })
+        updateEpisodeNavigation()
+    }
+
+    private fun updateEpisodeNavigation() {
+        val neighbors = listOf(
+            androidx.media3.ui.R.id.exo_prev to episodes.previous(currentPlaybackId),
+            androidx.media3.ui.R.id.exo_next to episodes.next(currentPlaybackId)
+        )
+        for ((id, episode) in neighbors) {
+            playerView.findViewById<View>(id)?.apply {
+                isEnabled = episode != null
+                alpha = if (isEnabled) 1f else 0.3f
+            }
+        }
+    }
+
     private fun updateEpisodeControls() {
-        val episodic = episodes.index(currentPlaybackId) >= 0
-        nextButton?.visibility = if (episodes.next(currentPlaybackId) != null) View.VISIBLE else View.GONE
-        previousButton?.visibility = if (episodes.previous(currentPlaybackId) != null) View.VISIBLE else View.GONE
-        autoplayButton?.visibility = if (episodic) View.VISIBLE else View.GONE
+        updateEpisodeNavigation()
         titleColumn?.apply {
             removeAllViews()
             val series = media.json.optString("seriesName").ifBlank { media.json.optString("seriesTitle") }
@@ -1077,7 +1088,7 @@ class PlayerActivity : AppCompatActivity() {
         prepared = false
         reportedStartedId = ""
     }
-    private fun clearMessages() { while (overlay.childCount > 2) overlay.removeViewAt(2) }
+    private fun clearMessages() { while (overlay.childCount > 1) overlay.removeViewAt(1) }
     private fun showMessage(text: String) { overlay.visibility = View.VISIBLE; overlay.addView(label(text, 14f)) }
     override fun onSaveInstanceState(outState: Bundle) { outState.putString("media", media.json.toString()); outState.putLong("position", player?.currentPosition ?: position); super.onSaveInstanceState(outState) }
     override fun onUserLeaveHint() {
