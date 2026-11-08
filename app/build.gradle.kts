@@ -12,8 +12,8 @@ android {
         minSdk = 26
         targetSdk = 35
         buildConfigField("String", "CAST_RECEIVER_APP_ID", "\"$customCastReceiverId\"")
-        versionCode = 3
-        versionName = "1.1.0"
+        versionCode = 5
+        versionName = "1.2.1"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     buildTypes {
@@ -35,6 +35,7 @@ dependencies {
     implementation("androidx.media3:media3-exoplayer-hls:1.6.1")
     implementation("androidx.media3:media3-datasource-okhttp:1.6.1")
     implementation("androidx.media3:media3-ui:1.6.1")
+    implementation("androidx.media3:media3-session:1.6.1")
     implementation("com.google.android.gms:play-services-cast-framework:22.0.0")
     implementation("androidx.mediarouter:mediarouter:1.7.0")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")

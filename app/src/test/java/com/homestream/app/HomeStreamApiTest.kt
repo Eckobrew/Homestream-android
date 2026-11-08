@@ -1,6 +1,7 @@
 package com.homestream.app
 
 import kotlinx.coroutines.runBlocking
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import org.json.JSONObject
@@ -15,6 +16,47 @@ class HomeStreamApiTest {
         override val token = this@HomeStreamApiTest.token
         override var profile = "profile & one"
     }
+    @Test fun musicUrlsUseNativeRoutesAndCurrentProfile() {
+        val api = HomeStreamApi(settings("https://home.example"))
+        val url = api.absolute("/api/v1/music/stream?trackId=opaque").toHttpUrl()
+        assertEquals("/api/mobile/v1/music/stream", url.encodedPath)
+        assertEquals("opaque", url.queryParameter("trackId"))
+        assertEquals("profile & one", url.queryParameter("userId"))
+        assertEquals("https://other.example/api/v1/music/artwork", api.absolute("https://other.example/api/v1/music/artwork"))
+    }
+
+    @Test fun musicRangeRequestsRetainAuthorizationAcrossSeeks() {
+        MockWebServer().use { server ->
+            val api = HomeStreamApi(settings(server.url("/").toString()))
+            val client = api.mediaClient()
+            for (range in listOf("bytes=0-3", "bytes=4-7")) {
+                server.enqueue(MockResponse().setResponseCode(206).setHeader("Content-Range", if (range == "bytes=0-3") "bytes 0-3/8" else "bytes 4-7/8").setBody("data"))
+                client.newCall(okhttp3.Request.Builder().url(api.absolute("/api/mobile/v1/music/stream?trackId=opaque")).header("Range", range).build()).execute().use {
+                    assertEquals(206, it.code)
+                    assertEquals("data", it.body!!.string())
+                }
+                val request = server.takeRequest()
+                assertEquals("Bearer $token", request.getHeader("Authorization"))
+                assertEquals(range, request.getHeader("Range"))
+                assertEquals("profile & one", request.requestUrl!!.queryParameter("userId"))
+            }
+        }
+    }
+
+    @Test fun adminTestPostsUnsavedInputsWithoutChangingCaller() = runBlocking {
+        MockWebServer().use { server ->
+            server.enqueue(MockResponse().setBody("{\"success\":true}"))
+            val payload = JSONObject().put("integration", "droppedneedle").put("action", "test").put("url", "http://music:8688").put("secret", "")
+            HomeStreamApi(settings(server.url("/").toString())).call("integrations", body = payload)
+            val request = server.takeRequest()
+            assertFalse(request.path!!.contains("secret"))
+            val sent = JSONObject(request.body.readUtf8())
+            assertEquals("test", sent.getString("action"))
+            assertEquals("", sent.getString("secret"))
+            assertFalse(payload.has("userId"))
+        }
+    }
+
     @Test fun profileRequestsOmitEmptyPinsAndPreserveSuppliedPins() = runBlocking {
         MockWebServer().use { server ->
             val api = HomeStreamApi(settings(server.url("/").toString()))

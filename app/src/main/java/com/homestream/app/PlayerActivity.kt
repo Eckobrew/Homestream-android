@@ -199,8 +199,15 @@ class PlayerActivity : AppCompatActivity() {
         if (::playbackRoot.isInitialized) ViewCompat.requestApplyInsets(playbackRoot)
     }
 
+    private val musicStarted = object : android.content.BroadcastReceiver() {
+        override fun onReceive(context: android.content.Context?, intent: android.content.Intent?) { finish() }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        stopService(android.content.Intent(this, MusicService::class.java))
+        androidx.core.content.ContextCompat.registerReceiver(this, musicStarted,
+            android.content.IntentFilter("$packageName.MUSIC_STARTED"), androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED)
         media = runCatching { Media(JSONObject(savedInstanceState?.getString("media") ?: intent.getStringExtra("media") ?: "")) }.getOrElse { finish(); return }
         isStreamingDownload = intent.getBooleanExtra("isStreamingDownload", false) || media.json.optBoolean("isStreamingDownload")
         knownDurationMs = ticksToMs(media.json.optLong("totalDurationTicks"))
@@ -1203,6 +1210,7 @@ class PlayerActivity : AppCompatActivity() {
         super.onStop()
     }
     override fun onDestroy() {
+        unregisterReceiver(musicStarted)
         playbackStarted = false
         negotiation?.cancel(); queueJob?.cancel(); timer?.cancel()
         remote?.unregisterCallback(remoteCallback)

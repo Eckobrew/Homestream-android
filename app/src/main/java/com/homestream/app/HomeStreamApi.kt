@@ -14,7 +14,7 @@ import java.io.IOException
 import java.util.concurrent.TimeUnit
 
 class HomeStreamApi(private val settings: ConnectionSettings) {
-    private class ResponseException(message: String) : IOException(message)
+    class ResponseException(val statusCode: Int, message: String) : IOException(message)
     companion object {
         private val prefetchSlots = kotlinx.coroutines.sync.Semaphore(2)
         private val client = OkHttpClient.Builder().connectTimeout(6, TimeUnit.SECONDS)
@@ -56,7 +56,7 @@ class HomeStreamApi(private val settings: ConnectionSettings) {
                 (settings as? ServerSettings)?.rememberSuccessfulUrl(primaryBase)
             }
         } catch (e: IOException) {
-            if (e is ResponseException) throw e
+            if (e is ResponseException || body != null) throw e
             val serverSettings = settings as? ServerSettings
             val altBase = if (serverSettings != null && serverSettings.externalUrl.isNotBlank() && serverSettings.localUrl.isNotBlank()) {
                 if (primaryBase == serverSettings.localUrl) serverSettings.externalUrl else serverSettings.localUrl
@@ -74,7 +74,7 @@ class HomeStreamApi(private val settings: ConnectionSettings) {
         }
     }
 
-    private fun executeCall(baseUrl: String, path: String, params: Map<String, String>, body: JSONObject?, profile: String, token: String): JSONObject {
+    private suspend fun executeCall(baseUrl: String, path: String, params: Map<String, String>, body: JSONObject?, profile: String, token: String): JSONObject {
         val url = (baseUrl.trimEnd('/') + "/api/mobile/v1/" + path).toHttpUrl().newBuilder()
         if (profile.isNotBlank()) url.addQueryParameter("userId", profile)
         params.forEach { (key, value) -> url.addQueryParameter(key, value) }
@@ -88,12 +88,12 @@ class HomeStreamApi(private val settings: ConnectionSettings) {
             }
             request.post(payload.toString().toRequestBody("application/json".toMediaType()))
         }
-        return client.newCall(request.build()).execute().use { response ->
+        return awaitResponse(client.newCall(request.build())).use { response ->
             val text = response.body?.string().orEmpty()
             val data = runCatching { JSONObject(text) }.getOrNull()
-            if (response.isSuccessful && data == null) throw ResponseException("Server returned an invalid response (${response.code}). Check the HomeStream URL.")
+            if (response.isSuccessful && data == null) throw ResponseException(response.code, "Server returned an invalid response (${response.code}). Check the HomeStream URL.")
             if (response.code == 401) BrowseCache.clear()
-            if (!response.isSuccessful) throw ResponseException(when (response.code) {
+            if (!response.isSuccessful) throw ResponseException(response.code, when (response.code) {
                 401 -> "Pairing token rejected. Check Settings."
                 503 -> "Service unavailable. Check the mobile token and Jellyfin configuration."
                 else -> data?.optString("error", "Server error (${response.code})") ?: "Server error (${response.code})"
@@ -101,6 +101,19 @@ class HomeStreamApi(private val settings: ConnectionSettings) {
             checkNotNull(data)
         }
     }
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    private suspend fun awaitResponse(call: okhttp3.Call): okhttp3.Response = kotlinx.coroutines.suspendCancellableCoroutine { continuation ->
+        continuation.invokeOnCancellation { call.cancel() }
+        call.enqueue(object : okhttp3.Callback {
+            override fun onFailure(call: okhttp3.Call, e: IOException) {
+                if (continuation.isActive) continuation.resumeWith(Result.failure(e))
+            }
+            override fun onResponse(call: okhttp3.Call, response: okhttp3.Response) {
+                continuation.resume(response) { response.close() }
+            }
+        })
+    }
+
     /** Never render a previous profile's cache until the server confirms its policy. */
     suspend fun refreshProfilePolicy(): Boolean {
         val local = settings as? ServerSettings ?: return false
@@ -115,6 +128,11 @@ class HomeStreamApi(private val settings: ConnectionSettings) {
         if (url.isBlank()) return ""
         val base = settings.baseUrl.toHttpUrl()
         val target = base.resolve(url) ?: return ""
+        val sameOrigin = target.scheme == base.scheme && target.host == base.host && target.port == base.port
+        if (sameOrigin && (target.encodedPath.startsWith("/api/v1/music/") || target.encodedPath.startsWith("/api/mobile/v1/music/"))) {
+            return target.newBuilder().encodedPath(target.encodedPath.replaceFirst("/api/v1/music/", "/api/mobile/v1/music/"))
+                .apply { if (settings.profile.isNotBlank()) setQueryParameter("userId", settings.profile) }.build().toString()
+        }
         return if (target.scheme == base.scheme && target.host == base.host && target.port == base.port &&
             target.encodedPath.endsWith("/api/stream/download")) {
             target.newBuilder().encodedPath(target.encodedPath.removeSuffix("/api/stream/download") + "/api/mobile/v1/stream/download").build().toString()

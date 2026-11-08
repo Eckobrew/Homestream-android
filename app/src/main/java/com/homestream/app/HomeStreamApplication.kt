@@ -29,17 +29,7 @@ class HomeStreamApplication : Application() {
         observeCastProgress()
         playbackReports.launch { cacheDir.resolve("image_cache").takeIf { it.isDirectory }?.deleteRecursively() }
         val settings = ServerSettings(this)
-        val imageClient = OkHttpClient.Builder()
-            .addInterceptor { chain ->
-                val request = chain.request()
-                val server = settings.baseUrl.toHttpUrlOrNull()
-                val builder = request.newBuilder()
-                if (server != null && request.url.scheme == server.scheme && request.url.host == server.host && request.url.port == server.port && settings.token.isNotBlank()) {
-                    builder.header("Authorization", "Bearer ${settings.token}")
-                }
-                chain.proceed(builder.build())
-            }
-            .build()
+        val imageClient = HomeStreamApi(settings).mediaClient()
 
         Coil.setImageLoader(
             ImageLoader.Builder(this)

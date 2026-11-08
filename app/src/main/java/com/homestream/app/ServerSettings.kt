@@ -61,7 +61,7 @@ class ServerSettings(context: Context, private val keyProvider: (() -> SecretKey
 
     override var profile: String
         get() = prefs.getString("profile", "").orEmpty()
-        set(value) { prefs.edit().putString("profile", value).apply(); WatchNext.refresh(appContext) }
+        set(value) { if (profile != value) appContext.stopService(android.content.Intent(appContext, MusicService::class.java)); prefs.edit().putString("profile", value).apply(); WatchNext.refresh(appContext) }
 
     var policyRevision: String
         get() = prefs.getString("policyRevision", "").orEmpty()
@@ -70,12 +70,15 @@ class ServerSettings(context: Context, private val keyProvider: (() -> SecretKey
         get() = prefs.getString("kidsRating", "").orEmpty()
         private set(value) { prefs.edit().putString("kidsRating", value).apply() }
 
+    val isKids: Boolean get() = prefs.getBoolean("isKids", false) || kidsRating.isNotBlank()
+
     fun applyProfilePolicy(profile: org.json.JSONObject?, revision: String) {
         val id = profile?.optString("id").orEmpty()
         val rating = if (profile?.optBoolean("isKids") == true) profile.optString("kidsRating") else ""
-        val changed = this.profile != id || policyRevision != revision || kidsRating != rating
-        prefs.edit().putString("profile", id).putString("policyRevision", revision).putString("kidsRating", rating).apply()
-        if (changed) { BrowseCache.clear(); WatchNext.refresh(appContext) }
+        val kids = profile?.optBoolean("isKids") == true
+        val changed = this.profile != id || policyRevision != revision || kidsRating != rating || isKids != kids
+        prefs.edit().putString("profile", id).putString("policyRevision", revision).putString("kidsRating", rating).putBoolean("isKids", kids).apply()
+        if (changed) { appContext.stopService(android.content.Intent(appContext, MusicService::class.java)); BrowseCache.clear(); WatchNext.refresh(appContext) }
     }
 
     private fun key(): SecretKey {
@@ -111,6 +114,7 @@ class ServerSettings(context: Context, private val keyProvider: (() -> SecretKey
     }
 
     fun save(url: String, token: String) {
+        appContext.stopService(android.content.Intent(appContext, MusicService::class.java))
         val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.ENCRYPT_MODE, key()) }
         val encrypted = cipher.doFinal(token.toByteArray(Charsets.UTF_8))
         prefs.edit().putString("token", Base64.encodeToString(cipher.iv, Base64.NO_WRAP) + ":" +
@@ -119,7 +123,7 @@ class ServerSettings(context: Context, private val keyProvider: (() -> SecretKey
             .putString("localUrl", url.trimEnd('/'))
             .remove("externalUrl").remove("activeUrl").remove("keystore_fallback")
             .putString("authType", "device")
-            .remove("profile").remove("policyRevision").remove("kidsRating")
+            .remove("profile").remove("policyRevision").remove("kidsRating").remove("isKids")
             .apply()
         WatchNext.refresh(appContext)
     }
@@ -133,6 +137,7 @@ class ServerSettings(context: Context, private val keyProvider: (() -> SecretKey
     ) {
         val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.ENCRYPT_MODE, key()) }
         val encrypted = cipher.doFinal(token.toByteArray(Charsets.UTF_8))
+        appContext.stopService(android.content.Intent(appContext, MusicService::class.java))
         val active = local.ifBlank { external }.trimEnd('/')
         prefs.edit()
             .putString("token", Base64.encodeToString(cipher.iv, Base64.NO_WRAP) + ":" + Base64.encodeToString(encrypted, Base64.NO_WRAP))
@@ -142,7 +147,7 @@ class ServerSettings(context: Context, private val keyProvider: (() -> SecretKey
             .putString("authType", type)
             .putString("serverName", name)
             .remove("activeUrl").remove("keystore_fallback")
-            .remove("profile").remove("policyRevision").remove("kidsRating")
+            .remove("profile").remove("policyRevision").remove("kidsRating").remove("isKids")
             .apply()
         WatchNext.refresh(appContext)
     }
@@ -151,5 +156,5 @@ class ServerSettings(context: Context, private val keyProvider: (() -> SecretKey
         prefs.edit().putString("externalUrl", external.trim().trimEnd('/')).apply()
     }
 
-    fun clear() { prefs.edit().clear().apply(); WatchNext.refresh(appContext) }
+    fun clear() { appContext.stopService(android.content.Intent(appContext, MusicService::class.java)); prefs.edit().clear().apply(); WatchNext.refresh(appContext) }
 }

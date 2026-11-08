@@ -98,6 +98,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun returnToPreviousScreen(): Boolean {
         val saved = browseHistory.pollLast() ?: return false
+        hubJob?.cancel(); hubSearch?.cancel()
         work?.cancel(); searchJob?.cancel(); categoryJob?.cancel(); heroRotationJob?.cancel(); ++generation
         trailerView?.apply { stopLoading(); destroy() }; trailerView = null
         root = saved.root; mainContainer = saved.main; content = saved.content; sidebarDrawer = saved.drawer
@@ -116,7 +117,7 @@ class MainActivity : AppCompatActivity() {
                 input.setText(text); input.setSelection(cursor.coerceIn(0, text.length))
             }
         }
-        if (saved.loading) saved.reload?.invoke()
+        if (saved.loading || saved.screen in listOf("requests", "music")) saved.reload?.invoke()
         else root.post { saved.focus?.takeIf { it.isAttachedToWindow }?.requestFocus() }
         return true
     }
@@ -152,6 +153,7 @@ class MainActivity : AppCompatActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         if (policyReady || settings.token.isBlank()) openLauncherItem(intent)
+        if (policyReady && intent.getBooleanExtra("musicPlayer", false) && !settings.isKids) { intent.removeExtra("musicPlayer"); musicControls() }
     }
 
     private fun openLauncherItem(source: Intent): Boolean {
@@ -209,9 +211,11 @@ class MainActivity : AppCompatActivity() {
         }
         castContext(this)?.sessionManager?.addSessionManagerListener(castSessionListener, CastSession::class.java)
         if (screen == "home" && heroItems.size > 1) setupDynamicHero(heroItems)
+        if (policyReady && screen in listOf("requests", "music")) mediaHub(screen)
     }
 
     override fun onStop() {
+        hubJob?.cancel(); hubSearch?.cancel()
         policyMonitor?.cancel(); policyCheck?.cancel()
         trailerView?.onPause()
         heroRotationJob?.cancel()
@@ -236,7 +240,7 @@ class MainActivity : AppCompatActivity() {
         policyCheck = lifecycleScope.launch {
             try {
                 val changed = api.refreshProfilePolicy()
-                if (changed) clearCastIdle(this@MainActivity)
+                if (changed) { clearCastIdle(this@MainActivity); stopService(Intent(this@MainActivity, MusicService::class.java)) }
                 if (changed || !policyReady) {
                     work?.cancel(); searchJob?.cancel(); categoryJob?.cancel()
                     catalogCache.clear(); heroItems = emptyList(); resetNavigationHistory()
@@ -248,21 +252,25 @@ class MainActivity : AppCompatActivity() {
                 }
                 if (::root.isInitialized) root.visibility = View.VISIBLE
                 trailerView?.onResume()
+                if (intent.getBooleanExtra("musicPlayer", false) && !settings.isKids) { intent.removeExtra("musicPlayer"); musicControls() }
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
                 val blocked = column().apply {
                     setBackgroundColor(INK); gravity = Gravity.CENTER
                     addView(label("Connect to HomeStream to confirm your profile"))
                     addView(action("Retry") { verifyProfilePolicy() })
+                    if (e is HomeStreamApi.ResponseException && e.statusCode == 401) addView(action("Sign in / pair") { setup() })
                 }
                 work?.cancel(); searchJob?.cancel(); categoryJob?.cancel(); heroRotationJob?.cancel()
                 trailerView?.onPause()
+                stopService(Intent(this@MainActivity, MusicService::class.java))
                 policyReady = false; sceneHost = null; setContentView(blocked)
             }
         }
     }
 
     private fun shell() {
+        hubJob?.cancel(); hubSearch?.cancel()
         searchJob?.cancel(); categoryJob?.cancel()
         trailerView?.apply { stopLoading(); destroy() }; trailerView = null
         heroRotationJob?.cancel()
@@ -346,6 +354,8 @@ class MainActivity : AppCompatActivity() {
         // Chromecast button
         castButton(this)?.let { header.addView(it, LinearLayout.LayoutParams(dp(40), dp(40))) }
 
+        if (!settings.isKids) header.addView(iconButton("Music player", R.drawable.nav_new) { musicControls() })
+
         // Profile switcher button
         if (settings.canUseProfiles) header.addView(iconButton("Profile", R.drawable.nav_profile) { profiles() })
 
@@ -388,11 +398,12 @@ class MainActivity : AppCompatActivity() {
             Triple("Home", R.drawable.nav_home, "home"),
             Triple("TV Shows", R.drawable.nav_series, "series"),
             Triple("Movies", R.drawable.nav_movies, "movies"),
-            Triple("Requests", R.drawable.ic_download, "requests"),
+            Triple("Music", R.drawable.nav_new, "music"),
+            Triple("Discover", R.drawable.ic_download, "requests"),
             Triple("Search", R.drawable.nav_search, "search")
         )
 
-        navTabs.forEach { (title, icon, tabKey) ->
+        navTabs.filter { it.third != "music" || !settings.isKids }.forEach { (title, icon, tabKey) ->
             val isActive = (tabKey == "search" && screen == "search") || (tabKey != "search" && currentTab == tabKey && screen != "search")
             val item = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER
@@ -459,12 +470,14 @@ class MainActivity : AppCompatActivity() {
             Triple("Home", R.drawable.nav_home, { loadTab("home") }),
             Triple("TV Shows", R.drawable.nav_series, { loadTab("series") }),
             Triple("Movies", R.drawable.nav_movies, { loadTab("movies") }),
-            Triple("Requests", R.drawable.nav_new, { loadTab("requests") }),
+            Triple("Music", R.drawable.nav_new, { loadTab("music") }),
+            Triple("Discover", R.drawable.ic_download, { loadTab("requests") }),
+            Triple("Music player", R.drawable.nav_new, { musicControls() }),
             Triple("More", R.drawable.ic_menu, { showTvBrowseMenu() }),
             Triple("My List", R.drawable.nav_list, { myHomeStream() }),
             Triple("Profiles", R.drawable.nav_profile, { profiles() }),
             Triple("Settings", R.drawable.nav_settings, { openServerSettingsDialog() })
-        ).filter { (it.first != "Profiles" || settings.canUseProfiles) && (it.first != "Downloads" || settings.kidsRating.isBlank()) }
+        ).filter { (it.first !in listOf("Music", "Music player") || !settings.isKids) && (it.first != "Profiles" || settings.canUseProfiles) && (it.first != "Downloads" || settings.kidsRating.isBlank()) }
 
         val buttons = entries.map { (title, icon, click) ->
             action("", click = click).apply {
@@ -473,7 +486,8 @@ class MainActivity : AppCompatActivity() {
                     "Home" -> screen == "home" && currentTab == "home"
                     "Movies" -> currentTab == "movies" && screen == "home"
                     "TV Shows" -> currentTab == "series" && screen == "home"
-                    "Requests" -> currentTab == "requests" && screen == "home"
+                    "Discover" -> currentTab == "requests"
+                    "Music" -> currentTab == "music"
                     "Search" -> screen == "search"
                     "My List" -> screen == "mine"
                     "More" -> screen.startsWith("catalog-") || screen.startsWith("categories-") || screen == "downloads"
@@ -583,7 +597,7 @@ class MainActivity : AppCompatActivity() {
 
         // Section: Jellyfin Media (A–Z)
         panel.addView(TextView(this).apply {
-            text = "JELLYFIN MEDIA (A–Z)"; textSize = 11f; typeface = android.graphics.Typeface.DEFAULT_BOLD
+            text = "MEDIA LIBRARY (A–Z)"; textSize = 11f; typeface = android.graphics.Typeface.DEFAULT_BOLD
             setTextColor(MUTED); setPadding(0, 0, 0, dp(4))
         })
         panel.addView(TextView(this).apply {
@@ -595,16 +609,17 @@ class MainActivity : AppCompatActivity() {
         val libs = listOf(
             Triple("Movies", "All movies on your Jellyfin server", "movies"),
             Triple("TV Shows", "All series on your Jellyfin server", "tv"),
+            Triple("Music", "Albums and music playback", "music"),
             Triple("YouTube", "Downloaded YouTube library", "youtube")
         )
 
-        libs.forEach { (name, desc, type) ->
+        libs.filter { it.third != "music" || !settings.isKids }.forEach { (name, desc, type) ->
             val btn = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
                 background = rounded(0x18FFFFFF.toInt())
                 setPadding(dp(14), dp(12), dp(14), dp(12))
                 isClickable = true
-                setOnClickListener { closeSidebar(); loadCatalog(type) }
+                setOnClickListener { closeSidebar(); if (type == "music") loadTab("music") else loadCatalog(type) }
             }
             val textCol = column().apply { layoutParams = LinearLayout.LayoutParams(0, -2, 1f) }
             textCol.addView(label(name, 14f, true))
@@ -681,6 +696,7 @@ class MainActivity : AppCompatActivity() {
     // Top Tabs Loading: Home, TV Shows, Movies, Requests
     // -----------------------------------------------------------------------------------------
     private fun loadTab(tab: String) {
+        if (tab == "requests" || tab == "music") { mediaHub(tab); return }
         rememberScreen(tab) { loadTab(tab) }
         heroRotationJob?.cancel()
         currentTab = tab
@@ -1892,6 +1908,8 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private val videoRequests = mutableSetOf<String>()
+
     private fun requestMediaTitle(media: Media, onSuccess: (() -> Unit)? = null) {
         val tmdb = if (media.tmdbId > 0) media.tmdbId else {
             val strId = media.id.replace("^seerr-(?:movie-|tv-)?".toRegex(), "")
@@ -1901,6 +1919,7 @@ class MainActivity : AppCompatActivity() {
             toast("Cannot request: TMDB ID not found for this title.")
             return
         }
+        if (!videoRequests.add(media.id)) return
         lifecycleScope.launch {
             try {
                 toast("Sending download request…")
@@ -1911,8 +1930,9 @@ class MainActivity : AppCompatActivity() {
                 toast(res.optString("message", "Request sent successfully! It will download automatically."))
                 onSuccess?.invoke()
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 toast(e.message ?: "Request failed")
-            }
+            } finally { videoRequests.remove(media.id) }
         }
     }
 
@@ -1985,6 +2005,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun play(item: Media, fromBeginning: Boolean = false) {
+        stopService(Intent(this, MusicService::class.java))
         playbackWasLaunched = true
         startActivity(Intent(this, PlayerActivity::class.java)
             .putExtra("media", item.json.toString())
@@ -1998,6 +2019,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun profiles() {
+        stopService(Intent(this, MusicService::class.java))
         if (!settings.canUseProfiles) return
         profilePage.launch(Intent(this, ProfilesActivity::class.java))
         if (android.os.Build.VERSION.SDK_INT >= 34) overrideActivityTransition(OVERRIDE_TRANSITION_OPEN, android.R.anim.fade_in, android.R.anim.fade_out)
@@ -2005,6 +2027,22 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun openServerSettingsDialog() {
+        lifecycleScope.launch {
+            try {
+                if (api.call("capabilities").optBoolean("canManageIntegrations")) {
+                    AlertDialog.Builder(this@MainActivity).setTitle("Server settings")
+                        .setItems(arrayOf("Connection", "Admin integrations")) { _, choice ->
+                            if (choice == 1) adminIntegrations() else connectionSettingsDialog()
+                        }.show()
+                } else connectionSettingsDialog()
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                connectionSettingsDialog()
+            }
+        }
+    }
+
+    private fun connectionSettingsDialog() {
         val form = column().apply { setPadding(dp(20), dp(12), dp(20), dp(12)) }
 
         form.addView(label("Connected Server", 16f, true).apply { setPadding(0, 0, 0, dp(6)) })
@@ -2495,6 +2533,276 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         trailerView?.apply { stopLoading(); destroy() }; trailerView = null
         super.onDestroy()
+    }
+
+    private var hubJob: Job? = null
+    private var hubSearch: Job? = null
+    private val albumRequests = mutableSetOf<String>()
+    private var hubFilter = "all"
+    private var hubQuery = ""
+    private var musicQuery = ""
+    private var musicCategory = "albums"
+    private var musicArtist: String? = null
+
+    private fun hubFilters(target: LinearLayout, selected: String, change: (String) -> Unit) {
+        val row = LinearLayout(this)
+        listOf("all" to "All media", "movie" to "Movies", "tv" to "TV", "music" to "Music")
+            .filter { it.first != "music" || !settings.isKids }.forEach { (key, title) ->
+                row.addView(categoryPill(title, key == selected) { change(key) })
+            }
+        target.addView(HorizontalScrollView(this).apply { addView(row) })
+    }
+
+    private fun mediaHub(tab: String) {
+        if (tab == "music" && settings.isKids) return
+        rememberScreen(tab) { mediaHub(tab) }
+        work?.cancel(); hubJob?.cancel(); hubSearch?.cancel(); ++generation
+        currentTab = tab; screen = tab
+        if (hubFilter == "music" && settings.isKids) hubFilter = "all"
+        shell()
+        heading(if (tab == "music") "Music" else "Discover")
+        if (tab == "music") {
+            val categories = LinearLayout(this)
+            listOf("artists" to "Artists", "albums" to "Albums", "songs" to "Songs").forEach { (key, title) ->
+                categories.addView(categoryPill(title, musicCategory == key) { musicCategory = key; musicArtist = null; mediaHub("music") })
+            }
+            content.addView(HorizontalScrollView(this).apply { addView(categories) })
+        }
+        if (tab != "music") hubFilters(content, hubFilter) { hubFilter = it; mediaHub(tab) }
+        if (tab == "requests" && hubFilter != "music") content.addView(action("Browse video categories") { loadCategories("requests") })
+        val results = column().apply { setPadding(gutter, dp(8), gutter, dp(12)) }
+        val input = EditText(this).apply {
+            hint = if (tab == "music") "Search artists and albums" else "Search movies, TV and albums"
+            setTextColor(Color.WHITE); setHintTextColor(MUTED)
+            setSingleLine(); inputType = InputType.TYPE_CLASS_TEXT
+            setText(if (tab == "music") musicQuery else hubQuery)
+        }
+        content.addView(input)
+        input.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                hubSearch?.cancel(); hubJob?.cancel()
+                val query = s.toString().trim()
+                if (tab == "music") { musicQuery = query; musicArtist = null } else hubQuery = query
+                hubSearch = lifecycleScope.launch { delay(400); discoverResults(results, query, if (tab == "music") "music" else hubFilter) }
+            }
+            override fun afterTextChanged(s: Editable?) {}
+        })
+        content.addView(results)
+        if (!settings.isKids) content.addView(action("Open music player") { musicControls() })
+        hubJob = lifecycleScope.launch { discoverResults(results, input.text.toString(), if (tab == "music") "music" else hubFilter) }
+    }
+
+    private suspend fun discoverResults(target: LinearLayout, query: String, filter: String) {
+        target.removeAllViews(); target.addView(label("Loading…"))
+        val staged = column()
+        try {
+            if (filter != "music") {
+                try {
+                    val data = api.call(if (query.isBlank()) "home" else "search", if (query.isBlank()) emptyMap() else mapOf("q" to query))
+                    val items = if (query.isBlank()) data.objects("requestSections").flatMap { it.mediaList("items") }
+                        else data.mediaList("results")
+                    items.distinctBy { it.id }.filter {
+                        filter == "all" || (filter == "movie" && it.type == "Movie") || (filter == "tv" && it.type in listOf("Series", "Episode"))
+                    }.forEach { item ->
+                        val card = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL; setPadding(dp(8), dp(8), dp(8), dp(8)); focusableCard() }
+                        card.addView(ImageView(this).apply { scaleType = ImageView.ScaleType.CENTER_CROP; load(api.absolute(item.poster)) }, LinearLayout.LayoutParams(dp(64), dp(92)))
+                        card.addView(label("${item.title}\n${item.type} • ${item.metadata}"), LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = dp(12) })
+                        card.setOnClickListener { details(item) }
+                        staged.addView(card, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
+                    }
+                } catch (e: Exception) {
+                    if (e is kotlinx.coroutines.CancellationException) throw e
+                    staged.addView(label(e.message ?: "Video discovery is unavailable"))
+                }
+            }
+            if (filter in listOf("all", "music") && !settings.isKids) {
+                try {
+                    var offset = 0
+                    val musicAlbums = mutableListOf<MusicAlbum>()
+                    val librarySongs = currentTab == "music" && musicCategory == "songs"
+                    val seen = mutableSetOf<String>()
+                    do {
+                        val page = api.call("music", if (query.isBlank() || librarySongs) mapOf("offset" to "$offset") else mapOf("q" to query))
+                        if (!page.optBoolean("configured")) { staged.addView(label("Music is not configured")); break }
+                        val albums = page.objects("albums").map(::MusicAlbum)
+                        musicAlbums.addAll(albums.filter { seen.add(it.id) })
+                        offset += albums.size
+                        if (albums.isEmpty() || (query.isNotBlank() && !librarySongs) || offset >= page.optInt("total")) break
+                    } while (true)
+                    when {
+                        currentTab == "music" && musicCategory == "artists" -> {
+                            val artists = musicAlbums.groupBy { it.artist }.toSortedMap(String.CASE_INSENSITIVE_ORDER)
+                            val selected = musicArtist
+                            if (selected == null) artists.forEach { (artist, albums) ->
+                                staged.addView(action("$artist • ${albums.size} albums") { musicArtist = artist; mediaHub("music") })
+                            } else {
+                                staged.addView(action("All artists") { musicArtist = null; mediaHub("music") })
+                                staged.addView(label(selected, 20f, true))
+                                artists[selected].orEmpty().forEach { albumCard(staged, it) }
+                            }
+                        }
+                        librarySongs -> {
+                            musicAlbums.filter { it.inLibrary }.forEach { album ->
+                                val tracks = api.call("music/album", mapOf("albumId" to album.id)).objects("tracks").map(::MusicTrack)
+                                tracks.forEachIndexed { index, track ->
+                                    if (query.isBlank() || listOf(track.title, album.title, album.artist).any { it.contains(query, ignoreCase = true) }) {
+                                        staged.addView(action("${track.title}\n${album.artist} • ${album.title}") { startMusicTracks(tracks, album, index) }.apply { layoutParams = LinearLayout.LayoutParams(-1, -2) })
+                                    }
+                                }
+                            }
+                            if (staged.childCount == 0) staged.addView(label("No imported songs found"))
+                        }
+                        else -> musicAlbums.forEach { albumCard(staged, it) }
+                    }
+                    if (query.isNotBlank() && !librarySongs) staged.addView(label("Showing up to 30 catalog albums. Refine your search for more.", 12f))
+                } catch (e: Exception) {
+                    if (e is kotlinx.coroutines.CancellationException) throw e
+                    staged.addView(label(e.message ?: "Music is unavailable"))
+                }
+            }
+            target.removeAllViews()
+            if (staged.childCount == 0) target.addView(label("No results"))
+            while (staged.childCount > 0) { val child = staged.getChildAt(0); staged.removeViewAt(0); target.addView(child) }
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            target.removeAllViews(); target.addView(label(e.message ?: "Discover is unavailable"))
+        }
+    }
+
+    private fun albumCard(target: LinearLayout, album: MusicAlbum) {
+        val card = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL; setPadding(dp(8), dp(8), dp(8), dp(8)); focusableCard() }
+        val cover = ImageView(this).apply {
+            contentDescription = "${album.title} cover"; setImageResource(R.drawable.nav_new)
+            album.json.optString("coverUrl").takeIf { it.isNotBlank() && it != "null" }?.let { load(api.absolute(it)) { placeholder(R.drawable.nav_new); error(R.drawable.nav_new) } }
+        }
+        card.addView(cover, LinearLayout.LayoutParams(dp(64), dp(64)))
+        card.addView(label("${album.title}\n${album.artist}\n${if (album.inLibrary) "In library" else if (album.requested) "Requested" else "Album"}"), LinearLayout.LayoutParams(0, -2, 1f))
+        card.setOnClickListener { openAlbum(album) }
+        target.addView(card, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
+    }
+
+    private fun openAlbum(album: MusicAlbum) {
+        lifecycleScope.launch {
+            try {
+                val data = api.call("music/album", mapOf("albumId" to album.id))
+                val current = MusicAlbum(data.getJSONObject("album"))
+                val tracks = data.objects("tracks").map(::MusicTrack)
+                val form = column().apply { setPadding(dp(20), dp(12), dp(20), dp(12)) }
+                form.addView(label(current.artist))
+                form.addView(label("Release: ${releaseLabel(current.json.optString("releaseDate").ifBlank { current.json.optString("year") })}"))
+                val dialog = AlertDialog.Builder(this@MainActivity).setTitle(current.title)
+                    .setView(ScrollView(this@MainActivity).apply { addView(form) }).setNegativeButton("Close", null).create()
+                if (tracks.isEmpty()) {
+                    form.addView(label(if (current.requested) "Requested • awaiting download/import" else "Not imported yet"))
+                    if (!current.requested) form.addView(action("Request album") {
+                        if (albumRequests.add(current.id)) {
+                            dialog.dismiss()
+                            lifecycleScope.launch {
+                                try {
+                                    val response = api.call("music/request", body = JSONObject().put("musicbrainzId", current.id))
+                                    toast(response.optString("message", response.optString("status", "Request submitted")))
+                                    if (response.optBoolean("success")) mediaHub(if (currentTab == "music") "music" else "requests")
+                                } catch (e: Exception) {
+                                    if (e is kotlinx.coroutines.CancellationException) throw e
+                                    toast(e.message ?: "Album request failed")
+                                } finally { albumRequests.remove(current.id) }
+                            }
+                        }
+                    }.apply { isEnabled = current.id !in albumRequests })
+                } else tracks.forEachIndexed { index, track ->
+                    form.addView(action("${track.json.optInt("trackNumber")}  ${track.title}") {
+                        dialog.dismiss()
+                        startMusicTracks(tracks, current, index)
+                    })
+                }
+                dialog.show()
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                toast(e.message ?: "Album unavailable")
+            }
+        }
+    }
+
+    private fun startMusicTracks(tracks: List<MusicTrack>, album: MusicAlbum, index: Int) {
+        if (settings.isKids) return
+        val payload = org.json.JSONArray().apply {
+            tracks.forEach { put(JSONObject(it.json.toString()).put("coverUrl", album.json.optString("coverUrl"))) }
+        }
+        castContext(this)?.sessionManager?.currentCastSession?.remoteMediaClient?.stop()
+        androidx.core.content.ContextCompat.startForegroundService(this,
+            Intent(this, MusicService::class.java).putExtra("tracks", payload.toString()).putExtra("index", index))
+        musicControls()
+    }
+
+    private fun musicControls() {
+        if (!settings.isKids) startActivity(Intent(this, MusicPlayerActivity::class.java))
+    }
+
+    private fun adminIntegrations() {
+        lifecycleScope.launch {
+            try {
+                if (!api.call("capabilities").optBoolean("canManageIntegrations")) { toast("Administrator sign-in required"); return@launch }
+                val data = api.call("integrations")
+                val form = column().apply { setPadding(dp(20), dp(12), dp(20), dp(12)) }
+                data.objects("integrations").forEach { integration ->
+                    form.addView(action("${integration.optString("name")} • ${if (integration.optBoolean("configured")) "Configured" else "Disconnected"}") { editIntegration(integration, data.optString("downloadsPath")) })
+                }
+                AlertDialog.Builder(this@MainActivity).setTitle("Admin integrations").setView(form).setNegativeButton("Close", null).show()
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                toast(e.message ?: "Integrations unavailable")
+            }
+        }
+    }
+
+    private fun editIntegration(integration: JSONObject, downloadsPath: String) {
+        val form = column().apply { setPadding(dp(20), dp(12), dp(20), dp(12)) }
+        fun field(hintText: String, value: String = "", secret: Boolean = false) = EditText(this).apply {
+            hint = hintText; setText(value); setTextColor(Color.WHITE); setHintTextColor(MUTED)
+            inputType = if (secret) InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD else InputType.TYPE_CLASS_TEXT
+            importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS
+            isSaveEnabled = false; form.addView(this)
+        }
+        val url = field("HTTP(S) URL; blank disconnects", integration.optString("url"))
+        val secret = field(if (integration.optBoolean("credentialSet")) "Credential saved; blank preserves" else "Credential", secret = true)
+        val username = if (integration.optString("id") == "qbittorrent") field("Username", integration.optString("username")) else null
+        val path = if (username != null) field("Backend downloads path", downloadsPath) else null
+        val pin = field("Parent PIN (if required)", secret = true)
+        val status = label(""); form.addView(status)
+        val dialog = AlertDialog.Builder(this).setTitle(integration.optString("name")).setView(ScrollView(this).apply { addView(form) })
+            .setNegativeButton("Cancel", null).setPositiveButton("Save", null).setNeutralButton("Test", null).create()
+        dialog.setOnShowListener {
+            fun submit(action: String) {
+                val parsed = url.text.toString().trim().toHttpUrlOrNull()
+                if (url.text.isNotBlank() && (parsed == null || parsed.username.isNotEmpty() || parsed.password.isNotEmpty() || parsed.query != null || parsed.fragment != null)) {
+                    status.text = "Enter an HTTP(S) URL without credentials, query or fragment"; return
+                }
+                val payload = JSONObject().put("integration", integration.optString("id")).put("action", action)
+                    .put("url", url.text.toString().trim()).put("secret", secret.text.toString())
+                username?.let { payload.put("username", it.text.toString()) }; path?.let { payload.put("downloadsPath", it.text.toString()) }
+                if (pin.text.isNotBlank()) payload.put("parentPin", pin.text.toString())
+                dialog.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled = false
+                dialog.getButton(AlertDialog.BUTTON_NEUTRAL).isEnabled = false
+                lifecycleScope.launch {
+                    try {
+                        val response = api.call("integrations", body = payload)
+                        status.text = if (response.optBoolean("success")) if (action == "save") "Saved" else "Connection successful" else "Connection test failed"
+                        if (action == "save") { secret.text.clear(); pin.text.clear() }
+                    } catch (e: Exception) {
+                        if (e is kotlinx.coroutines.CancellationException) throw e
+                        status.text = e.message ?: "Integration operation failed"
+                    } finally {
+                        payload.remove("secret"); payload.remove("parentPin")
+                        dialog.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled = true
+                        dialog.getButton(AlertDialog.BUTTON_NEUTRAL).isEnabled = true
+                    }
+                }
+            }
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener { submit("save") }
+            dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener { submit("test") }
+        }
+        dialog.setOnDismissListener { secret.text.clear(); pin.text.clear() }; dialog.show()
     }
 
     private fun heading(text: String, size: Float = 20f) = label(text, size, true).apply {
