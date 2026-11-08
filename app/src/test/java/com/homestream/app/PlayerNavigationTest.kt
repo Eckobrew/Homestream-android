@@ -98,6 +98,105 @@ class PlayerNavigationTest {
         }
     }
 
+    @Test fun playerOverlayDefaultsToPlayPause() {
+        val media = JSONObject().put("id", "movie").put("title", "Movie").put("type", "Movie")
+        val intent = Intent(RuntimeEnvironment.getApplication(), PlayerActivity::class.java).putExtra("media", media.toString())
+        Robolectric.buildActivity(PlayerActivity::class.java, intent).create().visible().use { controller ->
+            val activity = controller.get()
+            val playPause = activity.findViewById<android.view.View>(androidx.media3.ui.R.id.exo_play_pause)
+            assertTrue(playPause.isFocusedByDefault)
+            // The control is disabled before a player is attached.
+            val playerView = PlayerActivity::class.java.getDeclaredField("playerView").apply { isAccessible = true }.get(activity) as androidx.media3.ui.PlayerView
+            playerView.showController()
+            playPause.isEnabled = true
+            playPause.isFocusableInTouchMode = true
+            PlayerActivity::class.java.getDeclaredMethod("focusPlaybackControl").apply { isAccessible = true }.invoke(activity)
+            assertTrue(playPause.hasFocus())
+        }
+    }
+
+    @Test fun tvRemoteCenterPausesAndRevealsControlsAndBackDismissesThem() {
+        val app = RuntimeEnvironment.getApplication()
+        val uiMode = app.getSystemService(android.content.Context.UI_MODE_SERVICE) as android.app.UiModeManager
+        shadowOf(uiMode).setCurrentModeType(android.content.res.Configuration.UI_MODE_TYPE_TELEVISION)
+        val media = JSONObject().put("id", "movie").put("title", "Movie").put("type", "Movie")
+        val intent = Intent(app, PlayerActivity::class.java).putExtra("media", media.toString())
+        Robolectric.buildActivity(PlayerActivity::class.java, intent).create().visible().use { controller ->
+            val activity = controller.get()
+            val view = PlayerActivity::class.java.getDeclaredField("playerView").apply { isAccessible = true }
+                .get(activity) as androidx.media3.ui.PlayerView
+            view.setControllerAnimationEnabled(false)
+            view.hideController()
+            assertTrue(activity.dispatchKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_DPAD_CENTER)))
+            assertTrue(view.isControllerFullyVisible)
+            assertFalse(PlayerActivity::class.java.getDeclaredField("wantsPlay").apply { isAccessible = true }.getBoolean(activity))
+            assertTrue(activity.dispatchKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_UP, android.view.KeyEvent.KEYCODE_DPAD_CENTER)))
+            (activity.lifecycle as androidx.lifecycle.LifecycleRegistry).handleLifecycleEvent(androidx.lifecycle.Lifecycle.Event.ON_START)
+            activity.onBackPressedDispatcher.onBackPressed()
+            assertFalse(view.isControllerFullyVisible)
+            assertFalse(activity.isFinishing)
+            activity.onBackPressedDispatcher.onBackPressed()
+            assertTrue(activity.isFinishing)
+        }
+    }
+
+    @Test fun tvRemoteSeeksTenSecondsWithoutOpeningOverlay() {
+        val app = RuntimeEnvironment.getApplication()
+        shadowOf(app.getSystemService(android.content.Context.UI_MODE_SERVICE) as android.app.UiModeManager)
+            .setCurrentModeType(android.content.res.Configuration.UI_MODE_TYPE_TELEVISION)
+        val intent = Intent(app, PlayerActivity::class.java).putExtra("media",
+            JSONObject().put("id", "movie").put("type", "Movie").toString())
+        Robolectric.buildActivity(PlayerActivity::class.java, intent).create().visible().use { controller ->
+            val activity = controller.get()
+            val view = PlayerActivity::class.java.getDeclaredField("playerView").apply { isAccessible = true }
+                .get(activity) as androidx.media3.ui.PlayerView
+            var playbackPosition = 5000L
+            var playing = true
+            val exo = java.lang.reflect.Proxy.newProxyInstance(
+                androidx.media3.exoplayer.ExoPlayer::class.java.classLoader,
+                arrayOf(androidx.media3.exoplayer.ExoPlayer::class.java)
+            ) { _, method, args ->
+                when (method.name) {
+                    "getCurrentPosition" -> playbackPosition
+                    "getDuration" -> 20000L
+                    "isCommandAvailable" -> true
+                    "seekTo" -> { playbackPosition = args!!.last() as Long; null }
+                    "pause" -> { playing = false; null }
+                    else -> null
+                }
+            } as androidx.media3.exoplayer.ExoPlayer
+            try {
+                PlayerActivity::class.java.getDeclaredField("player").apply { isAccessible = true }.set(activity, exo)
+                view.setControllerAnimationEnabled(false)
+                view.hideController()
+                fun press(key: Int) {
+                    activity.dispatchKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, key))
+                    activity.dispatchKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_UP, key))
+                }
+                press(android.view.KeyEvent.KEYCODE_DPAD_RIGHT)
+                assertEquals(15000L, exo.currentPosition)
+                press(android.view.KeyEvent.KEYCODE_DPAD_RIGHT)
+                assertEquals(20000L, exo.currentPosition)
+                press(android.view.KeyEvent.KEYCODE_DPAD_LEFT)
+                assertEquals(10000L, exo.currentPosition)
+                playbackPosition = 15000L
+                press(android.view.KeyEvent.KEYCODE_DPAD_LEFT)
+                assertEquals(5000L, exo.currentPosition)
+                press(android.view.KeyEvent.KEYCODE_DPAD_LEFT)
+                assertEquals(0L, exo.currentPosition)
+                assertFalse(view.isControllerFullyVisible)
+                playing = true
+                view.hideController()
+                press(android.view.KeyEvent.KEYCODE_DPAD_CENTER)
+                assertFalse(playing)
+                assertTrue(view.isControllerFullyVisible)
+            } finally {
+                view.player = null
+                PlayerActivity::class.java.getDeclaredField("player").apply { isAccessible = true }.set(activity, null)
+            }
+        }
+    }
+
     @Test fun showingCastStatusWithoutRemoteDoesNotOpenController() {
         val media = JSONObject().put("id", "movie").put("title", "Movie").put("type", "Movie")
         val intent = Intent(RuntimeEnvironment.getApplication(), PlayerActivity::class.java).putExtra("media", media.toString())

@@ -15,6 +15,24 @@ class HomeStreamApiTest {
         override val token = this@HomeStreamApiTest.token
         override var profile = "profile & one"
     }
+    @Test fun profileRequestsOmitEmptyPinsAndPreserveSuppliedPins() = runBlocking {
+        MockWebServer().use { server ->
+            val api = HomeStreamApi(settings(server.url("/").toString()))
+            for (path in listOf("profiles", "profiles/select", "profiles/users")) {
+                for (pin in listOf("", "1234")) {
+                    server.enqueue(MockResponse().setBody("""{"success":true}"""))
+                    val original = JSONObject().put("parentPin", pin).put("profileId", "test-profile")
+                    api.call(path, body = original)
+                    val sent = JSONObject(server.takeRequest().body.readUtf8())
+                    assertEquals("test-profile", sent.getString("profileId"))
+                    if (pin.isEmpty()) assertFalse(sent.has("parentPin"))
+                    else assertEquals(pin, sent.getString("parentPin"))
+                    assertEquals("Request serialization must not mutate the caller's body", pin, original.getString("parentPin"))
+                }
+            }
+        }
+    }
+
     @Test fun requestsUseVersionedPathAndSelectedProfile() = runBlocking {
         MockWebServer().use { server ->
             server.enqueue(MockResponse().setBody("{\"apiVersion\":1}"))

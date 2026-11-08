@@ -82,6 +82,10 @@ class HomeStreamApi(private val settings: ConnectionSettings) {
             .header("Accept", "application/json")
         if (body != null) {
             val payload = JSONObject(body.toString()).put("userId", profile)
+            // An optional PIN must be absent, rather than empty, when none is required.
+            if ((path == "profiles" || path.startsWith("profiles/")) && payload.optString("parentPin").isBlank()) {
+                payload.remove("parentPin")
+            }
             request.post(payload.toString().toRequestBody("application/json".toMediaType()))
         }
         return client.newCall(request.build()).execute().use { response ->

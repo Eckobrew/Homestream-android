@@ -55,6 +55,8 @@ class PlayerActivity : AppCompatActivity() {
     private lateinit var playerView: PlayerView
     private lateinit var overlay: LinearLayout
     private var player: ExoPlayer? = null
+    private var revealingControlsKey: Int? = null
+    private var hiddenSeekKey: Int? = null
     private var castControllerOpened = false
     private var knownDurationMs = 0L
     private var position = 0L
@@ -215,6 +217,15 @@ class PlayerActivity : AppCompatActivity() {
             setShowSubtitleButton(true); setShowBuffering(PlayerView.SHOW_BUFFERING_ALWAYS)
             controllerAutoShow = true; controllerShowTimeoutMs = if (isTelevision()) 6000 else 4000
         }
+        playerView.findViewById<View>(androidx.media3.ui.R.id.exo_play_pause)?.isFocusedByDefault = true
+        if (isTelevision()) {
+            configureRemoteControls()
+            onBackPressedDispatcher.addCallback(this, object : androidx.activity.OnBackPressedCallback(true) {
+                override fun handleOnBackPressed() {
+                    if (playerView.isControllerFullyVisible) playerView.hideController() else finish()
+                }
+            })
+        }
         subtitleAppearance.apply(playerView.subtitleView)
         playerView.findViewById<View>(androidx.media3.ui.R.id.exo_settings)?.setOnClickListener {
             showPlayerSettings()
@@ -342,6 +353,7 @@ class PlayerActivity : AppCompatActivity() {
         playerView.setControllerVisibilityListener(PlayerView.ControllerVisibilityListener { visible ->
             overlay.visibility = if (visible == View.VISIBLE || remote != null) View.VISIBLE else View.GONE
             updateEpisodeNavigation()
+            if (visible == View.VISIBLE) focusPlaybackControl()
         })
         setContentView(frame)
         ViewCompat.setOnApplyWindowInsetsListener(frame) { view, insets ->
@@ -588,8 +600,8 @@ class PlayerActivity : AppCompatActivity() {
             exo.prepare()
             exo.playWhenReady = wantsPlay
         }
-        playerView.requestFocus()
         playerView.showController()
+        focusPlaybackControl()
     }
 
     private suspend fun resolvePlaybackId(): String {
@@ -750,7 +762,7 @@ class PlayerActivity : AppCompatActivity() {
                     })
                     exo.setMediaItem(item); exo.seekTo(position); exo.prepare(); exo.playWhenReady = wantsPlay
                 }
-                playerView.requestFocus(); playerView.showController()
+                playerView.showController(); focusPlaybackControl()
             } catch (_: kotlinx.coroutines.CancellationException) {
             } catch (e: Exception) {
                 clearMessages()
@@ -1016,26 +1028,69 @@ class PlayerActivity : AppCompatActivity() {
             .setItems(labels) { _, index -> selectEpisode(episodes.items[index]) }.setNegativeButton("Close", null).show()
     }
 
-    private fun showPlayerSettings() {
-        androidx.appcompat.app.AlertDialog.Builder(this, R.style.Theme_HomeStream_PlayerPanel).setTitle("Player settings")
-            .setItems(arrayOf("Playback speed", "Audio", "Subtitle appearance")) { _, choice ->
-                when (choice) {
-                    0 -> {
-                        val exo = player ?: return@setItems
-                        val speeds = floatArrayOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f)
-                        val selected = speeds.indexOfFirst { kotlin.math.abs(it - exo.playbackParameters.speed) < 0.01f }
-                        androidx.appcompat.app.AlertDialog.Builder(this, R.style.Theme_HomeStream_PlayerPanel).setTitle("Playback speed")
-                            .setSingleChoiceItems(speeds.map { "${it}×" }.toTypedArray(), selected) { dialog, index ->
-                                exo.setPlaybackSpeed(speeds[index]); dialog.dismiss()
-                            }.setNegativeButton("Cancel", null).create().showPlayerPanel()
+    private fun seekWithRemote(offsetMs: Long) {
+        val exo = player ?: return
+        if (!exo.isCommandAvailable(Player.COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM)) return
+        val duration = exo.duration.takeIf { it > 0 } ?: knownDurationMs.takeIf { it > 0 } ?: Long.MAX_VALUE
+        exo.seekTo((exo.currentPosition + offsetMs).coerceIn(0L, duration))
+    }
+
+    private fun configureRemoteControls() {
+        val controls = listOf(androidx.media3.ui.R.id.exo_play_pause, androidx.media3.ui.R.id.exo_prev,
+            androidx.media3.ui.R.id.exo_next, androidx.media3.ui.R.id.exo_rew,
+            androidx.media3.ui.R.id.exo_ffwd, androidx.media3.ui.R.id.exo_settings,
+            androidx.media3.ui.R.id.exo_subtitle)
+        for (id in controls) {
+            playerView.findViewById<View>(id)?.apply {
+                background = android.graphics.drawable.StateListDrawable().apply {
+                    fun highlight(color: Int) = GradientDrawable().apply {
+                        setColor(color); cornerRadius = dp(8).toFloat()
+                        setStroke(dp(2), Color.WHITE)
                     }
-                    1 -> player?.let { exo ->
-                        androidx.media3.ui.TrackSelectionDialogBuilder(this, "Audio", exo, C.TRACK_TYPE_AUDIO)
-                            .setTheme(R.style.Theme_HomeStream_PlayerPanel).build().showPlayerPanel()
-                    }
-                    2 -> subtitleAppearance.show(this, playerView.subtitleView)
+                    addState(intArrayOf(android.R.attr.state_pressed), highlight(0x99E50914.toInt()))
+                    addState(intArrayOf(android.R.attr.state_focused), highlight(0x55FFFFFF))
+                    addState(intArrayOf(), android.graphics.drawable.ColorDrawable(Color.TRANSPARENT))
                 }
-            }.setNegativeButton("Close", null).create().showPlayerPanel()
+            }
+        }
+    }
+
+    private fun focusPlaybackControl() {
+        playerView.findViewById<View>(androidx.media3.ui.R.id.exo_play_pause)?.requestFocus()
+    }
+
+    private fun showPlayerSettings() {
+        showPlayerChoices(playerView, listOf("Playback speed", "Audio", "Subtitle appearance")) { choice ->
+            when (choice) {
+                0 -> {
+                    val exo = player ?: return@showPlayerChoices
+                    val speeds = floatArrayOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f)
+                    val selected = speeds.indexOfFirst { kotlin.math.abs(it - exo.playbackParameters.speed) < 0.01f }
+                    showPlayerChoices(playerView, speeds.map { "${it}×" }, selected) { index ->
+                        exo.setPlaybackSpeed(speeds[index])
+                    }
+                }
+                1 -> player?.let { exo ->
+                    val tracks = exo.currentTracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }
+                        .flatMap { group -> (0 until group.length).filter { group.isTrackSupported(it) }.map { group to it } }
+                    val names = androidx.media3.ui.DefaultTrackNameProvider(resources)
+                    val selected = tracks.indexOfFirst { (group, index) -> group.isTrackSelected(index) } + 1
+                    showPlayerChoices(playerView, listOf("Auto") + tracks.map { (group, index) ->
+                        names.getTrackName(group.getTrackFormat(index))
+                    }, selected) { choice ->
+                        val parameters = exo.trackSelectionParameters.buildUpon()
+                            .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, false)
+                            .clearOverridesOfType(C.TRACK_TYPE_AUDIO)
+                        if (choice > 0) {
+                            val (group, index) = tracks[choice - 1]
+                            parameters.addOverride(androidx.media3.common.TrackSelectionOverride(group.mediaTrackGroup, index))
+                        }
+                        exo.trackSelectionParameters = parameters.build()
+                    }
+                }
+                2 -> subtitleAppearance.show(this, playerView)
+            }
+        }
     }
 
     private fun showCastSubtitles() {
@@ -1155,6 +1210,30 @@ class PlayerActivity : AppCompatActivity() {
         super.onDestroy()
     }
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (isTelevision()) {
+            if (event.keyCode in listOf(KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT) &&
+                (hiddenSeekKey == event.keyCode || !playerView.isControllerFullyVisible)) {
+                if (event.action == KeyEvent.ACTION_DOWN) {
+                    hiddenSeekKey = event.keyCode
+                    seekWithRemote(if (event.keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) 10_000L else -10_000L)
+                } else if (event.action == KeyEvent.ACTION_UP) hiddenSeekKey = null
+                return true
+            }
+            if (event.keyCode == revealingControlsKey) {
+                if (event.action == KeyEvent.ACTION_UP) revealingControlsKey = null
+                return true
+            }
+            if (event.action == KeyEvent.ACTION_DOWN && !playerView.isControllerFullyVisible &&
+                event.keyCode in listOf(KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER)) {
+                revealingControlsKey = event.keyCode
+                wantsPlay = false
+                player?.pause()
+                playerView.showController()
+                focusPlaybackControl()
+                return true
+            }
+        }
+
         if (event.action == KeyEvent.ACTION_DOWN && event.keyCode == KeyEvent.KEYCODE_MEDIA_NEXT) { changeEpisode(1); return true }
         if (event.action == KeyEvent.ACTION_DOWN && event.keyCode == KeyEvent.KEYCODE_MEDIA_PREVIOUS) { changeEpisode(-1); return true }
         if (playerView.dispatchKeyEvent(event)) return true

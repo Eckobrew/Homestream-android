@@ -5,11 +5,7 @@ import android.graphics.Color
 import android.graphics.Typeface
 import android.view.Gravity
 import android.widget.TextView
-import android.content.res.ColorStateList
-import android.graphics.drawable.StateListDrawable
-import android.graphics.drawable.ColorDrawable
 import android.widget.LinearLayout
-import androidx.appcompat.app.AlertDialog
 import androidx.media3.ui.CaptionStyleCompat
 import androidx.media3.ui.SubtitleView
 
@@ -38,11 +34,12 @@ internal class SubtitleAppearance(context: Context) {
         ))
     }
 
-    fun show(context: Context, subtitles: SubtitleView?) {
+    fun show(context: Context, playerView: androidx.media3.ui.PlayerView) {
+        val subtitles = playerView.subtitleView
         val density = context.resources.displayMetrics.density
         val content = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
-            val padding = (20 * density).toInt()
+            val padding = (8 * density).toInt()
             setPadding(padding, padding / 2, padding, padding / 2)
         }
         val preview = SubtitleView(context).apply {
@@ -56,57 +53,49 @@ internal class SubtitleAppearance(context: Context) {
             setBackgroundColor(0x33000000)
             addView(preview, android.widget.FrameLayout.LayoutParams(-1, -1, Gravity.CENTER))
         }
-        content.addView(previewFrame, LinearLayout.LayoutParams(-1, (160 * density).toInt()))
+        content.addView(previewFrame, LinearLayout.LayoutParams(
+            context.resources.getDimensionPixelSize(androidx.media3.ui.R.dimen.exo_setting_width), (90 * density).toInt()))
         fun refresh() {
             apply(subtitles)
             apply(preview)
             preview.setFixedTextSize(android.util.TypedValue.COMPLEX_UNIT_SP,
                 18f * sizes[index("size", sizes.size, 1)].second)
         }
+        var panel: android.widget.PopupWindow? = null
         val refreshLabels = mutableListOf<() -> Unit>()
         fun option(title: String, key: String, names: List<String>, default: Int = 0) {
-            val button = TextView(context).apply {
-                textSize = 15f
-                setTextColor(ColorStateList(
-                    arrayOf(intArrayOf(android.R.attr.state_focused), intArrayOf()),
-                    intArrayOf(Color.WHITE, 0xFFE5E5E5.toInt())))
-                gravity = Gravity.CENTER_VERTICAL
-                setPadding((12 * density).toInt(), (16 * density).toInt(), (12 * density).toInt(), (16 * density).toInt())
-                isClickable = true; isFocusable = true
-                background = StateListDrawable().apply {
-                    addState(intArrayOf(android.R.attr.state_pressed), ColorDrawable(0x66E50914))
-                    addState(intArrayOf(android.R.attr.state_focused), ColorDrawable(0x55E50914))
-                    addState(intArrayOf(), ColorDrawable(Color.TRANSPARENT))
-                }
-            }
+            val row = android.view.LayoutInflater.from(context).inflate(
+                androidx.media3.ui.R.layout.exo_styled_sub_settings_list_item, content, false)
+            val button = row.findViewById<TextView>(androidx.media3.ui.R.id.exo_text)
+            row.isFocusable = true
             val update = { button.text = "$title: ${names[index(key, names.size, default)]}" }
             refreshLabels.add(update)
             update()
-            button.setOnClickListener {
-                AlertDialog.Builder(context, R.style.Theme_HomeStream_PlayerPanel).setTitle(title)
-                    .setSingleChoiceItems(names.toTypedArray(), index(key, names.size, default)) { dialog, choice ->
-                        prefs.edit().putInt(key, choice).putBoolean("customized", true).apply()
-                        update(); refresh(); dialog.dismiss()
-                    }.setNegativeButton("Cancel", null).create().showPlayerPanel()
+            row.setOnClickListener {
+                panel?.dismiss()
+                showPlayerChoices(playerView, names, index(key, names.size, default)) { choice ->
+                    prefs.edit().putInt(key, choice).putBoolean("customized", true).apply()
+                    update(); refresh()
+                    show(context, playerView)
+                }
             }
-            content.addView(button)
+            content.addView(row)
         }
         option("Text size", "size", sizes.map { it.first }, 1)
         option("Text colour", "color", colors.map { it.first })
         option("Background", "background", backgrounds.map { it.first }, 2)
         option("Text edge", "edge", edges.map { it.first })
         refresh()
-        AlertDialog.Builder(context, R.style.Theme_HomeStream_PlayerPanel).setTitle("Subtitle appearance")
-            .setView(android.widget.ScrollView(context).apply { addView(content) })
-            .setPositiveButton("Done", null)
-            .setNeutralButton("Reset", null)
-            .create().apply {
-                setOnShowListener {
-                    getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener {
-                        prefs.edit().clear().apply()
-                        refreshLabels.forEach { it() }; refresh()
-                    }
-                }
-            }.showPlayerPanel()
+        val reset = android.view.LayoutInflater.from(context).inflate(
+            androidx.media3.ui.R.layout.exo_styled_sub_settings_list_item, content, false).apply {
+            findViewById<TextView>(androidx.media3.ui.R.id.exo_text).text = "Reset to default"
+            isFocusable = true
+            setOnClickListener {
+                prefs.edit().clear().apply()
+                refreshLabels.forEach { it() }; refresh()
+            }
+        }
+        content.addView(reset)
+        panel = showPlayerPopup(playerView, android.widget.ScrollView(context).apply { addView(content) })
     }
 }
