@@ -2,7 +2,7 @@
 
 ## Android scope update — 8 November 2026
 
-The Android navigation follows the later product decision: Home, TV Shows, Movies, Music, Discover, Search. Requested is omitted from Android. Music is also above YouTube in the sidebar. Both Music entry points share Artists, Albums and Songs categories. Songs lists imported tracks; acquisition remains an explicit album request. The music playback screen uses the built-in Media3 player controls, with background playback and a queue. The backend Requested contract below remains reference material, not an Android navigation requirement.
+The Android navigation follows the later product decision: Home, TV Shows, Movies, Music, Discover, Search. Requested is omitted from Android. Music is also above YouTube in the sidebar. Both Music entry points share Artists, Albums and Songs categories. Songs lists imported tracks; acquisition remains an explicit album request. The music playback screen uses HomeStream-styled controls over Media3, with background playback and a queue. The backend Requested contract below remains reference material, not an Android navigation requirement.
 
 
 Updated 8 November 2026. This file is the implementation handoff for an AI working on the Android application. No Android checkout was changed in this task. Backend source and generated contracts are authoritative; do not invent DroppedNeedle endpoints in the Android app.

@@ -354,7 +354,7 @@ class MainActivity : AppCompatActivity() {
         // Chromecast button
         castButton(this)?.let { header.addView(it, LinearLayout.LayoutParams(dp(40), dp(40))) }
 
-        if (!settings.isKids) header.addView(iconButton("Music player", R.drawable.nav_new) { musicControls() })
+        if (!settings.isKids) header.addView(iconButton("Music player", R.drawable.nav_music) { musicControls() })
 
         // Profile switcher button
         if (settings.canUseProfiles) header.addView(iconButton("Profile", R.drawable.nav_profile) { profiles() })
@@ -398,7 +398,7 @@ class MainActivity : AppCompatActivity() {
             Triple("Home", R.drawable.nav_home, "home"),
             Triple("TV Shows", R.drawable.nav_series, "series"),
             Triple("Movies", R.drawable.nav_movies, "movies"),
-            Triple("Music", R.drawable.nav_new, "music"),
+            Triple("Music", R.drawable.nav_music, "music"),
             Triple("Discover", R.drawable.ic_download, "requests"),
             Triple("Search", R.drawable.nav_search, "search")
         )
@@ -470,9 +470,9 @@ class MainActivity : AppCompatActivity() {
             Triple("Home", R.drawable.nav_home, { loadTab("home") }),
             Triple("TV Shows", R.drawable.nav_series, { loadTab("series") }),
             Triple("Movies", R.drawable.nav_movies, { loadTab("movies") }),
-            Triple("Music", R.drawable.nav_new, { loadTab("music") }),
+            Triple("Music", R.drawable.nav_music, { loadTab("music") }),
             Triple("Discover", R.drawable.ic_download, { loadTab("requests") }),
-            Triple("Music player", R.drawable.nav_new, { musicControls() }),
+            Triple("Music player", R.drawable.nav_music, { musicControls() }),
             Triple("More", R.drawable.ic_menu, { showTvBrowseMenu() }),
             Triple("My List", R.drawable.nav_list, { myHomeStream() }),
             Triple("Profiles", R.drawable.nav_profile, { profiles() }),
@@ -2560,24 +2560,49 @@ class MainActivity : AppCompatActivity() {
         currentTab = tab; screen = tab
         if (hubFilter == "music" && settings.isKids) hubFilter = "all"
         shell()
-        heading(if (tab == "music") "Music" else "Discover")
         if (tab == "music") {
-            val categories = LinearLayout(this)
+            val titleBar = LinearLayout(this).apply {
+                gravity = Gravity.CENTER_VERTICAL; setPadding(gutter, dp(8), gutter, dp(4))
+            }
+            titleBar.addView(label("Music", 24f, true), LinearLayout.LayoutParams(0, -2, 1f))
+            titleBar.addView(action("Now playing") { musicControls() }.apply {
+                setCompoundDrawablesWithIntrinsicBounds(R.drawable.ic_play_arrow, 0, 0, 0)
+                compoundDrawablePadding = dp(4)
+                compoundDrawableTintList = textColors
+            })
+            content.addView(titleBar)
+            val categories = LinearLayout(this).apply { setPadding(gutter, dp(4), gutter, dp(8)) }
             listOf("artists" to "Artists", "albums" to "Albums", "songs" to "Songs").forEach { (key, title) ->
                 categories.addView(categoryPill(title, musicCategory == key) { musicCategory = key; musicArtist = null; mediaHub("music") })
             }
-            content.addView(HorizontalScrollView(this).apply { addView(categories) })
-        }
+            content.addView(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(categories) })
+        } else heading("Discover")
         if (tab != "music") hubFilters(content, hubFilter) { hubFilter = it; mediaHub(tab) }
         if (tab == "requests" && hubFilter != "music") content.addView(action("Browse video categories") { loadCategories("requests") })
         val results = column().apply { setPadding(gutter, dp(8), gutter, dp(12)) }
         val input = EditText(this).apply {
-            hint = if (tab == "music") "Search artists and albums" else "Search movies, TV and albums"
+            hint = when {
+                tab != "music" -> "Search movies, TV and albums"
+                musicCategory == "songs" -> "Search songs"
+                musicCategory == "artists" -> "Search artists"
+                else -> "Search artists and albums"
+            }
             setTextColor(Color.WHITE); setHintTextColor(MUTED)
             setSingleLine(); inputType = InputType.TYPE_CLASS_TEXT
             setText(if (tab == "music") musicQuery else hubQuery)
         }
-        content.addView(input)
+        if (tab == "music") {
+            input.background = android.graphics.drawable.StateListDrawable().apply {
+                addState(intArrayOf(android.R.attr.state_focused), rounded(0xFF222222.toInt(), 0xFF777777.toInt(), dp(12).toFloat()))
+                addState(intArrayOf(), rounded(0xFF1D1D1D.toInt(), radius = dp(12).toFloat()))
+            }
+            input.setCompoundDrawablesWithIntrinsicBounds(R.drawable.nav_search, 0, 0, 0)
+            input.compoundDrawableTintList = ColorStateList.valueOf(MUTED)
+            input.compoundDrawablePadding = dp(10)
+            input.setPadding(dp(12), dp(8), dp(12), dp(8))
+            input.textSize = 14f
+            content.addView(input, LinearLayout.LayoutParams(-1, dp(48)).apply { setMargins(gutter, dp(4), gutter, dp(8)) })
+        } else content.addView(input)
         input.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
@@ -2589,7 +2614,7 @@ class MainActivity : AppCompatActivity() {
             override fun afterTextChanged(s: Editable?) {}
         })
         content.addView(results)
-        if (!settings.isKids) content.addView(action("Open music player") { musicControls() })
+        if (tab != "music" && !settings.isKids) content.addView(action("Open music player") { musicControls() })
         hubJob = lifecycleScope.launch { discoverResults(results, input.text.toString(), if (tab == "music") "music" else hubFilter) }
     }
 
@@ -2634,12 +2659,14 @@ class MainActivity : AppCompatActivity() {
                         currentTab == "music" && musicCategory == "artists" -> {
                             val artists = musicAlbums.groupBy { it.artist }.toSortedMap(String.CASE_INSENSITIVE_ORDER)
                             val selected = musicArtist
-                            if (selected == null) artists.forEach { (artist, albums) ->
-                                staged.addView(action("$artist • ${albums.size} albums") { musicArtist = artist; mediaHub("music") })
-                            } else {
+                            if (selected == null) musicArtworkGrid(staged, artists.map { (artist, albums) ->
+                                MusicTile(artist, "${albums.size} ${if (albums.size == 1) "album" else "albums"}", albumArtwork(albums.first())) {
+                                    musicArtist = artist; mediaHub("music")
+                                }
+                            }) else {
                                 staged.addView(action("All artists") { musicArtist = null; mediaHub("music") })
                                 staged.addView(label(selected, 20f, true))
-                                artists[selected].orEmpty().forEach { albumCard(staged, it) }
+                                musicArtworkGrid(staged, artists[selected].orEmpty().map(::albumTile))
                             }
                         }
                         librarySongs -> {
@@ -2647,13 +2674,16 @@ class MainActivity : AppCompatActivity() {
                                 val tracks = api.call("music/album", mapOf("albumId" to album.id)).objects("tracks").map(::MusicTrack)
                                 tracks.forEachIndexed { index, track ->
                                     if (query.isBlank() || listOf(track.title, album.title, album.artist).any { it.contains(query, ignoreCase = true) }) {
-                                        staged.addView(action("${track.title}\n${album.artist} • ${album.title}") { startMusicTracks(tracks, album, index) }.apply { layoutParams = LinearLayout.LayoutParams(-1, -2) })
+                                        staged.addView(musicTrackRow(track.title, "${album.artist} • ${album.title}", track.json.optInt("trackNumber", index + 1)) { startMusicTracks(tracks, album, index) })
                                     }
                                 }
                             }
                             if (staged.childCount == 0) staged.addView(label("No imported songs found"))
                         }
-                        else -> musicAlbums.forEach { albumCard(staged, it) }
+                        else -> {
+                            if (currentTab != "music" && musicAlbums.isNotEmpty()) staged.addView(label("Albums", 20f, true).apply { setPadding(0, dp(14), 0, dp(8)) })
+                            musicArtworkGrid(staged, musicAlbums.map(::albumTile))
+                        }
                     }
                     if (query.isNotBlank() && !librarySongs) staged.addView(label("Showing up to 30 catalog albums. Refine your search for more.", 12f))
                 } catch (e: Exception) {
@@ -2670,17 +2700,12 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun albumCard(target: LinearLayout, album: MusicAlbum) {
-        val card = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL; setPadding(dp(8), dp(8), dp(8), dp(8)); focusableCard() }
-        val cover = ImageView(this).apply {
-            contentDescription = "${album.title} cover"; setImageResource(R.drawable.nav_new)
-            album.json.optString("coverUrl").takeIf { it.isNotBlank() && it != "null" }?.let { load(api.absolute(it)) { placeholder(R.drawable.nav_new); error(R.drawable.nav_new) } }
-        }
-        card.addView(cover, LinearLayout.LayoutParams(dp(64), dp(64)))
-        card.addView(label("${album.title}\n${album.artist}\n${if (album.inLibrary) "In library" else if (album.requested) "Requested" else "Album"}"), LinearLayout.LayoutParams(0, -2, 1f))
-        card.setOnClickListener { openAlbum(album) }
-        target.addView(card, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
-    }
+    private fun albumArtwork(album: MusicAlbum): String? = album.json.optString("coverUrl")
+        .takeIf { it.isNotBlank() && it != "null" }?.let(api::absolute)
+
+    private fun albumTile(album: MusicAlbum) = MusicTile(album.title,
+        if (album.requested && !album.inLibrary) "${album.artist} • Requested" else album.artist,
+        albumArtwork(album)) { openAlbum(album) }
 
     private fun openAlbum(album: MusicAlbum) {
         lifecycleScope.launch {
@@ -2689,8 +2714,16 @@ class MainActivity : AppCompatActivity() {
                 val current = MusicAlbum(data.getJSONObject("album"))
                 val tracks = data.objects("tracks").map(::MusicTrack)
                 val form = column().apply { setPadding(dp(20), dp(12), dp(20), dp(12)) }
-                form.addView(label(current.artist))
-                form.addView(label("Release: ${releaseLabel(current.json.optString("releaseDate").ifBlank { current.json.optString("year") })}"))
+                val albumHeader = LinearLayout(this@MainActivity).apply {
+                    gravity = Gravity.CENTER_VERTICAL; setPadding(0, 0, 0, dp(12))
+                }
+                albumHeader.addView(MusicCover(this@MainActivity).apply { show(albumArtwork(current)) }, LinearLayout.LayoutParams(dp(84), dp(84)))
+                albumHeader.addView(column().apply {
+                    setPadding(dp(12), 0, 0, 0)
+                    addView(label(current.artist, 16f, true))
+                    addView(label("Release: ${releaseLabel(current.json.optString("releaseDate").ifBlank { current.json.optString("year") })}", 13f).apply { setTextColor(MUTED) })
+                }, LinearLayout.LayoutParams(0, -2, 1f))
+                form.addView(albumHeader)
                 val dialog = AlertDialog.Builder(this@MainActivity).setTitle(current.title)
                     .setView(ScrollView(this@MainActivity).apply { addView(form) }).setNegativeButton("Close", null).create()
                 if (tracks.isEmpty()) {
@@ -2711,7 +2744,7 @@ class MainActivity : AppCompatActivity() {
                         }
                     }.apply { isEnabled = current.id !in albumRequests })
                 } else tracks.forEachIndexed { index, track ->
-                    form.addView(action("${track.json.optInt("trackNumber")}  ${track.title}") {
+                    form.addView(musicTrackRow(track.title, "", track.json.optInt("trackNumber", index + 1)) {
                         dialog.dismiss()
                         startMusicTracks(tracks, current, index)
                     })

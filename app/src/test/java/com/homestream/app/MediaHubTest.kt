@@ -82,7 +82,7 @@ class MediaHubTest {
                 waitUntil { texts().any { it.startsWith("Catalog album") } }
                 assertFalse(texts().any { it.startsWith("First album") })
                 descendants(activity.window.decorView).filterIsInstance<android.widget.Button>().first { it.text == "Artists" }.performClick()
-                waitUntil { texts().any { it.startsWith("Artist •") } }
+                waitUntil { "Artist" in texts() && "1 album" in texts() }
                 descendants(activity.window.decorView).filterIsInstance<android.widget.Button>().first { it.text == "Songs" }.performClick()
                 waitUntil { texts().any { it.startsWith("Fixture song") } }
                 invoke(activity, "loadTab", "home")
