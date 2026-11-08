@@ -85,6 +85,7 @@ class PlayerActivity : AppCompatActivity() {
     private var episodeJob: Job? = null
     private var queueJob: Job? = null
     private var titleColumn: LinearLayout? = null
+    private val subtitleAppearance by lazy { SubtitleAppearance(this) }
     private val playbackPrefs by lazy { getSharedPreferences("playback", MODE_PRIVATE) }
     private var autoplay: Boolean
         get() = playbackPrefs.getBoolean("autoplay", true)
@@ -213,6 +214,10 @@ class PlayerActivity : AppCompatActivity() {
         playerView = PlayerView(this).apply {
             setShowSubtitleButton(true); setShowBuffering(PlayerView.SHOW_BUFFERING_ALWAYS)
             controllerAutoShow = true; controllerShowTimeoutMs = if (isTelevision()) 6000 else 4000
+        }
+        subtitleAppearance.apply(playerView.subtitleView)
+        playerView.findViewById<View>(androidx.media3.ui.R.id.exo_settings)?.setOnClickListener {
+            showPlayerSettings()
         }
         playerView.findViewById<androidx.media3.ui.DefaultTimeBar>(androidx.media3.ui.R.id.exo_progress)?.apply {
             setPlayedColor(RED)
@@ -1009,6 +1014,29 @@ class PlayerActivity : AppCompatActivity() {
         }.toTypedArray()
         androidx.appcompat.app.AlertDialog.Builder(this).setTitle("Episodes")
             .setItems(labels) { _, index -> selectEpisode(episodes.items[index]) }.setNegativeButton("Close", null).show()
+    }
+
+    private fun showPlayerSettings() {
+        androidx.appcompat.app.AlertDialog.Builder(this).setTitle("Player settings")
+            .setItems(arrayOf("Playback speed", "Audio", "Subtitles", "Subtitle appearance")) { _, choice ->
+                when (choice) {
+                    0 -> {
+                        val exo = player ?: return@setItems
+                        val speeds = floatArrayOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f)
+                        val selected = speeds.indexOfFirst { kotlin.math.abs(it - exo.playbackParameters.speed) < 0.01f }
+                        androidx.appcompat.app.AlertDialog.Builder(this).setTitle("Playback speed")
+                            .setSingleChoiceItems(speeds.map { "${it}×" }.toTypedArray(), selected) { dialog, index ->
+                                exo.setPlaybackSpeed(speeds[index]); dialog.dismiss()
+                            }.setNegativeButton("Cancel", null).show()
+                    }
+                    1 -> player?.let { exo ->
+                        androidx.media3.ui.TrackSelectionDialogBuilder(this, "Audio", exo, C.TRACK_TYPE_AUDIO)
+                            .build().show()
+                    }
+                    2 -> showCastSubtitles()
+                    3 -> subtitleAppearance.show(this, playerView.subtitleView)
+                }
+            }.setNegativeButton("Close", null).show()
     }
 
     private fun showCastSubtitles() {
