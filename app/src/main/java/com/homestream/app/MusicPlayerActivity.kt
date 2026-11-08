@@ -57,7 +57,7 @@ class MusicPlayerActivity : AppCompatActivity() {
         }
         body.addView(featured, LinearLayout.LayoutParams(-1, -2))
         val coverSize = dp(if (wide) 240 else (resources.configuration.screenWidthDp - 84).coerceIn(120, 280))
-        val cover = MusicCover(this)
+        val cover = LibraryArtwork(this)
         featured.addView(cover, LinearLayout.LayoutParams(coverSize, coverSize).apply {
             gravity = Gravity.CENTER_HORIZONTAL
             if (wide) marginEnd = dp(24) else bottomMargin = dp(16)

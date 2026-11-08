@@ -2544,13 +2544,10 @@ class MainActivity : AppCompatActivity() {
     private var musicCategory = "albums"
     private var musicArtist: String? = null
 
-    private fun hubFilters(target: LinearLayout, selected: String, change: (String) -> Unit) {
-        val row = LinearLayout(this)
-        listOf("all" to "All media", "movie" to "Movies", "tv" to "TV", "music" to "Music")
-            .filter { it.first != "music" || !settings.isKids }.forEach { (key, title) ->
-                row.addView(categoryPill(title, key == selected) { change(key) })
-            }
-        target.addView(HorizontalScrollView(this).apply { addView(row) })
+    private fun hubFilters(options: List<Pair<String, String>>, selected: String, change: (String) -> Unit) {
+        val row = LinearLayout(this).apply { setPadding(gutter, dp(4), gutter, dp(8)) }
+        options.forEach { (key, title) -> row.addView(categoryPill(title, key == selected) { change(key) }) }
+        content.addView(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(row) })
     }
 
     private fun mediaHub(tab: String) {
@@ -2560,29 +2557,39 @@ class MainActivity : AppCompatActivity() {
         currentTab = tab; screen = tab
         if (hubFilter == "music" && settings.isKids) hubFilter = "all"
         shell()
-        if (tab == "music") {
-            val titleBar = LinearLayout(this).apply {
-                gravity = Gravity.CENTER_VERTICAL; setPadding(gutter, dp(8), gutter, dp(4))
-            }
-            titleBar.addView(label("Music", 24f, true), LinearLayout.LayoutParams(0, -2, 1f))
-            titleBar.addView(action("Now playing") { musicControls() }.apply {
-                setCompoundDrawablesWithIntrinsicBounds(R.drawable.ic_play_arrow, 0, 0, 0)
+        val music = tab == "music"
+        val titleBar = LinearLayout(this).apply {
+            gravity = Gravity.CENTER_VERTICAL; setPadding(gutter, dp(8), gutter, dp(4))
+        }
+        titleBar.addView(label(if (music) "Music" else "Discover", 24f, true), LinearLayout.LayoutParams(0, -2, 1f))
+        if (music || hubFilter != "music") {
+            titleBar.addView(action(if (music) "Now playing" else "Categories") {
+                if (music) musicControls() else loadCategories("requests")
+            }.apply {
+                val icon = if (music) R.drawable.ic_play_arrow else R.drawable.nav_list
+                setCompoundDrawablesWithIntrinsicBounds(icon, 0, 0, 0)
                 compoundDrawablePadding = dp(4)
                 compoundDrawableTintList = textColors
             })
-            content.addView(titleBar)
-            val categories = LinearLayout(this).apply { setPadding(gutter, dp(4), gutter, dp(8)) }
-            listOf("artists" to "Artists", "albums" to "Albums", "songs" to "Songs").forEach { (key, title) ->
-                categories.addView(categoryPill(title, musicCategory == key) { musicCategory = key; musicArtist = null; mediaHub("music") })
+        }
+        content.addView(titleBar)
+        if (music) {
+            hubFilters(listOf("artists" to "Artists", "albums" to "Albums", "songs" to "Songs"), musicCategory) {
+                musicCategory = it; musicArtist = null; mediaHub(tab)
             }
-            content.addView(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(categories) })
-        } else heading("Discover")
-        if (tab != "music") hubFilters(content, hubFilter) { hubFilter = it; mediaHub(tab) }
-        if (tab == "requests" && hubFilter != "music") content.addView(action("Browse video categories") { loadCategories("requests") })
+        } else {
+            val options = listOf("all" to "All media", "movie" to "Movies", "tv" to "TV", "music" to "Music")
+            hubFilters(options.filter { it.first != "music" || !settings.isKids }, hubFilter) { hubFilter = it; mediaHub(tab) }
+        }
         val results = column().apply { setPadding(gutter, dp(8), gutter, dp(12)) }
         val input = EditText(this).apply {
             hint = when {
-                tab != "music" -> "Search movies, TV and albums"
+                !music -> when (hubFilter) {
+                    "movie" -> "Search movies"
+                    "tv" -> "Search TV shows"
+                    "music" -> "Search artists and albums"
+                    else -> if (settings.isKids) "Search movies and TV" else "Search movies, TV and albums"
+                }
                 musicCategory == "songs" -> "Search songs"
                 musicCategory == "artists" -> "Search artists"
                 else -> "Search artists and albums"
@@ -2591,18 +2598,16 @@ class MainActivity : AppCompatActivity() {
             setSingleLine(); inputType = InputType.TYPE_CLASS_TEXT
             setText(if (tab == "music") musicQuery else hubQuery)
         }
-        if (tab == "music") {
-            input.background = android.graphics.drawable.StateListDrawable().apply {
-                addState(intArrayOf(android.R.attr.state_focused), rounded(0xFF222222.toInt(), 0xFF777777.toInt(), dp(12).toFloat()))
-                addState(intArrayOf(), rounded(0xFF1D1D1D.toInt(), radius = dp(12).toFloat()))
-            }
-            input.setCompoundDrawablesWithIntrinsicBounds(R.drawable.nav_search, 0, 0, 0)
-            input.compoundDrawableTintList = ColorStateList.valueOf(MUTED)
-            input.compoundDrawablePadding = dp(10)
-            input.setPadding(dp(12), dp(8), dp(12), dp(8))
-            input.textSize = 14f
-            content.addView(input, LinearLayout.LayoutParams(-1, dp(48)).apply { setMargins(gutter, dp(4), gutter, dp(8)) })
-        } else content.addView(input)
+        input.background = android.graphics.drawable.StateListDrawable().apply {
+            addState(intArrayOf(android.R.attr.state_focused), rounded(0xFF222222.toInt(), 0xFF777777.toInt(), dp(12).toFloat()))
+            addState(intArrayOf(), rounded(0xFF1D1D1D.toInt(), radius = dp(12).toFloat()))
+        }
+        input.setCompoundDrawablesWithIntrinsicBounds(R.drawable.nav_search, 0, 0, 0)
+        input.compoundDrawableTintList = ColorStateList.valueOf(MUTED)
+        input.compoundDrawablePadding = dp(10)
+        input.setPadding(dp(12), dp(8), dp(12), dp(8))
+        input.textSize = 14f
+        content.addView(input, LinearLayout.LayoutParams(-1, dp(48)).apply { setMargins(gutter, dp(4), gutter, dp(8)) })
         input.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
@@ -2614,7 +2619,6 @@ class MainActivity : AppCompatActivity() {
             override fun afterTextChanged(s: Editable?) {}
         })
         content.addView(results)
-        if (tab != "music" && !settings.isKids) content.addView(action("Open music player") { musicControls() })
         hubJob = lifecycleScope.launch { discoverResults(results, input.text.toString(), if (tab == "music") "music" else hubFilter) }
     }
 
@@ -2627,14 +2631,21 @@ class MainActivity : AppCompatActivity() {
                     val data = api.call(if (query.isBlank()) "home" else "search", if (query.isBlank()) emptyMap() else mapOf("q" to query))
                     val items = if (query.isBlank()) data.objects("requestSections").flatMap { it.mediaList("items") }
                         else data.mediaList("results")
-                    items.distinctBy { it.id }.filter {
-                        filter == "all" || (filter == "movie" && it.type == "Movie") || (filter == "tv" && it.type in listOf("Series", "Episode"))
-                    }.forEach { item ->
-                        val card = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL; setPadding(dp(8), dp(8), dp(8), dp(8)); focusableCard() }
-                        card.addView(ImageView(this).apply { scaleType = ImageView.ScaleType.CENTER_CROP; load(api.absolute(item.poster)) }, LinearLayout.LayoutParams(dp(64), dp(92)))
-                        card.addView(label("${item.title}\n${item.type} • ${item.metadata}"), LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = dp(12) })
-                        card.setOnClickListener { details(item) }
-                        staged.addView(card, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
+                    val videos = items.distinctBy { it.id }
+                    listOf("movie" to "Movies", "tv" to "TV Shows").forEach { (kind, title) ->
+                        if (filter == "all" || filter == kind) {
+                            val matches = videos.filter {
+                                if (kind == "movie") it.type == "Movie" else it.type in listOf("Series", "Episode")
+                            }
+                            if (matches.isNotEmpty()) {
+                                staged.addView(hubSection(title))
+                                artworkGrid(staged, matches.map { item ->
+                                    val icon = if (kind == "movie") R.drawable.nav_movies else R.drawable.nav_series
+                                    ArtworkTile(item.title, item.metadata.ifBlank { if (kind == "movie") "Movie" else item.type },
+                                        api.absolute(item.poster), poster = true, placeholder = icon) { details(item) }
+                                })
+                            }
+                        }
                     }
                 } catch (e: Exception) {
                     if (e is kotlinx.coroutines.CancellationException) throw e
@@ -2659,14 +2670,14 @@ class MainActivity : AppCompatActivity() {
                         currentTab == "music" && musicCategory == "artists" -> {
                             val artists = musicAlbums.groupBy { it.artist }.toSortedMap(String.CASE_INSENSITIVE_ORDER)
                             val selected = musicArtist
-                            if (selected == null) musicArtworkGrid(staged, artists.map { (artist, albums) ->
-                                MusicTile(artist, "${albums.size} ${if (albums.size == 1) "album" else "albums"}", albumArtwork(albums.first())) {
+                            if (selected == null) artworkGrid(staged, artists.map { (artist, albums) ->
+                                ArtworkTile(artist, "${albums.size} ${if (albums.size == 1) "album" else "albums"}", albumArtwork(albums.first())) {
                                     musicArtist = artist; mediaHub("music")
                                 }
                             }) else {
                                 staged.addView(action("All artists") { musicArtist = null; mediaHub("music") })
                                 staged.addView(label(selected, 20f, true))
-                                musicArtworkGrid(staged, artists[selected].orEmpty().map(::albumTile))
+                                artworkGrid(staged, artists[selected].orEmpty().map(::albumTile))
                             }
                         }
                         librarySongs -> {
@@ -2681,8 +2692,8 @@ class MainActivity : AppCompatActivity() {
                             if (staged.childCount == 0) staged.addView(label("No imported songs found"))
                         }
                         else -> {
-                            if (currentTab != "music" && musicAlbums.isNotEmpty()) staged.addView(label("Albums", 20f, true).apply { setPadding(0, dp(14), 0, dp(8)) })
-                            musicArtworkGrid(staged, musicAlbums.map(::albumTile))
+                            if (currentTab != "music" && musicAlbums.isNotEmpty()) staged.addView(hubSection("Albums"))
+                            artworkGrid(staged, musicAlbums.map(::albumTile))
                         }
                     }
                     if (query.isNotBlank() && !librarySongs) staged.addView(label("Showing up to 30 catalog albums. Refine your search for more.", 12f))
@@ -2700,10 +2711,14 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun hubSection(title: String) = label(title, 20f, true).apply {
+        setPadding(dp(4), dp(12), dp(4), dp(6))
+    }
+
     private fun albumArtwork(album: MusicAlbum): String? = album.json.optString("coverUrl")
         .takeIf { it.isNotBlank() && it != "null" }?.let(api::absolute)
 
-    private fun albumTile(album: MusicAlbum) = MusicTile(album.title,
+    private fun albumTile(album: MusicAlbum) = ArtworkTile(album.title,
         if (album.requested && !album.inLibrary) "${album.artist} • Requested" else album.artist,
         albumArtwork(album)) { openAlbum(album) }
 
@@ -2717,7 +2732,7 @@ class MainActivity : AppCompatActivity() {
                 val albumHeader = LinearLayout(this@MainActivity).apply {
                     gravity = Gravity.CENTER_VERTICAL; setPadding(0, 0, 0, dp(12))
                 }
-                albumHeader.addView(MusicCover(this@MainActivity).apply { show(albumArtwork(current)) }, LinearLayout.LayoutParams(dp(84), dp(84)))
+                albumHeader.addView(LibraryArtwork(this@MainActivity).apply { show(albumArtwork(current)) }, LinearLayout.LayoutParams(dp(84), dp(84)))
                 albumHeader.addView(column().apply {
                     setPadding(dp(12), 0, 0, 0)
                     addView(label(current.artist, 16f, true))

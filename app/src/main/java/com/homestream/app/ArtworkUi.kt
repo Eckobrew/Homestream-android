@@ -10,15 +10,15 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import coil.load
 
-/** A square version of the artwork panels used throughout the library. */
-internal class MusicCover(context: Context) : FrameLayout(context) {
+/** Framed album and poster artwork with a matching placeholder. */
+internal class LibraryArtwork(context: Context, private val poster: Boolean = false, placeholder: Int = R.drawable.nav_music) : FrameLayout(context) {
     private val cover = ImageView(context).apply { scaleType = ImageView.ScaleType.CENTER_CROP }
     init {
         background = rounded(0xFF202020.toInt(), radius = context.dp(12).toFloat())
         clipToOutline = true
         importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
         addView(ImageView(context).apply {
-            setImageResource(R.drawable.nav_music)
+            setImageResource(placeholder)
             imageAlpha = 112
         }, LayoutParams(context.dp(40), context.dp(40), Gravity.CENTER))
         addView(cover, LayoutParams(-1, -1))
@@ -26,13 +26,17 @@ internal class MusicCover(context: Context) : FrameLayout(context) {
     fun show(url: String?) { cover.load(url?.takeIf { it.isNotBlank() }) }
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val width = MeasureSpec.getSize(widthMeasureSpec)
-        super.onMeasure(widthMeasureSpec, MeasureSpec.makeMeasureSpec(width, MeasureSpec.EXACTLY))
+        super.onMeasure(widthMeasureSpec, MeasureSpec.makeMeasureSpec(if (poster) width * 3 / 2 else width, MeasureSpec.EXACTLY))
     }
 }
 
-internal data class MusicTile(val title: String, val subtitle: String, val cover: String?, val click: () -> Unit)
+internal data class ArtworkTile(
+    val title: String, val subtitle: String, val cover: String?,
+    val poster: Boolean = false, val placeholder: Int = R.drawable.nav_music,
+    val click: () -> Unit
+)
 
-internal fun Context.musicArtworkGrid(target: LinearLayout, tiles: List<MusicTile>) {
+internal fun Context.artworkGrid(target: LinearLayout, tiles: List<ArtworkTile>) {
     val columns = if (isTelevision()) 4 else if (resources.configuration.screenWidthDp >= 560) 3 else 2
     tiles.chunked(columns).forEach { group ->
         val row = LinearLayout(this).apply { clipChildren = false; clipToPadding = false }
@@ -40,7 +44,7 @@ internal fun Context.musicArtworkGrid(target: LinearLayout, tiles: List<MusicTil
             val card = column().apply {
                 setPadding(dp(6), dp(6), dp(6), dp(10))
                 focusableCard(0xFF181818.toInt())
-                addView(MusicCover(context).apply { show(tile.cover) }, LinearLayout.LayoutParams(-1, -2))
+                addView(LibraryArtwork(context, tile.poster, tile.placeholder).apply { show(tile.cover) }, LinearLayout.LayoutParams(-1, -2))
                 addView(label(tile.title, 14f, true).apply {
                     setPadding(dp(4), dp(8), dp(4), 0); maxLines = 1; ellipsize = TextUtils.TruncateAt.END
                 })
