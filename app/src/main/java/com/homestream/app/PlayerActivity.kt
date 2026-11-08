@@ -1017,26 +1017,25 @@ class PlayerActivity : AppCompatActivity() {
     }
 
     private fun showPlayerSettings() {
-        androidx.appcompat.app.AlertDialog.Builder(this).setTitle("Player settings")
-            .setItems(arrayOf("Playback speed", "Audio", "Subtitles", "Subtitle appearance")) { _, choice ->
+        androidx.appcompat.app.AlertDialog.Builder(this, R.style.Theme_HomeStream_PlayerPanel).setTitle("Player settings")
+            .setItems(arrayOf("Playback speed", "Audio", "Subtitle appearance")) { _, choice ->
                 when (choice) {
                     0 -> {
                         val exo = player ?: return@setItems
                         val speeds = floatArrayOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f)
                         val selected = speeds.indexOfFirst { kotlin.math.abs(it - exo.playbackParameters.speed) < 0.01f }
-                        androidx.appcompat.app.AlertDialog.Builder(this).setTitle("Playback speed")
+                        androidx.appcompat.app.AlertDialog.Builder(this, R.style.Theme_HomeStream_PlayerPanel).setTitle("Playback speed")
                             .setSingleChoiceItems(speeds.map { "${it}×" }.toTypedArray(), selected) { dialog, index ->
                                 exo.setPlaybackSpeed(speeds[index]); dialog.dismiss()
-                            }.setNegativeButton("Cancel", null).show()
+                            }.setNegativeButton("Cancel", null).create().showPlayerPanel()
                     }
                     1 -> player?.let { exo ->
                         androidx.media3.ui.TrackSelectionDialogBuilder(this, "Audio", exo, C.TRACK_TYPE_AUDIO)
-                            .build().show()
+                            .setTheme(R.style.Theme_HomeStream_PlayerPanel).build().showPlayerPanel()
                     }
-                    2 -> showCastSubtitles()
-                    3 -> subtitleAppearance.show(this, playerView.subtitleView)
+                    2 -> subtitleAppearance.show(this, playerView.subtitleView)
                 }
-            }.setNegativeButton("Close", null).show()
+            }.setNegativeButton("Close", null).create().showPlayerPanel()
     }
 
     private fun showCastSubtitles() {

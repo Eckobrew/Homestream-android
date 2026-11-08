@@ -4,7 +4,10 @@ import android.content.Context
 import android.graphics.Color
 import android.graphics.Typeface
 import android.view.Gravity
-import android.widget.Button
+import android.widget.TextView
+import android.content.res.ColorStateList
+import android.graphics.drawable.StateListDrawable
+import android.graphics.drawable.ColorDrawable
 import android.widget.LinearLayout
 import androidx.appcompat.app.AlertDialog
 import androidx.media3.ui.CaptionStyleCompat
@@ -50,7 +53,7 @@ internal class SubtitleAppearance(context: Context) {
                 .build()))
         }
         val previewFrame = android.widget.FrameLayout(context).apply {
-            setBackgroundColor(0xFF30343B.toInt())
+            setBackgroundColor(0x33000000)
             addView(preview, android.widget.FrameLayout.LayoutParams(-1, -1, Gravity.CENTER))
         }
         content.addView(previewFrame, LinearLayout.LayoutParams(-1, (160 * density).toInt()))
@@ -62,16 +65,29 @@ internal class SubtitleAppearance(context: Context) {
         }
         val refreshLabels = mutableListOf<() -> Unit>()
         fun option(title: String, key: String, names: List<String>, default: Int = 0) {
-            val button = Button(context).apply { isAllCaps = false }
+            val button = TextView(context).apply {
+                textSize = 15f
+                setTextColor(ColorStateList(
+                    arrayOf(intArrayOf(android.R.attr.state_focused), intArrayOf()),
+                    intArrayOf(Color.WHITE, 0xFFE5E5E5.toInt())))
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding((12 * density).toInt(), (16 * density).toInt(), (12 * density).toInt(), (16 * density).toInt())
+                isClickable = true; isFocusable = true
+                background = StateListDrawable().apply {
+                    addState(intArrayOf(android.R.attr.state_pressed), ColorDrawable(0x66E50914))
+                    addState(intArrayOf(android.R.attr.state_focused), ColorDrawable(0x55E50914))
+                    addState(intArrayOf(), ColorDrawable(Color.TRANSPARENT))
+                }
+            }
             val update = { button.text = "$title: ${names[index(key, names.size, default)]}" }
             refreshLabels.add(update)
             update()
             button.setOnClickListener {
-                AlertDialog.Builder(context).setTitle(title)
+                AlertDialog.Builder(context, R.style.Theme_HomeStream_PlayerPanel).setTitle(title)
                     .setSingleChoiceItems(names.toTypedArray(), index(key, names.size, default)) { dialog, choice ->
                         prefs.edit().putInt(key, choice).putBoolean("customized", true).apply()
                         update(); refresh(); dialog.dismiss()
-                    }.setNegativeButton("Cancel", null).show()
+                    }.setNegativeButton("Cancel", null).create().showPlayerPanel()
             }
             content.addView(button)
         }
@@ -80,7 +96,7 @@ internal class SubtitleAppearance(context: Context) {
         option("Background", "background", backgrounds.map { it.first }, 2)
         option("Text edge", "edge", edges.map { it.first })
         refresh()
-        AlertDialog.Builder(context).setTitle("Subtitle appearance")
+        AlertDialog.Builder(context, R.style.Theme_HomeStream_PlayerPanel).setTitle("Subtitle appearance")
             .setView(android.widget.ScrollView(context).apply { addView(content) })
             .setPositiveButton("Done", null)
             .setNeutralButton("Reset", null)
@@ -91,6 +107,6 @@ internal class SubtitleAppearance(context: Context) {
                         refreshLabels.forEach { it() }; refresh()
                     }
                 }
-            }.show()
+            }.showPlayerPanel()
     }
 }
