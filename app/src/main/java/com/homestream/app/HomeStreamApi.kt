@@ -152,11 +152,17 @@ class HomeStreamApi(private val settings: ConnectionSettings) {
     /** Network interceptors run again for redirects and every HLS/subtitle request. */
     fun mediaClient(): OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(20, TimeUnit.SECONDS).readTimeout(60, TimeUnit.SECONDS)
-        .followSslRedirects(false)
+        .followRedirects(true)
+        .followSslRedirects(true)
         .addNetworkInterceptor { chain ->
             val request = chain.request()
-            val builder = request.newBuilder().removeHeader("Authorization")
-            if (isServerUrl(request.url.toString()) && settings.token.isNotBlank()) {
+            val builder = request.newBuilder()
+            if (request.header("User-Agent").isNullOrBlank()) {
+                builder.header("User-Agent", "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36 HomeStream/1.2.0")
+            }
+            if (!isServerUrl(request.url.toString())) {
+                builder.removeHeader("Authorization")
+            } else if (settings.token.isNotBlank()) {
                 builder.header("Authorization", "Bearer ${settings.token}")
             }
             chain.proceed(builder.build())
