@@ -31,6 +31,7 @@ import androidx.recyclerview.widget.GridLayoutManager
 import coil.load
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -398,13 +399,16 @@ class MainActivity : AppCompatActivity() {
             Triple("Home", R.drawable.nav_home, "home"),
             Triple("TV Shows", R.drawable.nav_series, "series"),
             Triple("Movies", R.drawable.nav_movies, "movies"),
+            Triple("YouTube", R.drawable.ic_play_arrow, "youtube"),
             Triple("Music", R.drawable.nav_music, "music"),
             Triple("Discover", R.drawable.ic_download, "requests"),
             Triple("Search", R.drawable.nav_search, "search")
         )
 
-        navTabs.filter { it.third != "music" || !settings.isKids }.forEach { (title, icon, tabKey) ->
-            val isActive = (tabKey == "search" && screen == "search") || (tabKey != "search" && currentTab == tabKey && screen != "search")
+        navTabs.filter { (it.third != "music" && it.third != "youtube") || !settings.isKids }.forEach { (title, icon, tabKey) ->
+            val isActive = if (tabKey == "youtube") screen == "youtube"
+                           else if (tabKey == "search") screen == "search"
+                           else currentTab == tabKey && screen != "search" && screen != "youtube"
             val item = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER
                 setPadding(dp(2), dp(6), dp(2), dp(6))
@@ -414,7 +418,11 @@ class MainActivity : AppCompatActivity() {
                     cornerRadius = dp(20).toFloat()
                 }
                 setOnClickListener {
-                    if (tabKey == "search") openSearch() else loadTab(tabKey)
+                    when (tabKey) {
+                        "search" -> openSearch()
+                        "youtube" -> loadYouTube()
+                        else -> loadTab(tabKey)
+                    }
                 }
             }
 
@@ -470,6 +478,7 @@ class MainActivity : AppCompatActivity() {
             Triple("Home", R.drawable.nav_home, { loadTab("home") }),
             Triple("TV Shows", R.drawable.nav_series, { loadTab("series") }),
             Triple("Movies", R.drawable.nav_movies, { loadTab("movies") }),
+            Triple("YouTube", R.drawable.ic_play_arrow, { loadYouTube() }),
             Triple("Music", R.drawable.nav_music, { loadTab("music") }),
             Triple("Discover", R.drawable.ic_download, { loadTab("requests") }),
             Triple("Music player", R.drawable.nav_music, { musicControls() }),
@@ -477,7 +486,7 @@ class MainActivity : AppCompatActivity() {
             Triple("My List", R.drawable.nav_list, { myHomeStream() }),
             Triple("Profiles", R.drawable.nav_profile, { profiles() }),
             Triple("Settings", R.drawable.nav_settings, { openServerSettingsDialog() })
-        ).filter { (it.first !in listOf("Music", "Music player") || !settings.isKids) && (it.first != "Profiles" || settings.canUseProfiles) && (it.first != "Downloads" || settings.kidsRating.isBlank()) }
+        ).filter { (it.first !in listOf("Music", "Music player", "YouTube") || !settings.isKids) && (it.first != "Profiles" || settings.canUseProfiles) && (it.first != "Downloads" || settings.kidsRating.isBlank()) }
 
         val buttons = entries.map { (title, icon, click) ->
             action("", click = click).apply {
@@ -486,6 +495,7 @@ class MainActivity : AppCompatActivity() {
                     "Home" -> screen == "home" && currentTab == "home"
                     "Movies" -> currentTab == "movies" && screen == "home"
                     "TV Shows" -> currentTab == "series" && screen == "home"
+                    "YouTube" -> screen == "youtube"
                     "Discover" -> currentTab == "requests"
                     "Music" -> currentTab == "music"
                     "Search" -> screen == "search"
@@ -593,7 +603,27 @@ class MainActivity : AppCompatActivity() {
         homeFeedText.addView(label("Home Streaming Feed", 14f, true))
         homeFeedText.addView(TextView(this).apply { text = "Netflix-style rows & categories"; textSize = 11f; setTextColor(MUTED) })
         homeFeedBtn.addView(homeFeedText)
-        panel.addView(homeFeedBtn, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(20) })
+        panel.addView(homeFeedBtn, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
+
+        // Dedicated YouTube Hub Tab
+        if (!settings.isKids) {
+            val ytBtn = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+                background = rounded(if (screen == "youtube") RED else 0x22FFFFFF.toInt())
+                setPadding(dp(14), dp(12), dp(14), dp(12))
+                isClickable = true
+                setOnClickListener { closeSidebar(); loadYouTube() }
+            }
+            ytBtn.addView(ImageView(this).apply {
+                setImageResource(R.drawable.ic_play_arrow); imageTintList = ColorStateList.valueOf(Color.WHITE)
+            }, LinearLayout.LayoutParams(dp(22), dp(22)))
+            val ytText = column().apply { setPadding(dp(12), 0, 0, 0); layoutParams = LinearLayout.LayoutParams(0, -2, 1f) }
+            ytText.addView(label("YouTube Hub", 14f, true))
+            ytText.addView(TextView(this).apply { text = "Continue watching, podcasts & trending"; textSize = 11f; setTextColor(MUTED) })
+            ytBtn.addView(ytText)
+            ytBtn.addView(badgePill("HUB"))
+            panel.addView(ytBtn, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(20) })
+        }
 
         // Section: Jellyfin Media (A–Z)
         panel.addView(TextView(this).apply {
@@ -605,15 +635,14 @@ class MainActivity : AppCompatActivity() {
             setTextColor(0xFF888888.toInt()); setPadding(0, 0, 0, dp(12))
         })
 
-        // Library Items: Movies (A-Z), TV Shows (A-Z), YouTube (A-Z)
+        // Library Items: Movies (A-Z), TV Shows (A-Z), Music (A-Z)
         val libs = listOf(
             Triple("Movies", "All movies on your Jellyfin server", "movies"),
             Triple("TV Shows", "All series on your Jellyfin server", "tv"),
-            Triple("Music", "Albums and music playback", "music"),
-            Triple("YouTube", "Search, stream & podcast archive", "youtube")
+            Triple("Music", "Albums and music playback", "music")
         )
 
-        libs.filter { (it.third != "music" && it.third != "youtube") || !settings.isKids }.forEach { (name, desc, type) ->
+        libs.filter { it.third != "music" || !settings.isKids }.forEach { (name, desc, type) ->
             val btn = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
                 background = rounded(0x18FFFFFF.toInt())
@@ -623,7 +652,6 @@ class MainActivity : AppCompatActivity() {
                     closeSidebar()
                     when (type) {
                         "music" -> loadTab("music")
-                        "youtube" -> loadYouTube()
                         else -> loadCatalog(type)
                     }
                 }
@@ -1151,12 +1179,18 @@ class MainActivity : AppCompatActivity() {
                     false
                 }
                 setOnClickListener {
-                    // Tapping Continue Watching jumps straight to playback at saved position!
-                    if (isContinueWatching) {
+                    // Tapping Continue Watching or YouTube jumps straight to playback at saved position!
+                    if (isContinueWatching || item.source == "youtube") {
                         play(item)
                     } else {
                         details(item)
                     }
+                }
+                setOnLongClickListener {
+                    if (item.source == "youtube") {
+                        showYouTubeItemDialog(item)
+                        true
+                    } else false
                 }
             }
 
@@ -1174,6 +1208,23 @@ class MainActivity : AppCompatActivity() {
             }
             posterContainer.addView(posterImg, FrameLayout.LayoutParams(-1, -1))
 
+            // Duration badge for YouTube cards (e.g. "45:12")
+            val isYouTube = item.source == "youtube"
+            val durBadge = if (isYouTube) item.json.optString("metadata").substringAfterLast("• ").trim().takeIf { it.isNotBlank() } else null
+            if (durBadge != null) {
+                val badgeView = TextView(this).apply {
+                    text = durBadge
+                    textSize = 9.5f
+                    typeface = android.graphics.Typeface.DEFAULT_BOLD
+                    setTextColor(Color.WHITE)
+                    background = rounded(0xCC000000.toInt(), radius = dp(4).toFloat())
+                    setPadding(dp(4), dp(2), dp(4), dp(2))
+                }
+                posterContainer.addView(badgeView, FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM or Gravity.END).apply {
+                    setMargins(0, 0, dp(4), if (item.json.optDouble("progressPercent") > 0) dp(8) else dp(4))
+                })
+            }
+
             // Progress Bar for Continue Watching items
             val progressVal = item.json.optDouble("progressPercent")
             if (progressVal > 0) {
@@ -1184,15 +1235,24 @@ class MainActivity : AppCompatActivity() {
                 posterContainer.addView(pBar, FrameLayout.LayoutParams(-1, dp(4), Gravity.BOTTOM))
             }
 
-            val cardWidth = dp(if (isTelevision()) 200 else 115)
-            val cardHeight = dp(if (isTelevision()) 115 else 165)
+            val cardWidth = dp(if (isTelevision()) (if (isYouTube || isContinueWatching) 220 else 200) else if (isYouTube || isContinueWatching) 180 else 115)
+            val cardHeight = dp(if (isTelevision()) (if (isYouTube || isContinueWatching) 124 else 115) else if (isYouTube || isContinueWatching) 101 else 165)
             card.addView(posterContainer, LinearLayout.LayoutParams(cardWidth, cardHeight))
 
             // Card title under poster
             card.addView(label((if (item.json.optBoolean("played")) "✓ " else "") + item.title, if (isTelevision()) 12.5f else 11f, bold = true).apply {
-                maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
+                maxLines = if (isYouTube) 2 else 1; ellipsize = android.text.TextUtils.TruncateAt.END
                 setPadding(dp(2), dp(5), dp(2), 0)
             })
+
+            // Subtitle for YouTube (channel title)
+            val subText = if (isYouTube) item.json.optString("seriesName").ifBlank { item.json.optString("channelTitle") } else ""
+            if (subText.isNotBlank()) {
+                card.addView(label(subText, if (isTelevision()) 11f else 9.5f).apply {
+                    setTextColor(MUTED); maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
+                    setPadding(dp(2), dp(1), dp(2), 0)
+                })
+            }
 
             row.addView(card, LinearLayout.LayoutParams(cardWidth + card.paddingLeft + card.paddingRight, -2).apply { setMargins(0, 0, dp(10), 0) })
         }
@@ -2881,7 +2941,7 @@ class MainActivity : AppCompatActivity() {
     }
     private fun toast(text: String) = Toast.makeText(this, text, Toast.LENGTH_LONG).show()
 
-    private var youtubeSubTab = "search"
+    private var youtubeSubTab = "home"
     private var youtubeSearchQuery = ""
     private var youtubeSearchJob: Job? = null
     private var youtubePodcastFilter = false
@@ -2920,20 +2980,45 @@ class MainActivity : AppCompatActivity() {
         titleRow.addView(label("YouTube Hub", 22f, true))
         titleCol.addView(titleRow)
         titleCol.addView(TextView(this).apply {
-            text = "Search & stream, subscribe to podcast channels, and manage local downloads"
+            text = "Trending shows, continue watching & podcasts"
             textSize = 11f
             setTextColor(MUTED)
             setPadding(0, dp(2), 0, 0)
         })
         header.addView(titleCol)
+
+        // YouTube Account Button (Connect / Manage per-profile login)
+        val authBtn = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = rounded(0x22FFFFFF.toInt(), radius = dp(8).toFloat())
+            setPadding(dp(12), dp(7), dp(12), dp(7))
+            isClickable = true
+            isFocusable = true
+            setOnClickListener { openYouTubeAuthDialog() }
+        }
+        authBtn.addView(ImageView(this).apply {
+            setImageResource(R.drawable.nav_profile)
+            imageTintList = ColorStateList.valueOf(Color.WHITE)
+        }, LinearLayout.LayoutParams(dp(16), dp(16)))
+        authBtn.addView(TextView(this).apply {
+            text = "  Account"
+            textSize = 12f
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
+            setTextColor(Color.WHITE)
+        })
+        header.addView(authBtn)
+
         content.addView(header)
 
         val subTabs = listOf(
+            "home" to "Dashboard",
             "search" to "Search & Stream",
             "subscriptions" to "Subscriptions",
             "queue" to "Queue",
-            "archive" to "Archive"
+            "archive" to "NAS Archive"
         )
+        val tabScroll = HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false }
         val tabRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             setPadding(gutter, dp(4), gutter, dp(10))
@@ -2947,7 +3032,7 @@ class MainActivity : AppCompatActivity() {
                 setTextColor(if (isSelected) Color.WHITE else MUTED)
                 background = if (isSelected) rounded(RED, radius = dp(8).toFloat())
                              else rounded(0x18FFFFFF.toInt(), radius = dp(8).toFloat())
-                setPadding(dp(12), dp(6), dp(12), dp(6))
+                setPadding(dp(14), dp(7), dp(14), dp(7))
                 isClickable = true
                 isFocusable = true
                 layoutParams = LinearLayout.LayoutParams(-2, -2).apply { marginEnd = dp(6) }
@@ -2958,13 +3043,330 @@ class MainActivity : AppCompatActivity() {
             }
             tabRow.addView(tabBtn)
         }
-        content.addView(tabRow)
+        tabScroll.addView(tabRow)
+        content.addView(tabScroll)
 
         when (youtubeSubTab) {
+            "home" -> renderYouTubeHome()
             "search" -> renderYouTubeSearch()
             "subscriptions" -> renderYouTubeSubscriptions()
             "queue" -> renderYouTubeQueue()
             "archive" -> renderYouTubeArchive()
+        }
+    }
+
+    private fun youtubeItemToMedia(obj: JSONObject): Media {
+        val id = obj.optString("id").ifBlank { obj.optString("videoId") }
+        val vid = id.removePrefix("yt-")
+        val title = obj.optString("title")
+        val channelTitle = obj.optString("channelTitle").ifBlank { obj.optString("channelName") }
+        val durationFormatted = obj.optString("durationFormatted")
+        val durationSeconds = obj.optInt("durationSeconds")
+        val durText = if (durationFormatted.isNotBlank()) durationFormatted else if (durationSeconds > 0) {
+            val h = durationSeconds / 3600
+            val m = (durationSeconds % 3600) / 60
+            val s = durationSeconds % 60
+            if (h > 0) String.format("%d:%02d:%02d", h, m, s) else String.format("%d:%02d", m, s)
+        } else ""
+        val posSec = obj.optLong("positionSeconds")
+        val thumb = obj.optString("thumbnailUrl")
+        val proxyUrl = api.absolute("youtube/stream-video?videoId=$vid")
+        val progressPercent = if (obj.has("progressPercent")) obj.optDouble("progressPercent")
+            else if (durationSeconds > 0) (posSec.toDouble() / durationSeconds * 100) else 0.0
+
+        val json = JSONObject().apply {
+            put("id", "yt-$vid")
+            put("videoId", vid)
+            put("jellyfinId", "yt-$vid")
+            put("playbackId", "yt-$vid")
+            put("title", title)
+            put("name", title)
+            put("seriesName", channelTitle)
+            put("channelTitle", channelTitle)
+            put("metadata", if (channelTitle.isNotBlank() && durText.isNotBlank()) "$channelTitle • $durText" else (channelTitle.ifBlank { durText }))
+            put("overview", obj.optString("description"))
+            put("source", "youtube")
+            put("mediaType", "Episode")
+            put("isDownloading", false)
+            put("downloadUrl", proxyUrl)
+            put("downloadStreamUrl", proxyUrl)
+            put("videoStreamUrl", proxyUrl)
+            put("poster", thumb)
+            put("backdrop", thumb)
+            put("playbackPositionTicks", posSec * 10_000_000L)
+            put("progressPercent", progressPercent)
+            put("isAvailableForPlayback", true)
+        }
+        return Media(json)
+    }
+
+    private fun renderYouTubeHome() {
+        val loadBox = FrameLayout(this).apply {
+            setPadding(0, dp(40), 0, dp(40))
+            addView(ProgressBar(this@MainActivity).apply {
+                indeterminateTintList = ColorStateList.valueOf(RED)
+            }, FrameLayout.LayoutParams(-2, -2, Gravity.CENTER))
+        }
+        content.addView(loadBox)
+
+        lifecycleScope.launch {
+            try {
+                val recsDeferred = async { runCatching { api.call("youtube/recommendations") }.getOrNull() }
+                val cwDeferred = async { runCatching { api.call("youtube/continue-watching") }.getOrNull() }
+
+                val recs = recsDeferred.await()
+                val cw = cwDeferred.await()
+
+                if (screen != "youtube" || youtubeSubTab != "home") return@launch
+                content.removeView(loadBox)
+
+                // 1. Featured Hero Banner
+                val heroObj = recs?.optJSONObject("hero")
+                if (heroObj != null) {
+                    val heroMedia = youtubeItemToMedia(heroObj)
+                    renderYouTubeHero(heroMedia, heroObj)
+                }
+
+                // 2. Continue Watching Row
+                val cwItems = cw?.optJSONArray("items")
+                if (cwItems != null && cwItems.length() > 0) {
+                    val list = (0 until cwItems.length()).map { i ->
+                        youtubeItemToMedia(cwItems.getJSONObject(i))
+                    }
+                    mediaRow("Continue Watching", list, isContinueWatching = true, parent = content)
+                }
+
+                // 3. Section Rows (Trending Podcasts & Shows, Documentaries, Subscriptions, etc.)
+                val sections = recs?.optJSONArray("sections")
+                if (sections != null && sections.length() > 0) {
+                    for (i in 0 until sections.length()) {
+                        val sec = sections.getJSONObject(i)
+                        val secTitle = sec.optString("title")
+                        val itemsArr = sec.optJSONArray("items") ?: continue
+                        if (itemsArr.length() == 0) continue
+                        val list = (0 until itemsArr.length()).map { j ->
+                            youtubeItemToMedia(itemsArr.getJSONObject(j))
+                        }
+                        mediaRow(secTitle, list, isContinueWatching = false, parent = content)
+                    }
+                }
+            } catch (e: Exception) {
+                if (screen == "youtube" && youtubeSubTab == "home") {
+                    content.removeView(loadBox)
+                    content.addView(TextView(this@MainActivity).apply {
+                        text = "Failed loading YouTube feed: ${e.message}"
+                        setTextColor(MUTED)
+                        setPadding(gutter, dp(20), gutter, dp(20))
+                    })
+                }
+            }
+        }
+    }
+
+    private fun renderYouTubeHero(item: Media, rawObj: JSONObject) {
+        val frame = FrameLayout(this).apply {
+            clipToOutline = true
+            background = rounded(0xFF1E1E1E.toInt(), radius = dp(12).toFloat())
+        }
+
+        val image = ImageView(this).apply {
+            scaleType = ImageView.ScaleType.CENTER_CROP
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            load(api.absolute(item.backdrop.ifBlank { item.poster })) {
+                crossfade(true); error(R.drawable.ic_homestream)
+            }
+        }
+        frame.addView(image, FrameLayout.LayoutParams(-1, -1))
+
+        val scrim = View(this).apply {
+            background = GradientDrawable(
+                GradientDrawable.Orientation.TOP_BOTTOM,
+                intArrayOf(0x00141414, 0x44141414, 0xDD141414.toInt(), INK)
+            )
+        }
+        frame.addView(scrim, FrameLayout.LayoutParams(-1, -1))
+
+        val infoCol = column().apply {
+            gravity = Gravity.BOTTOM; setPadding(dp(16), dp(16), dp(16), dp(16))
+        }
+
+        infoCol.addView(badgePill("FEATURED YOUTUBE").apply {
+            setPadding(0, 0, 0, dp(6))
+        })
+
+        infoCol.addView(TextView(this).apply {
+            text = item.title
+            textSize = if (isTelevision()) 22f else 17f
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
+            setTextColor(Color.WHITE)
+            maxLines = 2
+            ellipsize = android.text.TextUtils.TruncateAt.END
+        })
+
+        infoCol.addView(TextView(this).apply {
+            text = item.metadata
+            textSize = 12f
+            setTextColor(MUTED)
+            setPadding(0, dp(4), 0, dp(12))
+        })
+
+        val btnRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+
+        val playBtn = Button(this).apply {
+            text = "▶  Play Now"; textSize = 13.5f; typeface = android.graphics.Typeface.DEFAULT_BOLD
+            setTextColor(Color.WHITE); isAllCaps = false
+            background = rounded(RED, radius = dp(8).toFloat())
+            minHeight = dp(40); minimumHeight = dp(40)
+            setPadding(dp(16), 0, dp(16), 0)
+            setOnClickListener { play(item) }
+        }
+        btnRow.addView(playBtn, LinearLayout.LayoutParams(-2, dp(40)).apply { marginEnd = dp(10) })
+
+        val dlBtn = Button(this).apply {
+            text = "⬇  Download to NAS"; textSize = 13f; setTextColor(Color.WHITE); isAllCaps = false
+            background = rounded(0x44FFFFFF.toInt(), radius = dp(8).toFloat())
+            minHeight = dp(40); minimumHeight = dp(40)
+            setPadding(dp(14), 0, dp(14), 0)
+            setOnClickListener {
+                lifecycleScope.launch {
+                    try {
+                        val vid = item.json.optString("videoId")
+                        api.call("youtube/download", body = JSONObject().apply {
+                            put("videoId", vid)
+                            put("title", item.title)
+                            put("channelTitle", item.json.optString("channelTitle"))
+                            put("thumbnailUrl", item.poster)
+                        })
+                        toast("Queued download for: ${item.title}")
+                    } catch (e: Exception) {
+                        toast("Failed: ${e.message}")
+                    }
+                }
+            }
+        }
+        btnRow.addView(dlBtn, LinearLayout.LayoutParams(-2, dp(40)))
+        infoCol.addView(btnRow)
+
+        frame.addView(infoCol, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
+
+        val bannerHeight = dp(if (isTelevision()) 280 else 220)
+        content.addView(frame, LinearLayout.LayoutParams(-1, bannerHeight).apply {
+            setMargins(gutter, dp(4), gutter, dp(14))
+        })
+    }
+
+    private fun showYouTubeItemDialog(item: Media) {
+        val options = arrayOf("▶  Play Now", "⬇  Download to NAS", "🔔  Subscribe to Channel")
+        AlertDialog.Builder(this)
+            .setTitle(item.title)
+            .setItems(options) { _, which ->
+                when (which) {
+                    0 -> play(item)
+                    1 -> lifecycleScope.launch {
+                        try {
+                            api.call("youtube/download", body = JSONObject().apply {
+                                put("videoId", item.json.optString("videoId"))
+                                put("title", item.title)
+                                put("channelTitle", item.json.optString("channelTitle"))
+                                put("thumbnailUrl", item.poster)
+                            })
+                            toast("Queued download for: ${item.title}")
+                        } catch (e: Exception) {
+                            toast("Failed: ${e.message}")
+                        }
+                    }
+                    2 -> lifecycleScope.launch {
+                        try {
+                            val ch = item.json.optString("channelTitle")
+                            api.call("youtube/subscriptions", body = JSONObject().apply {
+                                put("channelUrlOrHandle", ch)
+                                put("autoDownload", true)
+                                put("minDurationSeconds", 30 * 60)
+                                put("ignoreShorts", true)
+                            })
+                            toast("Subscribed to $ch")
+                        } catch (e: Exception) {
+                            toast("Failed: ${e.message}")
+                        }
+                    }
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun openYouTubeAuthDialog() {
+        lifecycleScope.launch {
+            val auth = runCatching { api.call("youtube/auth") }.getOrNull()
+            val isAuth = auth?.optBoolean("authenticated") == true
+            val profileName = auth?.optString("profileName").orEmpty().ifBlank { settings.profile }
+
+            val builder = AlertDialog.Builder(this@MainActivity)
+            builder.setTitle("YouTube Account (${if (isAuth) "Connected" else "Not Connected"})")
+
+            val layout = column().apply {
+                setPadding(dp(20), dp(12), dp(20), dp(12))
+            }
+            layout.addView(TextView(this@MainActivity).apply {
+                text = if (isAuth) {
+                    "Your YouTube account is connected for profile: $profileName.\nSuggestions and subscriptions are personalized."
+                } else {
+                    "Connect YouTube to import your subscriptions, continue watching, and recommendations for profile: $profileName."
+                }
+                textSize = 13f
+                setTextColor(Color.WHITE)
+                setPadding(0, 0, 0, dp(12))
+            })
+
+            val cookieInput = EditText(this@MainActivity).apply {
+                hint = "Paste cookies.txt or session cookies here"
+                textSize = 12f
+                setTextColor(Color.WHITE)
+                setHintTextColor(MUTED)
+                background = rounded(0x22FFFFFF.toInt())
+                setPadding(dp(12), dp(10), dp(12), dp(10))
+                minLines = 3
+                maxLines = 6
+                gravity = Gravity.TOP or Gravity.START
+            }
+            layout.addView(cookieInput)
+            layout.addView(TextView(this@MainActivity).apply {
+                text = "Export cookies from your browser (e.g. 'Get cookies.txt LOCALLY' extension) and paste here."
+                textSize = 10.5f
+                setTextColor(MUTED)
+                setPadding(0, dp(6), 0, 0)
+            })
+
+            builder.setView(layout)
+            builder.setPositiveButton(if (isAuth) "Update Cookies" else "Save & Connect") { _, _ ->
+                val txt = cookieInput.text.toString().trim()
+                if (txt.isNotBlank()) {
+                    lifecycleScope.launch {
+                        try {
+                            api.call("youtube/auth", body = JSONObject().apply { put("cookiesText", txt) })
+                            toast("YouTube account connected!")
+                            loadYouTube()
+                        } catch (e: Exception) {
+                            toast("Failed saving cookies: ${e.message}")
+                        }
+                    }
+                }
+            }
+            if (isAuth) {
+                builder.setNeutralButton("Disconnect") { _, _ ->
+                    lifecycleScope.launch {
+                        try {
+                            api.call("youtube/auth", method = "DELETE")
+                            toast("YouTube account disconnected")
+                            loadYouTube()
+                        } catch (e: Exception) {
+                            toast("Failed: ${e.message}")
+                        }
+                    }
+                }
+            }
+            builder.setNegativeButton("Close", null)
+            builder.show()
         }
     }
 
