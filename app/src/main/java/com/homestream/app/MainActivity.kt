@@ -459,6 +459,9 @@ class MainActivity : AppCompatActivity() {
                 BottomNavItem("Movies", R.drawable.nav_movies, currentTab == "movies" && screen != "search") {
                     loadTab("movies")
                 },
+                BottomNavItem("Music", R.drawable.nav_music, currentTab == "music" && screen != "search") {
+                    loadTab("music")
+                },
                 BottomNavItem("Discover", R.drawable.ic_download, currentTab == "requests" && screen != "search") {
                     loadTab("requests")
                 },
@@ -533,8 +536,8 @@ class MainActivity : AppCompatActivity() {
             Triple("Home", R.drawable.nav_home, { loadTab("home") }),
             Triple("TV Shows", R.drawable.nav_series, { loadTab("series") }),
             Triple("Movies", R.drawable.nav_movies, { loadTab("movies") }),
-            Triple("YouTube", R.drawable.ic_play_arrow, { loadYouTube() }),
             Triple("Music", R.drawable.nav_music, { loadTab("music") }),
+            Triple("YouTube", R.drawable.ic_play_arrow, { loadYouTube() }),
             Triple("Discover", R.drawable.ic_download, { loadTab("requests") }),
             Triple("Music player", R.drawable.nav_music, { musicControls() }),
             Triple("More", R.drawable.ic_menu, { showTvBrowseMenu() }),
@@ -674,7 +677,7 @@ class MainActivity : AppCompatActivity() {
                 setImageResource(R.drawable.nav_music); imageTintList = ColorStateList.valueOf(Color.WHITE)
             }, LinearLayout.LayoutParams(dp(22), dp(22)))
             val musicText = column().apply { setPadding(dp(12), 0, 0, 0); layoutParams = LinearLayout.LayoutParams(0, -2, 1f) }
-            musicText.addView(label("Music Hub", 14f, true))
+            musicText.addView(label("Music", 14f, true))
             musicText.addView(TextView(this).apply { text = "Albums, artists & music player"; textSize = 11f; setTextColor(MUTED) })
             musicBtn.addView(musicText)
             musicBtn.addView(badgePill("MUSIC"))
@@ -691,7 +694,7 @@ class MainActivity : AppCompatActivity() {
                 setImageResource(R.drawable.ic_play_arrow); imageTintList = ColorStateList.valueOf(Color.WHITE)
             }, LinearLayout.LayoutParams(dp(22), dp(22)))
             val ytText = column().apply { setPadding(dp(12), 0, 0, 0); layoutParams = LinearLayout.LayoutParams(0, -2, 1f) }
-            ytText.addView(label("YouTube Hub", 14f, true))
+            ytText.addView(label("YouTube", 14f, true))
             ytText.addView(TextView(this).apply { text = "Continue watching, podcasts & trending"; textSize = 11f; setTextColor(MUTED) })
             ytBtn.addView(ytText)
             ytBtn.addView(badgePill("HUB"))
@@ -2722,7 +2725,7 @@ class MainActivity : AppCompatActivity() {
             titleBar.addView(titleCol)
             content.addView(titleBar)
 
-            hubFilters(listOf("albums" to "Your Albums", "artists" to "Artists", "songs" to "All Songs"), musicCategory) {
+            hubFilters(listOf("albums" to "Albums", "artists" to "Artists", "songs" to "Songs"), musicCategory) {
                 musicCategory = it; musicArtist = null; mediaHub(tab)
             }
         } else {
