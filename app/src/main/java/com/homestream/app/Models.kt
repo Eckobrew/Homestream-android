@@ -28,10 +28,10 @@ data class Media(val json: JSONObject) {
     val trailerKey: String get() = json.optString("trailerKey")
     val playableEpisodeId: String get() = json.optString("playableEpisodeId")
     val source: String get() = json.optString("source")
-    val playable: Boolean get() = json.optString("source") != "demo" && !isVirtual &&
+    val playable: Boolean get() = source == "youtube" || (json.optString("source") != "demo" && !isVirtual &&
         (isDownload || json.optString("status") == "available" || json.optString("status") == "partially_available" ||
-            json.optString("jellyfinId").isNotBlank() || (type == "Episode" && !id.startsWith("seerr-") && !id.startsWith("tmdb-")))
-    val isAvailableForPlayback: Boolean get() = !isVirtual && (isDownload || (playable && !isRequested && ((!id.startsWith("seerr-") && !id.startsWith("tmdb-")) || json.optString("jellyfinId").isNotBlank() || playableEpisodeId.isNotBlank())))
+            json.optString("jellyfinId").isNotBlank() || (type == "Episode" && !id.startsWith("seerr-") && !id.startsWith("tmdb-"))))
+    val isAvailableForPlayback: Boolean get() = source == "youtube" || (!isVirtual && (isDownload || (playable && !isRequested && ((!id.startsWith("seerr-") && !id.startsWith("tmdb-")) || json.optString("jellyfinId").isNotBlank() || playableEpisodeId.isNotBlank()))))
     val metadata: String get() = listOf(json.optString("year").takeUnless { it == "0" }.orEmpty(),
         json.optString("rating"), json.optString("resolution"),
         json.optInt("durationMinutes").takeIf { it > 0 }?.let { "$it min" }.orEmpty()).filter { it.isNotBlank() }.joinToString("  •  ")
