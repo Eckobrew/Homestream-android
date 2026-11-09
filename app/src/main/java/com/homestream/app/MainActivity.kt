@@ -3179,7 +3179,7 @@ class MainActivity : AppCompatActivity() {
         } else ""
         val posSec = obj.optLong("positionSeconds")
         val thumb = obj.optString("thumbnailUrl")
-        val proxyUrl = api.absolute("youtube/stream-video?videoId=$vid")
+        val proxyUrl = api.absolute("/api/mobile/v1/youtube/stream-video?videoId=$vid")
         val progressPercent = if (obj.has("progressPercent")) obj.optDouble("progressPercent")
             else if (durationSeconds > 0) (posSec.toDouble() / durationSeconds * 100) else 0.0
 
@@ -3543,7 +3543,7 @@ class MainActivity : AppCompatActivity() {
                                                 put("posterUrl", item.optString("thumbnailUrl"))
                                                 put("backdropUrl", item.optString("thumbnailUrl"))
                                                 put("isDownloading", true)
-                                                val proxyUrl = api.absolute("youtube/stream-video?videoId=" + item.optString("id"))
+                                                val proxyUrl = api.absolute("/api/mobile/v1/youtube/stream-video?videoId=" + item.optString("id"))
                                                 put("downloadStreamUrl", proxyUrl)
                                                 put("source", "youtube")
                                             }

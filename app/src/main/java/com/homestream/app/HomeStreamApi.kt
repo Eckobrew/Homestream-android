@@ -133,15 +133,35 @@ class HomeStreamApi(private val settings: ConnectionSettings) {
     fun absolute(url: String): String {
         if (url.isBlank()) return ""
         val base = settings.baseUrl.toHttpUrl()
-        val target = base.resolve(url) ?: return ""
+        val normalized = when {
+            url.startsWith("http://") || url.startsWith("https://") -> url
+            url.startsWith("youtube/") || url.startsWith("music/") -> "/api/mobile/v1/$url"
+            else -> url
+        }
+        val target = base.resolve(normalized) ?: return ""
         val sameOrigin = target.scheme == base.scheme && target.host == base.host && target.port == base.port
-        if (sameOrigin && (target.encodedPath.startsWith("/api/v1/music/") || target.encodedPath.startsWith("/api/mobile/v1/music/"))) {
-            return target.newBuilder().encodedPath(target.encodedPath.replaceFirst("/api/v1/music/", "/api/mobile/v1/music/"))
+        if (sameOrigin && (target.encodedPath.startsWith("/api/v1/music/") || target.encodedPath.startsWith("/api/mobile/v1/music/") || target.encodedPath.startsWith("/api/music/"))) {
+            val newPath = when {
+                target.encodedPath.startsWith("/api/v1/music/") -> target.encodedPath.replaceFirst("/api/v1/music/", "/api/mobile/v1/music/")
+                target.encodedPath.startsWith("/api/music/") -> target.encodedPath.replaceFirst("/api/music/", "/api/mobile/v1/music/")
+                else -> target.encodedPath
+            }
+            return target.newBuilder().encodedPath(newPath)
                 .apply { if (settings.profile.isNotBlank()) setQueryParameter("userId", settings.profile) }.build().toString()
         }
-        if (sameOrigin && (target.encodedPath.startsWith("/api/youtube/") || target.encodedPath.startsWith("/api/mobile/v1/youtube/"))) {
-            return target.newBuilder().encodedPath(target.encodedPath.replaceFirst("/api/youtube/", "/api/mobile/v1/youtube/"))
-                .apply { if (settings.profile.isNotBlank()) setQueryParameter("profileId", settings.profile) }.build().toString()
+        if (sameOrigin && (target.encodedPath.startsWith("/api/v1/youtube/") || target.encodedPath.startsWith("/api/youtube/") || target.encodedPath.startsWith("/api/mobile/v1/youtube/"))) {
+            val newPath = when {
+                target.encodedPath.startsWith("/api/v1/youtube/") -> target.encodedPath.replaceFirst("/api/v1/youtube/", "/api/mobile/v1/youtube/")
+                target.encodedPath.startsWith("/api/youtube/") -> target.encodedPath.replaceFirst("/api/youtube/", "/api/mobile/v1/youtube/")
+                else -> target.encodedPath
+            }
+            return target.newBuilder().encodedPath(newPath)
+                .apply {
+                    if (settings.profile.isNotBlank()) {
+                        setQueryParameter("userId", settings.profile)
+                        setQueryParameter("profileId", settings.profile)
+                    }
+                }.build().toString()
         }
         return if (target.scheme == base.scheme && target.host == base.host && target.port == base.port &&
             target.encodedPath.endsWith("/api/stream/download")) {

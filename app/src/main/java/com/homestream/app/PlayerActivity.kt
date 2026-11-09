@@ -569,19 +569,30 @@ class PlayerActivity : AppCompatActivity() {
     }
 
     private fun launchStreamUrl(streamPath: String, compatible: Boolean = transcode) {
-        val fullPath = if (streamPath.startsWith("/api/")) streamPath
-                       else "/api/mobile/v1/${streamPath.removePrefix("/")}"
-        val playUri = Uri.parse(api.absolute(fullPath)).buildUpon()
-            .appendQueryParameter(if (compatible) "transcode" else "native", "1").build()
+        val playUri = if (streamPath.startsWith("http://") || streamPath.startsWith("https://")) {
+            Uri.parse(streamPath).buildUpon().apply {
+                if (media.source != "youtube") {
+                    appendQueryParameter(if (compatible) "transcode" else "native", "1")
+                }
+            }.build()
+        } else {
+            val fullPath = if (streamPath.startsWith("/api/")) streamPath
+                           else "/api/mobile/v1/${streamPath.removePrefix("/")}"
+            Uri.parse(api.absolute(fullPath)).buildUpon().apply {
+                if (media.source != "youtube") {
+                    appendQueryParameter(if (compatible) "transcode" else "native", "1")
+                }
+            }.build()
+        }
 
         clearMessages()
         showMessage("Buffering download stream…")
         describeStream(JSONObject().put("streamUrl", playUri.toString())
-            .put("playMethod", if (compatible) "Transcode" else "DirectPlay"))
+            .put("playMethod", if (compatible && media.source != "youtube") "Transcode" else "DirectPlay"))
         var bufferRetries = 0
         val item = MediaItem.Builder()
             .setUri(playUri)
-            .apply { if (compatible) setMimeType(MimeTypes.VIDEO_MP4) }
+            .apply { if (compatible && media.source != "youtube") setMimeType(MimeTypes.VIDEO_MP4) }
             .build()
         releaseLocal()
 

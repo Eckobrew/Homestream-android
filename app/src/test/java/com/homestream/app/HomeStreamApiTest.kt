@@ -25,6 +25,24 @@ class HomeStreamApiTest {
         assertEquals("https://other.example/api/v1/music/artwork", api.absolute("https://other.example/api/v1/music/artwork"))
     }
 
+    @Test fun youtubeUrlsUseNativeRoutesAndCurrentProfile() {
+        val api = HomeStreamApi(settings("https://home.example"))
+        val url1 = api.absolute("youtube/stream-video?videoId=dQw4w9WgXcQ").toHttpUrl()
+        assertEquals("/api/mobile/v1/youtube/stream-video", url1.encodedPath)
+        assertEquals("dQw4w9WgXcQ", url1.queryParameter("videoId"))
+        assertEquals("profile & one", url1.queryParameter("profileId"))
+
+        val url2 = api.absolute("/api/youtube/stream-video?videoId=dQw4w9WgXcQ").toHttpUrl()
+        assertEquals("/api/mobile/v1/youtube/stream-video", url2.encodedPath)
+        assertEquals("dQw4w9WgXcQ", url2.queryParameter("videoId"))
+
+        val url3 = api.absolute("/api/mobile/v1/youtube/stream-video?videoId=dQw4w9WgXcQ").toHttpUrl()
+        assertEquals("/api/mobile/v1/youtube/stream-video", url3.encodedPath)
+        assertEquals("dQw4w9WgXcQ", url3.queryParameter("videoId"))
+
+        assertEquals("https://other.example/api/youtube/stream-video?videoId=abc", api.absolute("https://other.example/api/youtube/stream-video?videoId=abc"))
+    }
+
     @Test fun musicRangeRequestsRetainAuthorizationAcrossSeeks() {
         MockWebServer().use { server ->
             val api = HomeStreamApi(settings(server.url("/").toString()))
