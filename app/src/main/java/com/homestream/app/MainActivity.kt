@@ -3104,7 +3104,8 @@ class MainActivity : AppCompatActivity() {
                                                 put("posterUrl", item.optString("thumbnailUrl"))
                                                 put("backdropUrl", item.optString("thumbnailUrl"))
                                                 put("isDownloading", true)
-                                                put("downloadStreamUrl", streamUrl)
+                                                val proxyUrl = api.absolute("youtube/stream-video?videoId=" + item.optString("id"))
+                                                put("downloadStreamUrl", proxyUrl)
                                                 put("source", "youtube")
                                             }
                                             play(Media(m))

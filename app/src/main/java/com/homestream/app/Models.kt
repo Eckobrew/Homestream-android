@@ -15,7 +15,7 @@ data class Media(val json: JSONObject) {
     val backdrop: String get() = json.optString("backdropUrl", poster)
     val playbackId: String get() = json.optString("jellyfinId").ifBlank { id }
     val downloadUrl: String get() = json.optString("downloadStreamUrl").ifBlank { json.optString("videoStreamUrl") }
-    val isDownload: Boolean get() = json.optBoolean("isDownloading") && downloadUrl.isNotBlank()
+    val isDownload: Boolean get() = (json.optBoolean("isDownloading") || json.optString("source") == "youtube" || downloadUrl.contains("/youtube/")) && downloadUrl.isNotBlank()
     val isVirtual: Boolean get() = json.optString("locationType") == "Virtual"
     val isRequested: Boolean get() = json.optString("status") == "requested" || json.optString("status") == "processing"
     val resumeMs: Long get() = ticksToMs(json.optLong("playbackPositionTicks"))

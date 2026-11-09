@@ -686,7 +686,7 @@ class PlayerActivity : AppCompatActivity() {
     private fun startLocal() {
         setPlaybackPresentation(false)
         negotiation?.cancel(); clearMessages(); showMessage("Preparing playback…")
-        if (media.isDownload) {
+        if (media.isDownload || media.source == "youtube") {
             isStreamingDownload = true
             launchStreamUrl(media.downloadUrl)
             return
@@ -814,7 +814,7 @@ class PlayerActivity : AppCompatActivity() {
                             }
                             clearMessages()
                             showMessage("Playback failed (${error.errorCodeName}). Check that this device can reach Jellyfin.")
-                            if (media.isDownload) {
+                            if (media.isDownload || media.source == "youtube") {
                                 showMessage("In-progress downloads may buffer or be unseekable. Wait for more data and retry.")
                                 overlay.addView(action("Retry") { startLocal() })
                             } else overlay.addView(action("Retry with compatible HLS") { transcode = true; updateModeBadge(); startLocal() })
