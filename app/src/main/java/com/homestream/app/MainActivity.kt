@@ -507,10 +507,10 @@ class MainActivity : AppCompatActivity() {
             "A–Z Series" to { loadCatalog("tv") },
             "Movie Categories" to { loadCategories("movies") },
             "TV Categories" to { loadCategories("tv") },
-            "YouTube Hub" to { loadYouTube() },
             "Music Hub" to { loadTab("music") },
+            "YouTube Hub" to { loadYouTube() },
             "Active Downloads" to { loadDownloads() }
-        ).filter { (it.first !in listOf("YouTube Hub", "Music Hub", "Active Downloads")) || !settings.isKids }
+        ).filter { (it.first !in listOf("Music Hub", "YouTube Hub", "Active Downloads")) || !settings.isKids }
         AlertDialog.Builder(this).setTitle("Browse more")
             .setItems(destinations.map { it.first }.toTypedArray()) { _, index -> destinations[index].second() }
             .setNegativeButton("Back", null).show()
@@ -660,25 +660,8 @@ class MainActivity : AppCompatActivity() {
         homeFeedBtn.addView(homeFeedText)
         panel.addView(homeFeedBtn, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
 
-        // Dedicated Hubs Section: YouTube Hub & Spotify Music Hub
+        // Dedicated Hubs Section: Music Hub & YouTube Hub
         if (!settings.isKids) {
-            val ytBtn = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
-                background = rounded(if (screen == "youtube") RED else 0x22FFFFFF.toInt())
-                setPadding(dp(14), dp(12), dp(14), dp(12))
-                isClickable = true
-                setOnClickListener { closeSidebar(); loadYouTube() }
-            }
-            ytBtn.addView(ImageView(this).apply {
-                setImageResource(R.drawable.ic_play_arrow); imageTintList = ColorStateList.valueOf(Color.WHITE)
-            }, LinearLayout.LayoutParams(dp(22), dp(22)))
-            val ytText = column().apply { setPadding(dp(12), 0, 0, 0); layoutParams = LinearLayout.LayoutParams(0, -2, 1f) }
-            ytText.addView(label("YouTube Hub", 14f, true))
-            ytText.addView(TextView(this).apply { text = "Continue watching, podcasts & trending"; textSize = 11f; setTextColor(MUTED) })
-            ytBtn.addView(ytText)
-            ytBtn.addView(badgePill("HUB"))
-            panel.addView(ytBtn, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
-
             // Dedicated Music Hub Tab
             val musicBtn = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
@@ -695,7 +678,24 @@ class MainActivity : AppCompatActivity() {
             musicText.addView(TextView(this).apply { text = "Albums, artists & music player"; textSize = 11f; setTextColor(MUTED) })
             musicBtn.addView(musicText)
             musicBtn.addView(badgePill("MUSIC"))
-            panel.addView(musicBtn, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(20) })
+            panel.addView(musicBtn, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
+
+            val ytBtn = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+                background = rounded(if (screen == "youtube") RED else 0x22FFFFFF.toInt())
+                setPadding(dp(14), dp(12), dp(14), dp(12))
+                isClickable = true
+                setOnClickListener { closeSidebar(); loadYouTube() }
+            }
+            ytBtn.addView(ImageView(this).apply {
+                setImageResource(R.drawable.ic_play_arrow); imageTintList = ColorStateList.valueOf(Color.WHITE)
+            }, LinearLayout.LayoutParams(dp(22), dp(22)))
+            val ytText = column().apply { setPadding(dp(12), 0, 0, 0); layoutParams = LinearLayout.LayoutParams(0, -2, 1f) }
+            ytText.addView(label("YouTube Hub", 14f, true))
+            ytText.addView(TextView(this).apply { text = "Continue watching, podcasts & trending"; textSize = 11f; setTextColor(MUTED) })
+            ytBtn.addView(ytText)
+            ytBtn.addView(badgePill("HUB"))
+            panel.addView(ytBtn, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(20) })
         }
 
         // Section: Jellyfin Media (A–Z)
