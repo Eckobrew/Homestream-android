@@ -410,10 +410,53 @@ class PlayerActivity : AppCompatActivity() {
     private fun showUnDownloadedUI(reason: String = "This title has not been downloaded yet.") {
         clearMessages()
         showMessage(reason)
-        if (ServerSettings(this).kidsRating.isBlank()) overlay.addView(action("▶  Stream with qBittorrent") {
-            startStreamingDownloadPipeline()
-        })
+        if (ServerSettings(this).kidsRating.isBlank()) {
+            overlay.addView(action("▶  Stream Now") {
+                startStreamingTorrentPipeline()
+            })
+            overlay.addView(action("⬇  Request Download") {
+                startStreamingDownloadPipeline()
+            })
+        }
         overlay.addView(action("←  Back to Browse") { finish() })
+    }
+
+    private fun startStreamingTorrentPipeline() {
+        isStreamingDownload = true
+        downloadPollingJob?.cancel()
+        negotiation?.cancel()
+        releaseLocal()
+        clearMessages()
+
+        val isTv = intent.getStringExtra("mediaType") == "tv" || media.type == "Series" || media.type == "Episode"
+        val sNum = intent.getIntExtra("season", 0).takeIf { it > 0 } ?: media.json.optInt("seasonNumber", 1).coerceAtLeast(1)
+        val epNum = intent.getIntExtra("episode", 0).takeIf { it > 0 } ?: media.json.optInt("episodeNumber", 1).coerceAtLeast(1)
+        val sTitle = intent.getStringExtra("seriesTitle")?.ifBlank { null } ?: media.title
+
+        val tmdb = intent.getIntExtra("tmdbId", 0).takeIf { it > 0 } ?: if (media.tmdbId > 0) media.tmdbId else {
+            val strId = media.id.replace("^seerr-(?:movie-|tv-)?".toRegex(), "")
+            strId.toIntOrNull() ?: 0
+        }
+
+        val totalDurationMs = (media.json.optInt("durationMinutes").takeIf { it > 0 } ?: 120) * 60L * 1000L
+        val timeBar = playerView.findViewById<androidx.media3.ui.DefaultTimeBar>(androidx.media3.ui.R.id.exo_progress)
+        timeBar?.setDuration(totalDurationMs)
+
+        showMessage("Connecting to torrent stream…")
+
+        val streamPath = buildString {
+            append("stream/torrent?tmdbId=").append(tmdb)
+            append("&type=").append(if (isTv) "tv" else "movie")
+            if (isTv) {
+                append("&season=").append(sNum)
+                append("&episode=").append(epNum)
+                if (sTitle.isNotBlank()) {
+                    append("&title=").append(java.net.URLEncoder.encode(sTitle, "UTF-8"))
+                }
+            }
+        }
+
+        launchStreamUrl(streamPath)
     }
 
     private fun startStreamingDownloadPipeline(sendRequest: Boolean = true) {
@@ -597,6 +640,7 @@ class PlayerActivity : AppCompatActivity() {
                         clearMessages()
                         showMessage("Download playback failed (${status ?: error.errorCodeName}).")
                         overlay.addView(action("Retry") { launchStreamUrl(streamPath, compatible) })
+                        overlay.addView(action("Download via Seerr") { startStreamingDownloadPipeline() })
                         overlay.addView(action("←  Back to Browse") { finish() })
                         return
                     }
@@ -649,7 +693,7 @@ class PlayerActivity : AppCompatActivity() {
         }
         val hasResumeEpisode = media.type in listOf("Series", "Season") && media.playableEpisodeId.isNotBlank()
         if (isStreamingDownload || (!media.isAvailableForPlayback && !hasResumeEpisode)) {
-            startStreamingDownloadPipeline()
+            startStreamingTorrentPipeline()
             return
         }
         negotiation = lifecycleScope.launch {
@@ -657,7 +701,7 @@ class PlayerActivity : AppCompatActivity() {
                 val targetId = resolvePlaybackId()
 
                 if (targetId.startsWith("seerr-") || media.isVirtual) {
-                    startStreamingDownloadPipeline()
+                    startStreamingTorrentPipeline()
                     return@launch
                 }
 
