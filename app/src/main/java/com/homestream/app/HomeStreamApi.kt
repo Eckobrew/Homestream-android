@@ -41,22 +41,22 @@ class HomeStreamApi(private val settings: ConnectionSettings) {
         try { prefetchSlots.withPermit { if (!cacheFresh(path)) call(path) } } finally { BrowseCache.finish(key) }
     }
 
-    suspend fun call(path: String, params: Map<String, String> = emptyMap(), body: JSONObject? = null): JSONObject = withContext(Dispatchers.IO) {
+    suspend fun call(path: String, params: Map<String, String> = emptyMap(), body: JSONObject? = null, method: String? = null): JSONObject = withContext(Dispatchers.IO) {
         val primaryBase = settings.baseUrl
         val profile = settings.profile
         val token = settings.token
-        val cache = if (body == null && BrowseCache.supported(path)) cacheKey(path, params) else null
+        val cache = if (body == null && method == null && BrowseCache.supported(path)) cacheKey(path, params) else null
         fun remember(value: JSONObject): JSONObject {
             if (cache != null) BrowseCache.put(cache, value)
             if (body != null && path in setOf("watched", "profiles") || (body != null && path == "progress" && body.optBoolean("isStopped"))) BrowseCache.clear()
             return value
         }
         try {
-            remember(executeCall(primaryBase, path, params, body, profile, token)).also {
+            remember(executeCall(primaryBase, path, params, body, profile, token, method)).also {
                 (settings as? ServerSettings)?.rememberSuccessfulUrl(primaryBase)
             }
         } catch (e: IOException) {
-            if (e is ResponseException || body != null) throw e
+            if (e is ResponseException || body != null || method != null) throw e
             val serverSettings = settings as? ServerSettings
             val altBase = if (serverSettings != null && serverSettings.externalUrl.isNotBlank() && serverSettings.localUrl.isNotBlank()) {
                 if (primaryBase == serverSettings.localUrl) serverSettings.externalUrl else serverSettings.localUrl
@@ -64,7 +64,7 @@ class HomeStreamApi(private val settings: ConnectionSettings) {
 
             if (altBase != null && altBase != primaryBase) {
                 try {
-                    remember(executeCall(altBase, path, params, body, profile, token)).also { serverSettings?.rememberSuccessfulUrl(altBase) }
+                    remember(executeCall(altBase, path, params, body, profile, token, method)).also { serverSettings?.rememberSuccessfulUrl(altBase) }
                 } catch (_: Exception) {
                     throw e
                 }
@@ -74,7 +74,7 @@ class HomeStreamApi(private val settings: ConnectionSettings) {
         }
     }
 
-    private suspend fun executeCall(baseUrl: String, path: String, params: Map<String, String>, body: JSONObject?, profile: String, token: String): JSONObject {
+    private suspend fun executeCall(baseUrl: String, path: String, params: Map<String, String>, body: JSONObject?, profile: String, token: String, method: String? = null): JSONObject {
         val url = (baseUrl.trimEnd('/') + "/api/mobile/v1/" + path).toHttpUrl().newBuilder()
         if (profile.isNotBlank()) url.addQueryParameter("userId", profile)
         params.forEach { (key, value) -> url.addQueryParameter(key, value) }
@@ -86,7 +86,13 @@ class HomeStreamApi(private val settings: ConnectionSettings) {
             if ((path == "profiles" || path.startsWith("profiles/")) && payload.optString("parentPin").isBlank()) {
                 payload.remove("parentPin")
             }
-            request.post(payload.toString().toRequestBody("application/json".toMediaType()))
+            if (method == "PUT") {
+                request.put(payload.toString().toRequestBody("application/json".toMediaType()))
+            } else {
+                request.post(payload.toString().toRequestBody("application/json".toMediaType()))
+            }
+        } else if (method == "DELETE") {
+            request.delete()
         }
         return awaitResponse(client.newCall(request.build())).use { response ->
             val text = response.body?.string().orEmpty()
