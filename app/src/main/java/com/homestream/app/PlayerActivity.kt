@@ -1198,12 +1198,34 @@ class PlayerActivity : AppCompatActivity() {
         startLocal()
     }
     private fun reportStarted() {
-        if (reportedStartedId == currentPlaybackId || media.isDownload || isStreamingDownload) return
+        if (reportedStartedId == currentPlaybackId || ((media.isDownload || isStreamingDownload) && media.source != "youtube")) return
         reportedStartedId = currentPlaybackId
         report(false, started = true)
     }
 
     private fun report(stopped: Boolean, started: Boolean = false) {
+        if (media.source == "youtube") {
+            val videoId = media.json.optString("videoId").ifBlank { media.id.removePrefix("yt-") }
+            player?.let { position = it.currentPosition }
+            val snapshot = position
+            val durMs = knownDurationMs.takeIf { it > 0 } ?: player?.duration?.takeIf { it > 0 } ?: 0L
+            val posSec = (snapshot / 1000).toInt()
+            val durSec = (durMs / 1000).toInt()
+            (application as HomeStreamApplication).enqueuePlaybackReport {
+                runCatching {
+                    api.call("youtube/progress", body = JSONObject().apply {
+                        put("videoId", videoId)
+                        put("positionSeconds", posSec)
+                        put("durationSeconds", durSec)
+                        put("completed", durSec > 0 && posSec >= durSec - 15)
+                        put("title", media.title)
+                        put("channelTitle", media.json.optString("channelTitle"))
+                        put("thumbnailUrl", media.poster)
+                    })
+                }
+            }
+            return
+        }
         if (media.isDownload || isStreamingDownload || remote != null) return
         val client = remote
         val activeId = if (currentPlaybackId.isNotBlank()) currentPlaybackId else media.playbackId
