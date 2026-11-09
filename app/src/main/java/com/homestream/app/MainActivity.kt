@@ -383,54 +383,112 @@ class MainActivity : AppCompatActivity() {
         })
     }
 
+    private data class BottomNavItem(
+        val title: String,
+        val icon: Int,
+        val isActive: Boolean,
+        val action: () -> Unit
+    )
+
     private fun createFloatingBottomNav(): View {
+        val SPOTIFY_GREEN = 0xFF1DB954.toInt()
+        val accentColor = when (screen) {
+            "music" -> SPOTIFY_GREEN
+            "youtube" -> RED
+            else -> RED
+        }
+        val strokeColor = when (screen) {
+            "music" -> 0x551DB954.toInt()
+            "youtube" -> 0x55E50914.toInt()
+            else -> 0x33FFFFFF.toInt()
+        }
+
         val pill = LinearLayout(this).apply {
             id = R.id.phone_bottom_navigation; gravity = Gravity.CENTER_VERTICAL
             orientation = LinearLayout.HORIZONTAL
             background = GradientDrawable().apply {
                 setColor(0xF0181818.toInt()); cornerRadius = dp(28).toFloat()
-                setStroke(dp(1), 0x33FFFFFF.toInt())
+                setStroke(dp(1), strokeColor)
             }
             elevation = dp(10).toFloat()
             setPadding(dp(4), dp(4), dp(4), dp(4))
         }
 
-        val navTabs = listOf(
-            Triple("Home", R.drawable.nav_home, "home"),
-            Triple("TV Shows", R.drawable.nav_series, "series"),
-            Triple("Movies", R.drawable.nav_movies, "movies"),
-            Triple("Discover", R.drawable.ic_download, "requests"),
-            Triple("Search", R.drawable.nav_search, "search")
-        )
+        val items: List<BottomNavItem> = when (screen) {
+            "youtube" -> listOf(
+                BottomNavItem("Home", R.drawable.nav_home, youtubeSubTab == "home") {
+                    youtubeSubTab = "home"; loadYouTube()
+                },
+                BottomNavItem("Subs", R.drawable.ic_play_arrow, youtubeSubTab == "subscriptions") {
+                    youtubeSubTab = "subscriptions"; loadYouTube()
+                },
+                BottomNavItem("Queue", R.drawable.nav_list, youtubeSubTab == "queue") {
+                    youtubeSubTab = "queue"; loadYouTube()
+                },
+                BottomNavItem("Archive", R.drawable.ic_download, youtubeSubTab == "archive") {
+                    youtubeSubTab = "archive"; loadYouTube()
+                },
+                BottomNavItem("Search", R.drawable.nav_search, youtubeSubTab == "search") {
+                    youtubeSubTab = "search"; loadYouTube()
+                }
+            )
+            "music" -> listOf(
+                BottomNavItem("Albums", R.drawable.nav_music, musicCategory == "albums") {
+                    musicCategory = "albums"; musicArtist = null; mediaHub("music")
+                },
+                BottomNavItem("Artists", R.drawable.nav_profile, musicCategory == "artists") {
+                    musicCategory = "artists"; musicArtist = null; mediaHub("music")
+                },
+                BottomNavItem("Songs", R.drawable.nav_list, musicCategory == "songs") {
+                    musicCategory = "songs"; musicArtist = null; mediaHub("music")
+                },
+                BottomNavItem("Search", R.drawable.nav_search, musicQuery.isNotBlank()) {
+                    musicCategory = "albums"; mediaHub("music")
+                },
+                BottomNavItem("Player", R.drawable.ic_play_arrow, false) {
+                    musicControls()
+                }
+            )
+            else -> listOf(
+                BottomNavItem("Home", R.drawable.nav_home, currentTab == "home" && screen != "search") {
+                    loadTab("home")
+                },
+                BottomNavItem("TV Shows", R.drawable.nav_series, currentTab == "series" && screen != "search") {
+                    loadTab("series")
+                },
+                BottomNavItem("Movies", R.drawable.nav_movies, currentTab == "movies" && screen != "search") {
+                    loadTab("movies")
+                },
+                BottomNavItem("Discover", R.drawable.ic_download, currentTab == "requests" && screen != "search") {
+                    loadTab("requests")
+                },
+                BottomNavItem("Search", R.drawable.nav_search, screen == "search") {
+                    openSearch()
+                }
+            )
+        }
 
-        navTabs.forEach { (title, icon, tabKey) ->
-            val isActive = if (tabKey == "search") screen == "search"
-                           else currentTab == tabKey && screen != "search" && screen != "youtube" && screen != "music"
+        items.forEach { navItem ->
             val item = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER
                 setPadding(dp(2), dp(6), dp(2), dp(6))
                 isClickable = true; isFocusable = true
                 background = GradientDrawable().apply {
-                    setColor(if (isActive) 0x22FFFFFF.toInt() else Color.TRANSPARENT)
+                    setColor(if (navItem.isActive) 0x22FFFFFF.toInt() else Color.TRANSPARENT)
                     cornerRadius = dp(20).toFloat()
                 }
-                setOnClickListener {
-                    when (tabKey) {
-                        "search" -> openSearch()
-                        else -> loadTab(tabKey)
-                    }
-                }
+                setOnClickListener { navItem.action() }
             }
 
             val img = ImageView(this).apply {
-                setImageResource(icon)
-                imageTintList = ColorStateList.valueOf(if (isActive) RED else MUTED)
+                setImageResource(navItem.icon)
+                imageTintList = ColorStateList.valueOf(if (navItem.isActive) accentColor else MUTED)
             }
             item.addView(img, LinearLayout.LayoutParams(dp(20), dp(20)))
 
             val txt = TextView(this).apply {
-                text = title; textSize = 10f; typeface = android.graphics.Typeface.DEFAULT_BOLD
-                setTextColor(if (isActive) Color.WHITE else MUTED)
+                text = navItem.title; textSize = 10f; typeface = android.graphics.Typeface.DEFAULT_BOLD
+                setTextColor(if (navItem.isActive) Color.WHITE else MUTED)
                 setPadding(0, dp(2), 0, 0)
                 isSingleLine = true
                 gravity = Gravity.CENTER
