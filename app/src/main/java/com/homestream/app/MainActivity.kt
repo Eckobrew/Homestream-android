@@ -2720,19 +2720,6 @@ class MainActivity : AppCompatActivity() {
                 setPadding(0, dp(2), 0, 0)
             })
             titleBar.addView(titleCol)
-
-            val npBtn = Button(this).apply {
-                text = "▶  Now Playing"
-                textSize = 12f
-                typeface = android.graphics.Typeface.DEFAULT_BOLD
-                setTextColor(Color.BLACK)
-                background = rounded(SPOTIFY_GREEN, radius = dp(18).toFloat())
-                minHeight = dp(36); minimumHeight = dp(36)
-                setPadding(dp(14), 0, dp(14), 0)
-                isAllCaps = false
-                setOnClickListener { musicControls() }
-            }
-            titleBar.addView(npBtn)
             content.addView(titleBar)
 
             hubFilters(listOf("albums" to "Your Albums", "artists" to "Artists", "songs" to "All Songs"), musicCategory) {
