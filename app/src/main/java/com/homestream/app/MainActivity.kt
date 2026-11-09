@@ -2209,6 +2209,12 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private val exportifyFilePicker = registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.GetContent()) { uri: android.net.Uri? ->
+        if (uri != null) {
+            importExportifyUri(uri)
+        }
+    }
+
     private fun profiles() {
         stopService(Intent(this, MusicService::class.java))
         if (!settings.canUseProfiles) return
@@ -3097,7 +3103,7 @@ class MainActivity : AppCompatActivity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(8), dp(8), dp(8), dp(12))
-            val btn = action("+ Import Spotify Playlist", primary = true) {
+            val btn = action("+ Import Playlists (Spotify / Exportify)", primary = true) {
                 showSpotifyImportDialog()
             }.apply {
                 background = StateListDrawable().apply {
@@ -3126,13 +3132,13 @@ class MainActivity : AppCompatActivity() {
                     gravity = Gravity.CENTER_HORIZONTAL
                 })
                 addView(TextView(context).apply {
-                    text = "Import public Spotify playlists or an entire user profile. Tracks are automatically downloaded in MP3 format via Soulseek (slskd) directly into your personal music profile."
+                    text = "Import public Spotify playlists or Exportify (.csv/.zip) files. Tracks are automatically downloaded in MP3 format via Soulseek (slskd) directly into your personal music profile."
                     textSize = 13f
                     setTextColor(MUTED)
                     gravity = Gravity.CENTER_HORIZONTAL
                     setPadding(dp(8), dp(8), dp(8), dp(16))
                 })
-                addView(action("Import Spotify Playlists", primary = true) {
+                addView(action("Import Playlists", primary = true) {
                     showSpotifyImportDialog()
                 })
             }
@@ -3402,20 +3408,75 @@ class MainActivity : AppCompatActivity() {
         musicControls()
     }
 
+    private fun importExportifyUri(uri: android.net.Uri) {
+        lifecycleScope.launch {
+            try {
+                val cr = contentResolver
+                var displayName = "Exportify Playlist"
+                cr.query(uri, null, null, null, null)?.use { cursor ->
+                    val nameIdx = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                    if (nameIdx != -1 && cursor.moveToFirst()) {
+                        displayName = cursor.getString(nameIdx)
+                    }
+                }
+
+                val isZip = displayName.endsWith(".zip", ignoreCase = true)
+                val bytes = cr.openInputStream(uri)?.use { it.readBytes() } ?: throw Exception("Could not read file")
+
+                val payload = JSONObject()
+                if (isZip) {
+                    val b64 = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
+                    payload.put("zipBase64", b64)
+                } else {
+                    val text = String(bytes, Charsets.UTF_8)
+                    payload.put("csv", text)
+                    payload.put("playlistName", displayName.replace(Regex("\\.csv$", RegexOption.IGNORE_CASE), ""))
+                }
+
+                toast("Importing Exportify file...")
+                val res = api.call("music/playlists/import", body = payload)
+                toast(res.optString("message", "Playlists imported successfully"))
+                selectedPlaylistId = null
+                mediaHub("music")
+            } catch (e: Exception) {
+                toast(e.message ?: "Failed importing Exportify file")
+            }
+        }
+    }
+
     private fun showSpotifyImportDialog() {
+        var importDialog: AlertDialog? = null
         val form = column().apply {
             setPadding(dp(20), dp(12), dp(20), dp(12))
-            addView(label("Import from Spotify", 18f, true))
+            addView(label("Import Playlists", 18f, true))
             addView(TextView(context).apply {
-                text = "Paste Spotify playlist link(s) or a user profile link below (one per line). Tracks will be searched and downloaded from Soulseek (slskd) directly into your profile's music library in MP3 format."
+                text = "Import from Spotify (link or user profile) or Exportify (.csv or .zip). Tracks are automatically downloaded in MP3 format via Soulseek (slskd) directly into your profile's music library."
                 textSize = 13f
                 setTextColor(MUTED)
                 setPadding(0, dp(4), 0, dp(12))
             })
+
+            val fileBtn = action("📁  Upload Exportify CSV or ZIP File", primary = true) {
+                importDialog?.dismiss()
+                exportifyFilePicker.launch("*/*")
+            }.apply {
+                background = StateListDrawable().apply {
+                    addState(intArrayOf(android.R.attr.state_focused), rounded(Color.WHITE))
+                    addState(intArrayOf(android.R.attr.state_pressed), rounded(0xFF1ED760.toInt()))
+                    addState(intArrayOf(), rounded(0xFF262626.toInt()))
+                }
+                setTextColor(Color.WHITE)
+            }
+            addView(fileBtn, LinearLayout.LayoutParams(-1, dp(44)).apply { bottomMargin = dp(12) })
+
+            addView(label("Or paste Spotify link(s) or Exportify CSV:", 13f, true).apply {
+                setTextColor(MUTED)
+                setPadding(0, 0, 0, dp(6))
+            })
         }
 
         val urlInput = EditText(this).apply {
-            hint = "https://open.spotify.com/playlist/...\nhttps://open.spotify.com/user/..."
+            hint = "https://open.spotify.com/playlist/...\nhttps://open.spotify.com/user/...\nOr paste CSV text"
             setTextColor(Color.WHITE)
             setHintTextColor(MUTED)
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
@@ -3426,22 +3487,29 @@ class MainActivity : AppCompatActivity() {
             form.addView(this)
         }
 
-        AlertDialog.Builder(this)
-            .setTitle("Import Spotify Playlists")
+        importDialog = AlertDialog.Builder(this)
+            .setTitle("Import Playlists")
             .setView(ScrollView(this).apply { addView(form) })
             .setPositiveButton("Start Import") { _, _ ->
                 val text = urlInput.text.toString().trim()
                 if (text.isBlank()) {
-                    toast("Please enter at least one Spotify URL")
+                    toast("Please enter a Spotify URL, Exportify CSV, or select a file")
                     return@setPositiveButton
                 }
                 lifecycleScope.launch {
                     try {
-                        val res = api.call("music/playlists/import", body = JSONObject().put("urls", text))
+                        val payload = JSONObject()
+                        if (text.startsWith("Track URI", ignoreCase = true) || text.startsWith("Track Name", ignoreCase = true)) {
+                            payload.put("csv", text)
+                            payload.put("playlistName", "Exportify Playlist")
+                        } else {
+                            payload.put("urls", text)
+                        }
+                        val res = api.call("music/playlists/import", body = payload)
                         toast(res.optString("message", "Import started"))
                         mediaHub("music")
                     } catch (e: Exception) {
-                        toast(e.message ?: "Failed to import Spotify playlist")
+                        toast(e.message ?: "Failed to import playlist")
                     }
                 }
             }
