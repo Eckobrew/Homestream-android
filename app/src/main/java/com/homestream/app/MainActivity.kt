@@ -399,16 +399,13 @@ class MainActivity : AppCompatActivity() {
             Triple("Home", R.drawable.nav_home, "home"),
             Triple("TV Shows", R.drawable.nav_series, "series"),
             Triple("Movies", R.drawable.nav_movies, "movies"),
-            Triple("YouTube", R.drawable.ic_play_arrow, "youtube"),
-            Triple("Music", R.drawable.nav_music, "music"),
             Triple("Discover", R.drawable.ic_download, "requests"),
             Triple("Search", R.drawable.nav_search, "search")
         )
 
-        navTabs.filter { (it.third != "music" && it.third != "youtube") || !settings.isKids }.forEach { (title, icon, tabKey) ->
-            val isActive = if (tabKey == "youtube") screen == "youtube"
-                           else if (tabKey == "search") screen == "search"
-                           else currentTab == tabKey && screen != "search" && screen != "youtube"
+        navTabs.forEach { (title, icon, tabKey) ->
+            val isActive = if (tabKey == "search") screen == "search"
+                           else currentTab == tabKey && screen != "search" && screen != "youtube" && screen != "music"
             val item = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER
                 setPadding(dp(2), dp(6), dp(2), dp(6))
@@ -420,7 +417,6 @@ class MainActivity : AppCompatActivity() {
                 setOnClickListener {
                     when (tabKey) {
                         "search" -> openSearch()
-                        "youtube" -> loadYouTube()
                         else -> loadTab(tabKey)
                     }
                 }
@@ -454,8 +450,9 @@ class MainActivity : AppCompatActivity() {
             "Movie Categories" to { loadCategories("movies") },
             "TV Categories" to { loadCategories("tv") },
             "YouTube Hub" to { loadYouTube() },
+            "Spotify Music Hub" to { loadTab("music") },
             "Active Downloads" to { loadDownloads() }
-        ).filter { it.first != "Active Downloads" || settings.kidsRating.isBlank() }
+        ).filter { (it.first !in listOf("YouTube Hub", "Spotify Music Hub", "Active Downloads")) || !settings.isKids }
         AlertDialog.Builder(this).setTitle("Browse more")
             .setItems(destinations.map { it.first }.toTypedArray()) { _, index -> destinations[index].second() }
             .setNegativeButton("Back", null).show()
@@ -605,7 +602,7 @@ class MainActivity : AppCompatActivity() {
         homeFeedBtn.addView(homeFeedText)
         panel.addView(homeFeedBtn, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
 
-        // Dedicated YouTube Hub Tab
+        // Dedicated Hubs Section: YouTube Hub & Spotify Music Hub
         if (!settings.isKids) {
             val ytBtn = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
@@ -622,7 +619,25 @@ class MainActivity : AppCompatActivity() {
             ytText.addView(TextView(this).apply { text = "Continue watching, podcasts & trending"; textSize = 11f; setTextColor(MUTED) })
             ytBtn.addView(ytText)
             ytBtn.addView(badgePill("HUB"))
-            panel.addView(ytBtn, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(20) })
+            panel.addView(ytBtn, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
+
+            // Dedicated Spotify-Style Music Hub Tab
+            val musicBtn = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+                background = rounded(if (screen == "music" || currentTab == "music") 0xFF1DB954.toInt() else 0x22FFFFFF.toInt())
+                setPadding(dp(14), dp(12), dp(14), dp(12))
+                isClickable = true
+                setOnClickListener { closeSidebar(); loadTab("music") }
+            }
+            musicBtn.addView(ImageView(this).apply {
+                setImageResource(R.drawable.nav_music); imageTintList = ColorStateList.valueOf(Color.WHITE)
+            }, LinearLayout.LayoutParams(dp(22), dp(22)))
+            val musicText = column().apply { setPadding(dp(12), 0, 0, 0); layoutParams = LinearLayout.LayoutParams(0, -2, 1f) }
+            musicText.addView(label("Music Hub", 14f, true))
+            musicText.addView(TextView(this).apply { text = "Albums, artists & Spotify player"; textSize = 11f; setTextColor(MUTED) })
+            musicBtn.addView(musicText)
+            musicBtn.addView(badgePill("SPOTIFY"))
+            panel.addView(musicBtn, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(20) })
         }
 
         // Section: Jellyfin Media (A–Z)
@@ -635,14 +650,13 @@ class MainActivity : AppCompatActivity() {
             setTextColor(0xFF888888.toInt()); setPadding(0, 0, 0, dp(12))
         })
 
-        // Library Items: Movies (A-Z), TV Shows (A-Z), Music (A-Z)
+        // Library Items: Movies (A-Z) and TV Shows (A-Z)
         val libs = listOf(
             Triple("Movies", "All movies on your Jellyfin server", "movies"),
-            Triple("TV Shows", "All series on your Jellyfin server", "tv"),
-            Triple("Music", "Albums and music playback", "music")
+            Triple("TV Shows", "All series on your Jellyfin server", "tv")
         )
 
-        libs.filter { it.third != "music" || !settings.isKids }.forEach { (name, desc, type) ->
+        libs.forEach { (name, desc, type) ->
             val btn = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
                 background = rounded(0x18FFFFFF.toInt())
@@ -650,17 +664,14 @@ class MainActivity : AppCompatActivity() {
                 isClickable = true
                 setOnClickListener {
                     closeSidebar()
-                    when (type) {
-                        "music" -> loadTab("music")
-                        else -> loadCatalog(type)
-                    }
+                    loadCatalog(type)
                 }
             }
             val textCol = column().apply { layoutParams = LinearLayout.LayoutParams(0, -2, 1f) }
             textCol.addView(label(name, 14f, true))
             textCol.addView(TextView(this).apply { text = desc; textSize = 11f; setTextColor(MUTED) })
             btn.addView(textCol)
-            btn.addView(badgePill(if (type == "youtube") "HUB" else "A–Z"))
+            btn.addView(badgePill("A–Z"))
             panel.addView(btn, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
         }
 
@@ -2645,8 +2656,8 @@ class MainActivity : AppCompatActivity() {
                 musicCategory = it; musicArtist = null; mediaHub(tab)
             }
         } else {
-            val options = listOf("all" to "All media", "movie" to "Movies", "tv" to "TV", "music" to "Music")
-            hubFilters(options.filter { it.first != "music" || !settings.isKids }, hubFilter) { hubFilter = it; mediaHub(tab) }
+            val options = listOf("all" to "All media", "movie" to "Movies", "tv" to "TV")
+            hubFilters(options, hubFilter) { hubFilter = it; mediaHub(tab) }
         }
         val results = column().apply { setPadding(gutter, dp(8), gutter, dp(12)) }
         val input = EditText(this).apply {
@@ -2654,8 +2665,7 @@ class MainActivity : AppCompatActivity() {
                 !music -> when (hubFilter) {
                     "movie" -> "Search movies"
                     "tv" -> "Search TV shows"
-                    "music" -> "Search artists and albums"
-                    else -> if (settings.isKids) "Search movies and TV" else "Search movies, TV and albums"
+                    else -> "Search movies and TV"
                 }
                 musicCategory == "songs" -> "Search songs"
                 musicCategory == "artists" -> "Search artists"
