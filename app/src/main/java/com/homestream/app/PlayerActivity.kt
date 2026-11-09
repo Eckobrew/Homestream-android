@@ -592,13 +592,16 @@ class PlayerActivity : AppCompatActivity() {
                     }
                     val status = (error.cause as? androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException)?.responseCode
                     val retryable = status == 425 || (isStreamingDownload && status == 503)
-                    if (!retryable || bufferRetries++ >= 10) {
+                    val maxRetries = 25
+                    if (!retryable || bufferRetries++ >= maxRetries) {
                         clearMessages()
                         showMessage("Download playback failed (${status ?: error.errorCodeName}).")
                         overlay.addView(action("Retry") { launchStreamUrl(streamPath, compatible) })
                         overlay.addView(action("←  Back to Browse") { finish() })
                         return
                     }
+                    clearMessages()
+                    showMessage("Buffering torrent download (waiting for initial pieces, attempt $bufferRetries/$maxRetries)…")
                     retryJob?.cancel()
                     retryJob = lifecycleScope.launch {
                         delay(2500)
