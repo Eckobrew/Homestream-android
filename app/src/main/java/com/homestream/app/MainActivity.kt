@@ -508,9 +508,9 @@ class MainActivity : AppCompatActivity() {
             "Movie Categories" to { loadCategories("movies") },
             "TV Categories" to { loadCategories("tv") },
             "YouTube Hub" to { loadYouTube() },
-            "Spotify Music Hub" to { loadTab("music") },
+            "Music Hub" to { loadTab("music") },
             "Active Downloads" to { loadDownloads() }
-        ).filter { (it.first !in listOf("YouTube Hub", "Spotify Music Hub", "Active Downloads")) || !settings.isKids }
+        ).filter { (it.first !in listOf("YouTube Hub", "Music Hub", "Active Downloads")) || !settings.isKids }
         AlertDialog.Builder(this).setTitle("Browse more")
             .setItems(destinations.map { it.first }.toTypedArray()) { _, index -> destinations[index].second() }
             .setNegativeButton("Back", null).show()
@@ -679,7 +679,7 @@ class MainActivity : AppCompatActivity() {
             ytBtn.addView(badgePill("HUB"))
             panel.addView(ytBtn, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
 
-            // Dedicated Spotify-Style Music Hub Tab
+            // Dedicated Music Hub Tab
             val musicBtn = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
                 background = rounded(if (screen == "music" || currentTab == "music") 0xFF1DB954.toInt() else 0x22FFFFFF.toInt())
@@ -692,9 +692,9 @@ class MainActivity : AppCompatActivity() {
             }, LinearLayout.LayoutParams(dp(22), dp(22)))
             val musicText = column().apply { setPadding(dp(12), 0, 0, 0); layoutParams = LinearLayout.LayoutParams(0, -2, 1f) }
             musicText.addView(label("Music Hub", 14f, true))
-            musicText.addView(TextView(this).apply { text = "Albums, artists & Spotify player"; textSize = 11f; setTextColor(MUTED) })
+            musicText.addView(TextView(this).apply { text = "Albums, artists & music player"; textSize = 11f; setTextColor(MUTED) })
             musicBtn.addView(musicText)
-            musicBtn.addView(badgePill("SPOTIFY"))
+            musicBtn.addView(badgePill("MUSIC"))
             panel.addView(musicBtn, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(20) })
         }
 
@@ -2713,7 +2713,7 @@ class MainActivity : AppCompatActivity() {
             val titleCol = column().apply { layoutParams = LinearLayout.LayoutParams(0, -2, 1f) }
             titleCol.addView(label("$timeGreeting, $userProfile", 24f, true))
             titleCol.addView(TextView(this).apply {
-                text = "Spotify Music Hub • Per-Profile Library"
+                text = "Music Hub • Per-Profile Library"
                 textSize = 12f
                 setTextColor(SPOTIFY_GREEN)
                 typeface = android.graphics.Typeface.DEFAULT_BOLD
@@ -2763,7 +2763,7 @@ class MainActivity : AppCompatActivity() {
                 }
                 musicCategory == "songs" -> "Search songs..."
                 musicCategory == "artists" -> "Search artists..."
-                else -> "Search Spotify catalog & albums..."
+                else -> "Search music catalog & albums..."
             }
             setTextColor(Color.WHITE); setHintTextColor(MUTED)
             setSingleLine(); inputType = InputType.TYPE_CLASS_TEXT

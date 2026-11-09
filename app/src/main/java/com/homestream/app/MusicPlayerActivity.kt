@@ -67,7 +67,7 @@ class MusicPlayerActivity : AppCompatActivity() {
         val SPOTIFY_GREEN = 0xFF1DB954.toInt()
         val SPOTIFY_GREEN_LIGHT = 0xFF1ED760.toInt()
 
-        panel.addView(label("SPOTIFY MUSIC", 11f, true).apply { setTextColor(SPOTIFY_GREEN); letterSpacing = 0.12f })
+        panel.addView(label("MUSIC", 11f, true).apply { setTextColor(SPOTIFY_GREEN); letterSpacing = 0.12f })
         val title = label("Nothing playing", if (wide) 28f else 24f, true).apply {
             maxLines = 2; ellipsize = TextUtils.TruncateAt.END; setPadding(0, dp(4), 0, 0)
         }
