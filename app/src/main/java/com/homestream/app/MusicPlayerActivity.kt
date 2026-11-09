@@ -64,20 +64,23 @@ class MusicPlayerActivity : AppCompatActivity() {
         })
         val panel = column()
         featured.addView(panel, if (wide) LinearLayout.LayoutParams(0, -2, 1f) else LinearLayout.LayoutParams(-1, -2))
-        panel.addView(label("NOW PLAYING", 11f, true).apply { setTextColor(RED); letterSpacing = 0.12f })
+        val SPOTIFY_GREEN = 0xFF1DB954.toInt()
+        val SPOTIFY_GREEN_LIGHT = 0xFF1ED760.toInt()
+
+        panel.addView(label("SPOTIFY MUSIC", 11f, true).apply { setTextColor(SPOTIFY_GREEN); letterSpacing = 0.12f })
         val title = label("Nothing playing", if (wide) 28f else 24f, true).apply {
             maxLines = 2; ellipsize = TextUtils.TruncateAt.END; setPadding(0, dp(4), 0, 0)
         }
         panel.addView(title)
-        val subtitle = label("Choose a song from Music", 14f).apply { setTextColor(MUTED); setPadding(0, dp(4), 0, dp(12)) }
+        val subtitle = label("Choose an album or track to begin listening", 14f).apply { setTextColor(MUTED); setPadding(0, dp(4), 0, dp(12)) }
         panel.addView(subtitle)
 
         val timeline = SeekBar(this).apply {
             max = 1000
             contentDescription = "Playback position"
-            progressTintList = ColorStateList.valueOf(RED)
-            progressBackgroundTintList = ColorStateList.valueOf(0xFF515151.toInt())
-            thumbTintList = ColorStateList.valueOf(RED)
+            progressTintList = ColorStateList.valueOf(SPOTIFY_GREEN)
+            progressBackgroundTintList = ColorStateList.valueOf(0xFF333333.toInt())
+            thumbTintList = ColorStateList.valueOf(SPOTIFY_GREEN)
         }
         panel.addView(timeline, LinearLayout.LayoutParams(-1, dp(38)))
         val times = LinearLayout(this).apply { setPadding(dp(6), 0, dp(6), 0) }
@@ -163,17 +166,18 @@ class MusicPlayerActivity : AppCompatActivity() {
     }
 
     private fun control(label: String, icon: Int, primary: Boolean = false, click: () -> Unit) = ImageButton(this).apply {
-        val surface = if (primary) Color.WHITE else 0xFF292929.toInt()
+        val SPOTIFY_GREEN = 0xFF1DB954.toInt()
+        val surface = if (primary) SPOTIFY_GREEN else 0xFF242424.toInt()
         contentDescription = label
         setImageResource(icon); setColorFilter(if (primary) Color.BLACK else Color.WHITE)
-        val radius = dp(12).toFloat()
+        val radius = if (primary) dp(28).toFloat() else dp(12).toFloat()
         background = StateListDrawable().apply {
-            addState(intArrayOf(android.R.attr.state_focused), rounded(if (primary) surface else 0xFF454545.toInt(), if (primary) RED else Color.WHITE, radius))
-            addState(intArrayOf(android.R.attr.state_pressed), rounded(RED, radius = radius))
+            addState(intArrayOf(android.R.attr.state_focused), rounded(if (primary) 0xFF1ED760.toInt() else 0xFF3E3E3E.toInt(), if (primary) Color.WHITE else SPOTIFY_GREEN, radius))
+            addState(intArrayOf(android.R.attr.state_pressed), rounded(SPOTIFY_GREEN, radius = radius))
             addState(intArrayOf(), rounded(surface, radius = radius))
         }
-        val size = dp(if (primary) 56 else 48)
-        layoutParams = LinearLayout.LayoutParams(size, size).apply { marginStart = dp(4); marginEnd = dp(4) }
+        val size = dp(if (primary) 56 else 44)
+        layoutParams = LinearLayout.LayoutParams(size, size).apply { marginStart = dp(6); marginEnd = dp(6) }
         setOnClickListener { click() }
     }
 

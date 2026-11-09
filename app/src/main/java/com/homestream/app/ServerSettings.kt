@@ -69,15 +69,20 @@ class ServerSettings(context: Context, private val keyProvider: (() -> SecretKey
     var kidsRating: String
         get() = prefs.getString("kidsRating", "").orEmpty()
         private set(value) { prefs.edit().putString("kidsRating", value).apply() }
+    var profileName: String
+        get() = prefs.getString("profileName", "Nathan").orEmpty().ifBlank { "Nathan" }
+        private set(value) { prefs.edit().putString("profileName", value).apply() }
 
     val isKids: Boolean get() = prefs.getBoolean("isKids", false) || kidsRating.isNotBlank()
 
     fun applyProfilePolicy(profile: org.json.JSONObject?, revision: String) {
         val id = profile?.optString("id").orEmpty()
+        val name = profile?.optString("name").orEmpty()
         val rating = if (profile?.optBoolean("isKids") == true) profile.optString("kidsRating") else ""
         val kids = profile?.optBoolean("isKids") == true
         val changed = this.profile != id || policyRevision != revision || kidsRating != rating || isKids != kids
-        prefs.edit().putString("profile", id).putString("policyRevision", revision).putString("kidsRating", rating).putBoolean("isKids", kids).apply()
+        prefs.edit().putString("profile", id).putString("profileName", name.ifBlank { "Nathan" })
+            .putString("policyRevision", revision).putString("kidsRating", rating).putBoolean("isKids", kids).apply()
         if (changed) { appContext.stopService(android.content.Intent(appContext, MusicService::class.java)); BrowseCache.clear(); WatchNext.refresh(appContext) }
     }
 
