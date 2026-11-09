@@ -434,7 +434,7 @@ class PlayerActivity : AppCompatActivity() {
         val sTitle = intent.getStringExtra("seriesTitle")?.ifBlank { null } ?: media.title
 
         val tmdb = intent.getIntExtra("tmdbId", 0).takeIf { it > 0 } ?: if (media.tmdbId > 0) media.tmdbId else {
-            val strId = media.id.replace("^seerr-(?:movie-|tv-)?".toRegex(), "")
+            val strId = media.id.replace("^(?:seerr|tmdb)-(?:movie-|tv-)?".toRegex(), "")
             strId.toIntOrNull() ?: 0
         }
 
@@ -472,7 +472,7 @@ class PlayerActivity : AppCompatActivity() {
         val sTitle = intent.getStringExtra("seriesTitle")?.ifBlank { null } ?: media.title
 
         val tmdb = intent.getIntExtra("tmdbId", 0).takeIf { it > 0 } ?: if (media.tmdbId > 0) media.tmdbId else {
-            val strId = media.id.replace("^seerr-(?:movie-|tv-)?".toRegex(), "")
+            val strId = media.id.replace("^(?:seerr|tmdb)-(?:movie-|tv-)?".toRegex(), "")
             strId.toIntOrNull() ?: 0
         }
 
@@ -640,7 +640,7 @@ class PlayerActivity : AppCompatActivity() {
                         clearMessages()
                         showMessage("Download playback failed (${status ?: error.errorCodeName}).")
                         overlay.addView(action("Retry") { launchStreamUrl(streamPath, compatible) })
-                        overlay.addView(action("Download via Seerr") { startStreamingDownloadPipeline() })
+                        overlay.addView(action("Request Download") { startStreamingDownloadPipeline() })
                         overlay.addView(action("←  Back to Browse") { finish() })
                         return
                     }
@@ -668,7 +668,7 @@ class PlayerActivity : AppCompatActivity() {
     private suspend fun resolvePlaybackId(): String {
         if (media.isDownload) return media.playbackId
         if (media.type in listOf("Series", "Season") && media.playableEpisodeId.isNotBlank()) return media.playableEpisodeId
-        if (media.type !in listOf("Series", "Season") && !media.playbackId.startsWith("seerr-")) return media.playbackId
+        if (media.type !in listOf("Series", "Season") && !media.playbackId.startsWith("seerr-") && !media.playbackId.startsWith("tmdb-")) return media.playbackId
         val item = api.call("media/${Uri.encode(media.id)}").optJSONObject("item") ?: return media.playbackId
         item.optString("playableEpisodeId").takeIf { it.isNotBlank() }?.let { return it }
         if (media.type !in listOf("Series", "Season")) item.optString("jellyfinId").takeIf { it.isNotBlank() }?.let { return it }
@@ -677,7 +677,7 @@ class PlayerActivity : AppCompatActivity() {
             val episodes = seasons.getJSONObject(i).optJSONArray("episodes") ?: continue
             for (j in 0 until episodes.length()) {
                 val episode = Media(episodes.getJSONObject(j))
-                if (episode.isAvailableForPlayback && !episode.playbackId.startsWith("seerr-")) return episode.playbackId
+                if (episode.isAvailableForPlayback && !episode.playbackId.startsWith("seerr-") && !episode.playbackId.startsWith("tmdb-")) return episode.playbackId
             }
         }
         return media.playbackId
@@ -700,7 +700,7 @@ class PlayerActivity : AppCompatActivity() {
             try {
                 val targetId = resolvePlaybackId()
 
-                if (targetId.startsWith("seerr-") || media.isVirtual) {
+                if (targetId.startsWith("seerr-") || targetId.startsWith("tmdb-") || media.isVirtual) {
                     startStreamingTorrentPipeline()
                     return@launch
                 }

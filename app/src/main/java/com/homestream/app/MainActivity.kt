@@ -1597,7 +1597,7 @@ class MainActivity : AppCompatActivity() {
                 scaleType = ImageView.ScaleType.CENTER_CROP
                 load(api.absolute(item.poster)) { error(R.drawable.ic_homestream) }
             }, FrameLayout.LayoutParams(-1, -1))
-            if (!item.playable && (item.id.startsWith("seerr-") || item.source == "seerr")) poster.addView(label("Request", 9f, true).apply {
+            if (!item.playable && (item.id.startsWith("seerr-") || item.id.startsWith("tmdb-") || item.source == "seerr" || item.source == "tmdb")) poster.addView(label("Request", 9f, true).apply {
                 background = rounded(RED); setPadding(dp(5), dp(2), dp(5), dp(2))
             }, FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.START).apply { setMargins(dp(4), dp(4), 0, 0) })
             card.addView(poster, LinearLayout.LayoutParams(-1, dp(145))); posterAspect(poster)
@@ -1912,7 +1912,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun requestMediaTitle(media: Media, onSuccess: (() -> Unit)? = null) {
         val tmdb = if (media.tmdbId > 0) media.tmdbId else {
-            val strId = media.id.replace("^seerr-(?:movie-|tv-)?".toRegex(), "")
+            val strId = media.id.replace("^(?:seerr|tmdb)-(?:movie-|tv-)?".toRegex(), "")
             strId.toIntOrNull() ?: 0
         }
         if (tmdb <= 0) {
@@ -1978,8 +1978,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun streamMedia(item: Media, parent: Media? = null) {
         val tmdb = if (item.tmdbId > 0) item.tmdbId else if (parent != null && parent.tmdbId > 0) parent.tmdbId else {
-            val rawId = (if (item.id.startsWith("seerr-")) item.id else parent?.id ?: item.id)
-                .replace("^seerr-(?:movie-|tv-)?".toRegex(), "")
+            val rawId = (if (item.id.startsWith("seerr-") || item.id.startsWith("tmdb-")) item.id else parent?.id ?: item.id)
+                .replace("^(?:seerr|tmdb)-(?:movie-|tv-)?".toRegex(), "")
             rawId.toIntOrNull() ?: 0
         }
         val isTv = item.type == "Series" || item.type == "Episode" || (parent != null && parent.type == "Series")

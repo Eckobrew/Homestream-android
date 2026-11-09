@@ -13,6 +13,7 @@ class MediaTest {
     }
     @Test fun unavailableDiscoveryEpisodesCannotPlay() {
         assertFalse(Media(JSONObject("""{"id":"seerr-ep-42-1-1","name":"Pilot"}""")).playable)
+        assertFalse(Media(JSONObject("""{"id":"tmdb-ep-42-1-1","name":"Pilot"}""")).playable)
         assertFalse(Media(JSONObject("""{"id":"demo","source":"demo","status":"available"}""")).playable)
     }
     @Test fun activeDownloadsUseTheirExistingStreamUrl() {
@@ -33,5 +34,10 @@ class MediaTest {
         assertTrue(matched.isAvailableForPlayback)
         assertEquals("real-file", matched.playbackId)
         assertFalse(Media(JSONObject("""{"id":"seerr-movie-42","type":"Movie","status":"available"}""")).isAvailableForPlayback)
+
+        val tmdbMatched = Media(JSONObject("""{"id":"tmdb-movie-42","type":"Movie","status":"available","source":"jellyfin","jellyfinId":"real-file"}"""))
+        assertTrue(tmdbMatched.isAvailableForPlayback)
+        assertEquals("real-file", tmdbMatched.playbackId)
+        assertFalse(Media(JSONObject("""{"id":"tmdb-movie-42","type":"Movie","status":"available"}""")).isAvailableForPlayback)
     }
 }
