@@ -102,15 +102,17 @@ class MusicPlayerActivity : AppCompatActivity() {
             override fun onStopTrackingTouch(bar: SeekBar) { tracking = false; seek(bar.progress) }
         })
         val transport = LinearLayout(this).apply { gravity = Gravity.CENTER; setPadding(0, dp(8), 0, dp(4)) }
+        val speed = control("Playback speed", R.drawable.ic_speed) { playbackSpeed() }
         val previous = control("Previous track", R.drawable.ic_skip_previous) { MusicService.activePlayer?.seekToPrevious() }
         val play = control("Play", R.drawable.ic_play_arrow, primary = true) { togglePlayback() }
         val next = control("Next track", R.drawable.ic_skip_next) { MusicService.activePlayer?.seekToNextMediaItem() }
-        transport.addView(previous); transport.addView(play); transport.addView(next)
+        val stop = control("Stop", R.drawable.ic_stop) { stopService(Intent(this, MusicService::class.java)); finish() }
+        transport.addView(speed)
+        transport.addView(previous)
+        transport.addView(play)
+        transport.addView(next)
+        transport.addView(stop)
         panel.addView(transport)
-        val actions = LinearLayout(this).apply { gravity = Gravity.CENTER }
-        val speed = action("Speed") { playbackSpeed() }
-        val stop = action("Stop") { stopService(Intent(this, MusicService::class.java)); finish() }
-        actions.addView(speed); actions.addView(stop); panel.addView(actions)
         val queueHeading = label("Play queue", 20f, true).apply { setPadding(0, dp(20), 0, dp(10)) }
         val queue = column()
         body.addView(queueHeading); body.addView(queue)
