@@ -102,17 +102,34 @@ class MusicPlayerActivity : AppCompatActivity() {
             override fun onStopTrackingTouch(bar: SeekBar) { tracking = false; seek(bar.progress) }
         })
         val transport = LinearLayout(this).apply { gravity = Gravity.CENTER; setPadding(0, dp(8), 0, dp(4)) }
-        val speed = control("Playback speed", R.drawable.ic_speed) { playbackSpeed() }
+        val shuffle = control("Shuffle", R.drawable.ic_shuffle) {
+            MusicService.activePlayer?.let { it.shuffleModeEnabled = !it.shuffleModeEnabled }
+        }
         val previous = control("Previous track", R.drawable.ic_skip_previous) { MusicService.activePlayer?.seekToPrevious() }
         val play = control("Play", R.drawable.ic_play_arrow, primary = true) { togglePlayback() }
         val next = control("Next track", R.drawable.ic_skip_next) { MusicService.activePlayer?.seekToNextMediaItem() }
-        val stop = control("Stop", R.drawable.ic_stop) { stopService(Intent(this, MusicService::class.java)); finish() }
-        transport.addView(speed)
+        val repeat = control("Repeat", R.drawable.ic_repeat) {
+            MusicService.activePlayer?.let {
+                it.repeatMode = when (it.repeatMode) {
+                    Player.REPEAT_MODE_OFF -> Player.REPEAT_MODE_ALL
+                    Player.REPEAT_MODE_ALL -> Player.REPEAT_MODE_ONE
+                    else -> Player.REPEAT_MODE_OFF
+                }
+            }
+        }
+        transport.addView(shuffle)
         transport.addView(previous)
         transport.addView(play)
         transport.addView(next)
-        transport.addView(stop)
+        transport.addView(repeat)
         panel.addView(transport)
+
+        val secondaryActions = LinearLayout(this).apply { gravity = Gravity.CENTER; setPadding(0, 0, 0, dp(6)) }
+        val speed = control("Playback speed", R.drawable.ic_speed) { playbackSpeed() }
+        val stop = control("Stop", R.drawable.ic_stop) { stopService(Intent(this, MusicService::class.java)); finish() }
+        secondaryActions.addView(speed)
+        secondaryActions.addView(stop)
+        panel.addView(secondaryActions)
         val queueHeading = label("Play queue", 20f, true).apply { setPadding(0, dp(20), 0, dp(10)) }
         val queue = column()
         body.addView(queueHeading); body.addView(queue)
@@ -143,9 +160,32 @@ class MusicPlayerActivity : AppCompatActivity() {
             play.setImageResource(if (playing) R.drawable.ic_pause else R.drawable.ic_play_arrow)
             play.contentDescription = if (playing) "Pause" else "Play"
             val available = player?.currentMediaItem != null
-            listOf(play, speed, stop, previous, next).forEach { view ->
+            listOf(play, speed, stop, previous, next, shuffle, repeat).forEach { view ->
                 view.isEnabled = available && (view !== next || player?.hasNextMediaItem() == true)
                 view.alpha = if (view.isEnabled) 1f else .4f
+            }
+
+            val shuffleEnabled = player?.shuffleModeEnabled == true
+            shuffle.setColorFilter(if (shuffleEnabled) SPOTIFY_GREEN else Color.WHITE)
+            shuffle.alpha = if (shuffleEnabled) 1f else 0.55f
+
+            val repeatMode = player?.repeatMode ?: Player.REPEAT_MODE_OFF
+            when (repeatMode) {
+                Player.REPEAT_MODE_ONE -> {
+                    repeat.setImageResource(R.drawable.ic_repeat_one)
+                    repeat.setColorFilter(SPOTIFY_GREEN)
+                    repeat.alpha = 1f
+                }
+                Player.REPEAT_MODE_ALL -> {
+                    repeat.setImageResource(R.drawable.ic_repeat)
+                    repeat.setColorFilter(SPOTIFY_GREEN)
+                    repeat.alpha = 1f
+                }
+                else -> {
+                    repeat.setImageResource(R.drawable.ic_repeat)
+                    repeat.setColorFilter(Color.WHITE)
+                    repeat.alpha = 0.55f
+                }
             }
             val items = player?.let { p -> (0 until p.mediaItemCount).map { i ->
                 p.getMediaItemAt(i).let { it.mediaId to it.mediaMetadata.title.toString() }
