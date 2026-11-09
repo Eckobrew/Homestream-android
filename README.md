@@ -1,5 +1,8 @@
 # HomeStream for Android and Android TV
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Android](https://img.shields.io/badge/Android-Phone_%26_TV-3DDC84?logo=android&logoColor=white)](README.md)
+
 An independent native Android client for [Eckobrew/HomeStream](https://github.com/eckobrew/homestream).
 Two separate presentation layouts follow the Netflix experience on each platform:
 phones use a “For You” header, category pills, inset portrait feature card and
@@ -8,12 +11,16 @@ hero and large landscape rows. Both keep HomeStream branding. This is a native K
 
 ## Features
 
+- **Movies & TV Shows Hub**: Home feed, continue-watching progress, categories, A-Z catalogs, seasons, and episode playback.
+- **Dedicated Music Hub**: Complete music player with shuffle, repeat, playback speed controls, and browsing by Albums, Artists, and Songs.
+- **Dedicated YouTube Hub**: Recommendations, subscriptions, queue, NAS archive, search, and direct video streaming via HomeStream proxy.
+- **Dynamic Floating Pill Bottom Navigation**: Adaptive navigation on phones dynamically adjusting pills and color accents for Movies/TV (Red), Music (Spotify Green `#1DB954`), and YouTube (Red).
+- **Android TV Interface**: Expanding left navigation rail, full D-pad remote support, TV browse menus, and focus indicators.
+- **Smart Navigation & Backstack**: Deep back history (up to 12 levels), sub-navigation preservation in Music and YouTube, TV navigation rail focus on back press, and double-back confirmation on root home.
 - Automatic next/previous episode playback locally and receiver-side Cast queues.
 - Library sorting, watched-state filters and mark watched/unwatched controls.
-- Phone/tablet mobile layout and dedicated Android TV layout with D-pad focus and playback controls.
 - New & Hot discovery and device-local My List, separated by server and profile.
-- HomeStream home feed, continue-watching progress, movies/TV libraries and search.
-- Household profiles, media details, seasons and episode playback.
+- Household profiles with parental controls and PIN protection.
 - Media3 H.264/AAC direct play or Jellyfin HLS transcoding, resume and subtitles.
 - Google Cast discovery, compatible playback negotiation, position handoff,
   expanded/mini transport controls and return to local playback.
@@ -21,6 +28,10 @@ hero and large landscape rows. Both keep HomeStream branding. This is a native K
 - Device-bound encryption for the server pairing token using Android Keystore.
 - TV playback works without Google Play services; Cast sender controls appear on
   phones/tablets with Google Play services.
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 ## Backend setup
 

@@ -1,11 +1,42 @@
-# Android handoff: HomeStream 1.2 music, Discover, Requested and Admin
+# Android handoff: HomeStream 1.2 music, YouTube, Discover, Navigation & Stability
 
-## Android scope update — 8 November 2026
+## Android scope update — 9 November 2026
 
-The Android navigation follows the later product decision: Home, TV Shows, Movies, Music, Discover, Search. Requested is omitted from Android. Music is also above YouTube in the sidebar. Both Music entry points share Artists, Albums and Songs categories. Songs lists imported tracks; acquisition remains an explicit album request. The music playback screen uses HomeStream-styled controls over Media3, with background playback and a queue. The backend Requested contract below remains reference material, not an Android navigation requirement.
+The Android app navigation and playback engine are fully updated, verified, and running in production on Pixel 8a and Chromecast HD:
+1. **Dynamic Navigation Architecture**:
+   - Navigation follows: Home, TV Shows, Movies, Music, YouTube, Discover, Search.
+   - Music is ordered above YouTube in sidebar and menus.
+   - Music removed from Discover bottom pill; Discover focuses purely on media discovery.
+   - Dynamic floating bottom pill on mobile phones automatically changes items and theme accent:
+     - Movies & TV: Red accent (`#E50914`).
+     - Music: Spotify Green accent (`#1DB954`).
+     - YouTube: YouTube Red accent.
+   - TV rail highlights active tab correctly for Movies, TV Shows, Music, YouTube, Discover, and Search.
 
+2. **Music Player Upgrades**:
+   - Replaced droppedneedle dependencies with native HomeStream music integration (`/api/mobile/v1/music`).
+   - Added shuffle and repeat toggle controls.
+   - Modernized player UI: speed and stop controls use vector icon buttons instead of text.
+   - Clean background playback service via `MusicService` and `MusicPlayerActivity`.
 
-Updated 8 November 2026. This file is the implementation handoff for an AI working on the Android application. No Android checkout was changed in this task. Backend source and generated contracts are authoritative; do not invent DroppedNeedle endpoints in the Android app.
+3. **YouTube Hub & Playback**:
+   - Fixed ExoPlayer 404 URL resolution bug: normalized relative `/api/mobile/v1/youtube/stream-video` URLs, preserved absolute URLs in `launchStreamUrl`, and omitted incompatible Jellyfin transcode query parameters for YouTube.
+   - Fixed player exit screen restoration: returning from YouTube playback cleanly re-renders YouTube with YouTube pill navigation and active sub-tab intact instead of returning to a mixed Home page.
+
+4. **Back Navigation & Exit Protection**:
+   - Fixed premature app exits on Back press:
+     - In Music Hub: Back from an artist's albums returns cleanly to the Artists list.
+     - In YouTube Hub: Back from Subscriptions, Queue, NAS Archive, or Search returns cleanly to YouTube Home.
+     - On Android TV: Back while browsing rows returns focus to the left navigation rail before exiting.
+     - On Root Home: Double-back within 2 seconds required to exit ("Press back again to exit"), eliminating accidental app closure.
+     - Expanded back history stack depth to 12.
+
+5. **Licensing & Release**:
+   - Added standard MIT License (Copyright (c) 2026 Eckobrew) across `homestream-android` and `homestream`.
+   - Verified 100% pass on all unit tests (`./gradlew testDebugUnitTest`).
+   - Assembled release APK (`app-release.apk`) and installed on test devices (Google Pixel 8a and Chromecast HD).
+
+---
 
 ## Goal and current backend
 

@@ -92,7 +92,7 @@ class MainActivity : AppCompatActivity() {
             trailerView = null
             browseHistory.addLast(BrowseState(root, mainContainer, content, sidebarDrawer, screen, currentTab,
                 currentFocus, heroItems, currentHeroIndex, heroContainer, lastDetails, navigationKey, screenLoading, screenLoader))
-            while (browseHistory.size > 6) browseHistory.removeFirst()
+            while (browseHistory.size > 12) browseHistory.removeFirst()
         }
         navigationKey = key; screenLoader = reload
     }
@@ -118,7 +118,7 @@ class MainActivity : AppCompatActivity() {
                 input.setText(text); input.setSelection(cursor.coerceIn(0, text.length))
             }
         }
-        if (saved.loading || saved.screen in listOf("requests", "music")) saved.reload?.invoke()
+        if (saved.loading || saved.screen in listOf("requests", "music", "youtube")) saved.reload?.invoke()
         else root.post { saved.focus?.takeIf { it.isAttachedToWindow }?.requestFocus() }
         return true
     }
@@ -127,6 +127,7 @@ class MainActivity : AppCompatActivity() {
     private var heroItems: List<Media> = emptyList()
     private var currentHeroIndex = 0
     private var heroContainer: FrameLayout? = null
+    private var lastBackPressTime = 0L
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -136,12 +137,34 @@ class MainActivity : AppCompatActivity() {
                 if (sidebarDrawer?.visibility == View.VISIBLE) {
                     closeSidebar(); return
                 }
+                if (screen == "music" && musicArtist != null) {
+                    musicArtist = null
+                    mediaHub("music")
+                    return
+                }
+                if (screen == "youtube" && youtubeSubTab != "home") {
+                    youtubeSubTab = "home"
+                    loadYouTube()
+                    return
+                }
+                if (isTelevision()) {
+                    val rail = findViewById<View>(R.id.tv_navigation_rail)
+                    if (rail != null && !rail.hasFocus() && (screen == "home" || browseHistory.isEmpty())) {
+                        rail.requestFocus()
+                        return
+                    }
+                }
                 if (returnToPreviousScreen()) return
                 if (screen != "home") {
                     loadTab("home")
+                    return
+                }
+                val now = System.currentTimeMillis()
+                if (now - lastBackPressTime < 2000) {
+                    finish()
                 } else {
-                    isEnabled = false
-                    onBackPressedDispatcher.onBackPressed()
+                    lastBackPressTime = now
+                    toast("Press back again to exit")
                 }
             }
         })
@@ -231,7 +254,15 @@ class MainActivity : AppCompatActivity() {
         if (playbackWasLaunched) {
             playbackWasLaunched = false
             catalogCache.clear()
-            lastDetails?.takeIf { screen == "details" }?.let { details(it) } ?: loadTab(currentTab)
+            if (screen == "details" && lastDetails != null) {
+                details(lastDetails!!)
+            } else if (screen == "youtube") {
+                loadYouTube()
+            } else if (screenLoader != null) {
+                screenLoader?.invoke()
+            } else {
+                loadTab(currentTab)
+            }
         }
     }
 
@@ -249,7 +280,15 @@ class MainActivity : AppCompatActivity() {
                     if (!openLauncherItem(intent)) loadTab("home")
                 } else if (playbackWasLaunched) {
                     playbackWasLaunched = false; catalogCache.clear()
-                    lastDetails?.takeIf { screen == "details" }?.let { details(it) } ?: loadTab(currentTab)
+                    if (screen == "details" && lastDetails != null) {
+                        details(lastDetails!!)
+                    } else if (screen == "youtube") {
+                        loadYouTube()
+                    } else if (screenLoader != null) {
+                        screenLoader?.invoke()
+                    } else {
+                        loadTab(currentTab)
+                    }
                 }
                 if (::root.isInitialized) root.visibility = View.VISIBLE
                 trailerView?.onResume()
@@ -450,16 +489,16 @@ class MainActivity : AppCompatActivity() {
                 }
             )
             else -> listOf(
-                BottomNavItem("Home", R.drawable.nav_home, currentTab == "home" && screen != "search") {
+                BottomNavItem("Home", R.drawable.nav_home, currentTab == "home" && screen == "home") {
                     loadTab("home")
                 },
-                BottomNavItem("TV Shows", R.drawable.nav_series, currentTab == "series" && screen != "search") {
+                BottomNavItem("TV Shows", R.drawable.nav_series, currentTab == "series" && screen == "series") {
                     loadTab("series")
                 },
-                BottomNavItem("Movies", R.drawable.nav_movies, currentTab == "movies" && screen != "search") {
+                BottomNavItem("Movies", R.drawable.nav_movies, currentTab == "movies" && screen == "movies") {
                     loadTab("movies")
                 },
-                BottomNavItem("Discover", R.drawable.ic_download, currentTab == "requests" && screen != "search") {
+                BottomNavItem("Discover", R.drawable.ic_download, (currentTab == "requests" || screen == "requests") && screen != "search") {
                     loadTab("requests")
                 },
                 BottomNavItem("Search", R.drawable.nav_search, screen == "search") {
@@ -548,11 +587,11 @@ class MainActivity : AppCompatActivity() {
                 contentDescription = title; tag = title; gravity = Gravity.CENTER_VERTICAL
                 isSelected = when (title) {
                     "Home" -> screen == "home" && currentTab == "home"
-                    "Movies" -> currentTab == "movies" && screen == "home"
-                    "TV Shows" -> currentTab == "series" && screen == "home"
+                    "Movies" -> (screen == "movies" || (currentTab == "movies" && screen == "home"))
+                    "TV Shows" -> (screen == "series" || (currentTab == "series" && screen == "home"))
                     "YouTube" -> screen == "youtube"
-                    "Discover" -> currentTab == "requests"
-                    "Music" -> currentTab == "music"
+                    "Discover" -> currentTab == "requests" || screen == "requests"
+                    "Music" -> currentTab == "music" || screen == "music"
                     "Search" -> screen == "search"
                     "My List" -> screen == "mine"
                     "More" -> screen.startsWith("catalog-") || screen.startsWith("categories-") || screen == "downloads"
@@ -801,6 +840,10 @@ class MainActivity : AppCompatActivity() {
     // -----------------------------------------------------------------------------------------
     private fun loadTab(tab: String) {
         if (tab == "requests" || tab == "music") { mediaHub(tab); return }
+        if (tab == "youtube") { loadYouTube(); return }
+        if (tab == "search") { openSearch(); return }
+        if (tab == "downloads") { loadDownloads(); return }
+        if (tab == "mine") { myHomeStream(); return }
         rememberScreen(tab) { loadTab(tab) }
         heroRotationJob?.cancel()
         currentTab = tab
