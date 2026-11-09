@@ -28,6 +28,31 @@ data class MusicTrack(val json: JSONObject) {
     val durationSeconds get() = json.optInt("durationSeconds", 0)
     val streamUrl get() = json.optString("streamUrl")
 }
+data class MusicPlaylist(val json: JSONObject) {
+    val id get() = json.optString("id")
+    val name get() = json.optString("name")
+    val description get() = json.optString("description")
+    val coverUrl get() = json.optString("coverUrl")
+    val totalTracks get() = json.optInt("totalTracks", 0)
+    val downloadedTracks get() = json.optInt("downloadedTracks", 0)
+    val spotifyId get() = json.optString("spotifyId")
+}
+data class MusicPlaylistTrack(val json: JSONObject) {
+    val id get() = json.optString("id")
+    val playlistId get() = json.optString("playlistId")
+    val trackId get() = json.optString("trackId")
+    val title get() = json.optString("title")
+    val artist get() = json.optString("artist")
+    val album get() = json.optString("album")
+    val durationSeconds get() = json.optInt("durationSeconds", 0)
+    val coverUrl get() = json.optString("coverUrl")
+    val status get() = json.optString("status", "pending")
+    val errorMessage get() = json.optString("errorMessage")
+    val streamUrl get() = json.optString("streamUrl")
+    val position get() = json.optInt("position", 0)
+
+    val isReady get() = status == "completed" && streamUrl.isNotBlank()
+}
 fun releaseLabel(value: String?): String = runCatching {
     when {
         value == null -> "Unknown"

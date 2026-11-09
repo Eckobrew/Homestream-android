@@ -12,7 +12,8 @@ hero and large landscape rows. Both keep HomeStream branding. This is a native K
 ## Features
 
 - **Movies & TV Shows Hub**: Home feed, continue-watching progress, categories, A-Z catalogs, seasons, and episode playback.
-- **Dedicated Music Hub**: Complete music player with shuffle, repeat, playback speed controls, and browsing by Albums, Artists, and Songs.
+- **Dedicated Music Hub**: Complete music player with shuffle, repeat, playback speed controls, and browsing by Albums, Artists, Songs, and Playlists.
+- **Spotify Playlist & Profile Importer**: Import public Spotify playlist links or full user profiles without requiring developer API keys. Tracks are queued and downloaded in MP3 format via Soulseek (`slskd`) directly into per-profile collections with live download status badges (`✓ Ready`, `Downloading (slskd)`, `Searching Soulseek`, `Queued`, `Failed`), "Play All", and "Shuffle".
 - **Dedicated YouTube Hub**: Recommendations, subscriptions, queue, NAS archive, search, and direct video streaming via HomeStream proxy.
 - **Dynamic Floating Pill Bottom Navigation**: Adaptive navigation on phones dynamically adjusting pills and color accents for Movies/TV (Red), Music (Spotify Green `#1DB954`), and YouTube (Red).
 - **Android TV Interface**: Expanding left navigation rail, full D-pad remote support, TV browse menus, and focus indicators.

@@ -6,6 +6,7 @@ import android.content.Intent
 import android.content.res.ColorStateList
 import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.StateListDrawable
 import android.net.Uri
 import android.os.Bundle
 import android.os.Environment
@@ -139,6 +140,11 @@ class MainActivity : AppCompatActivity() {
                 }
                 if (screen == "music" && musicArtist != null) {
                     musicArtist = null
+                    mediaHub("music")
+                    return
+                }
+                if (screen == "music" && selectedPlaylistId != null) {
+                    selectedPlaylistId = null
                     mediaHub("music")
                     return
                 }
@@ -473,16 +479,16 @@ class MainActivity : AppCompatActivity() {
             )
             "music" -> listOf(
                 BottomNavItem("Albums", R.drawable.nav_music, musicCategory == "albums") {
-                    musicCategory = "albums"; musicArtist = null; mediaHub("music")
+                    musicCategory = "albums"; musicArtist = null; selectedPlaylistId = null; mediaHub("music")
                 },
                 BottomNavItem("Artists", R.drawable.nav_profile, musicCategory == "artists") {
-                    musicCategory = "artists"; musicArtist = null; mediaHub("music")
+                    musicCategory = "artists"; musicArtist = null; selectedPlaylistId = null; mediaHub("music")
                 },
                 BottomNavItem("Songs", R.drawable.nav_list, musicCategory == "songs") {
-                    musicCategory = "songs"; musicArtist = null; mediaHub("music")
+                    musicCategory = "songs"; musicArtist = null; selectedPlaylistId = null; mediaHub("music")
                 },
-                BottomNavItem("Search", R.drawable.nav_search, musicQuery.isNotBlank()) {
-                    musicCategory = "albums"; mediaHub("music")
+                BottomNavItem("Playlists", R.drawable.ic_download, musicCategory == "playlists") {
+                    musicCategory = "playlists"; musicArtist = null; selectedPlaylistId = null; mediaHub("music")
                 },
                 BottomNavItem("Player", R.drawable.ic_play_arrow, false) {
                     musicControls()
@@ -2728,6 +2734,7 @@ class MainActivity : AppCompatActivity() {
     private var musicQuery = ""
     private var musicCategory = "albums"
     private var musicArtist: String? = null
+    private var selectedPlaylistId: String? = null
 
     private fun hubFilters(options: List<Pair<String, String>>, selected: String, change: (String) -> Unit) {
         val row = LinearLayout(this).apply { setPadding(gutter, dp(4), gutter, dp(8)) }
@@ -2765,8 +2772,8 @@ class MainActivity : AppCompatActivity() {
             titleBar.addView(titleCol)
             content.addView(titleBar)
 
-            hubFilters(listOf("albums" to "Albums", "artists" to "Artists", "songs" to "Songs"), musicCategory) {
-                musicCategory = it; musicArtist = null; mediaHub(tab)
+            hubFilters(listOf("albums" to "Albums", "artists" to "Artists", "songs" to "Songs", "playlists" to "Playlists"), musicCategory) {
+                musicCategory = it; musicArtist = null; selectedPlaylistId = null; mediaHub(tab)
             }
         } else {
             val titleBar = LinearLayout(this).apply {
@@ -2855,49 +2862,57 @@ class MainActivity : AppCompatActivity() {
             }
             if (filter == "music" && !settings.isKids) {
                 try {
-                    var offset = 0
-                    val musicAlbums = mutableListOf<MusicAlbum>()
-                    val librarySongs = currentTab == "music" && musicCategory == "songs"
-                    val seen = mutableSetOf<String>()
-                    do {
-                        val page = api.call("music", if (query.isBlank() || librarySongs) mapOf("offset" to "$offset") else mapOf("q" to query))
-                        if (!page.optBoolean("configured")) { staged.addView(label("Music is not configured")); break }
-                        val albums = page.objects("albums").map(::MusicAlbum)
-                        musicAlbums.addAll(albums.filter { seen.add(it.id) })
-                        offset += albums.size
-                        if (albums.isEmpty() || (query.isNotBlank() && !librarySongs) || offset >= page.optInt("total")) break
-                    } while (true)
-                    when {
-                        currentTab == "music" && musicCategory == "artists" -> {
-                            val artists = musicAlbums.groupBy { it.artist }.toSortedMap(String.CASE_INSENSITIVE_ORDER)
-                            val selected = musicArtist
-                            if (selected == null) artworkGrid(staged, artists.map { (artist, albums) ->
-                                ArtworkTile(artist, "${albums.size} ${if (albums.size == 1) "album" else "albums"}", albumArtwork(albums.first())) {
-                                    musicArtist = artist; mediaHub("music")
-                                }
-                            }) else {
-                                staged.addView(action("All artists") { musicArtist = null; mediaHub("music") })
-                                staged.addView(label(selected, 20f, true))
-                                artworkGrid(staged, artists[selected].orEmpty().map(::albumTile))
-                            }
+                    if (currentTab == "music" && musicCategory == "playlists") {
+                        if (selectedPlaylistId != null) {
+                            renderPlaylistDetail(staged, selectedPlaylistId!!)
+                        } else {
+                            renderPlaylistsGrid(staged, query)
                         }
-                        librarySongs -> {
-                            musicAlbums.filter { it.inLibrary }.forEach { album ->
-                                val tracks = api.call("music/album", mapOf("albumId" to album.id)).objects("tracks").map(::MusicTrack)
-                                tracks.forEachIndexed { index, track ->
-                                    if (query.isBlank() || listOf(track.title, album.title, album.artist).any { it.contains(query, ignoreCase = true) }) {
-                                        staged.addView(musicTrackRow(track.title, "${album.artist} • ${album.title}", track.json.optInt("trackNumber", index + 1)) { startMusicTracks(tracks, album, index) })
+                    } else {
+                        var offset = 0
+                        val musicAlbums = mutableListOf<MusicAlbum>()
+                        val librarySongs = currentTab == "music" && musicCategory == "songs"
+                        val seen = mutableSetOf<String>()
+                        do {
+                            val page = api.call("music", if (query.isBlank() || librarySongs) mapOf("offset" to "$offset") else mapOf("q" to query))
+                            if (!page.optBoolean("configured")) { staged.addView(label("Music is not configured")); break }
+                            val albums = page.objects("albums").map(::MusicAlbum)
+                            musicAlbums.addAll(albums.filter { seen.add(it.id) })
+                            offset += albums.size
+                            if (albums.isEmpty() || (query.isNotBlank() && !librarySongs) || offset >= page.optInt("total")) break
+                        } while (true)
+                        when {
+                            currentTab == "music" && musicCategory == "artists" -> {
+                                val artists = musicAlbums.groupBy { it.artist }.toSortedMap(String.CASE_INSENSITIVE_ORDER)
+                                val selected = musicArtist
+                                if (selected == null) artworkGrid(staged, artists.map { (artist, albums) ->
+                                    ArtworkTile(artist, "${albums.size} ${if (albums.size == 1) "album" else "albums"}", albumArtwork(albums.first())) {
+                                        musicArtist = artist; mediaHub("music")
+                                    }
+                                }) else {
+                                    staged.addView(action("All artists") { musicArtist = null; mediaHub("music") })
+                                    staged.addView(label(selected, 20f, true))
+                                    artworkGrid(staged, artists[selected].orEmpty().map(::albumTile))
+                                }
+                            }
+                            librarySongs -> {
+                                musicAlbums.filter { it.inLibrary }.forEach { album ->
+                                    val tracks = api.call("music/album", mapOf("albumId" to album.id)).objects("tracks").map(::MusicTrack)
+                                    tracks.forEachIndexed { index, track ->
+                                        if (query.isBlank() || listOf(track.title, album.title, album.artist).any { it.contains(query, ignoreCase = true) }) {
+                                            staged.addView(musicTrackRow(track.title, "${album.artist} • ${album.title}", track.json.optInt("trackNumber", index + 1)) { startMusicTracks(tracks, album, index) })
+                                        }
                                     }
                                 }
+                                if (staged.childCount == 0) staged.addView(label("No imported songs found"))
                             }
-                            if (staged.childCount == 0) staged.addView(label("No imported songs found"))
+                            else -> {
+                                if (currentTab != "music" && musicAlbums.isNotEmpty()) staged.addView(hubSection("Albums"))
+                                artworkGrid(staged, musicAlbums.map(::albumTile))
+                            }
                         }
-                        else -> {
-                            if (currentTab != "music" && musicAlbums.isNotEmpty()) staged.addView(hubSection("Albums"))
-                            artworkGrid(staged, musicAlbums.map(::albumTile))
-                        }
+                        if (query.isNotBlank() && !librarySongs) staged.addView(label("Showing up to 30 catalog albums. Refine your search for more.", 12f))
                     }
-                    if (query.isNotBlank() && !librarySongs) staged.addView(label("Showing up to 30 catalog albums. Refine your search for more.", 12f))
                 } catch (e: Exception) {
                     if (e is kotlinx.coroutines.CancellationException) throw e
                     staged.addView(label(e.message ?: "Music is unavailable"))
@@ -3075,6 +3090,363 @@ class MainActivity : AppCompatActivity() {
 
     private fun musicControls() {
         if (!settings.isKids) startActivity(Intent(this, MusicPlayerActivity::class.java))
+    }
+
+    private suspend fun renderPlaylistsGrid(staged: LinearLayout, query: String = "") {
+        val banner = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(8), dp(8), dp(8), dp(12))
+            val btn = action("+ Import Spotify Playlist", primary = true) {
+                showSpotifyImportDialog()
+            }.apply {
+                background = StateListDrawable().apply {
+                    addState(intArrayOf(android.R.attr.state_focused), rounded(Color.WHITE))
+                    addState(intArrayOf(android.R.attr.state_pressed), rounded(0xFF1ED760.toInt()))
+                    addState(intArrayOf(), rounded(0xFF1DB954.toInt()))
+                }
+                setTextColor(Color.BLACK)
+                setCompoundDrawablesWithIntrinsicBounds(R.drawable.ic_download, 0, 0, 0)
+                compoundDrawablePadding = dp(6)
+            }
+            addView(btn)
+        }
+        staged.addView(banner)
+
+        val playlistsData = runCatching { api.call("music/playlists") }.getOrNull()
+        val allPlaylists = playlistsData?.objects("playlists")?.map(::MusicPlaylist).orEmpty()
+        val playlists = allPlaylists.filter { query.isBlank() || it.name.contains(query, ignoreCase = true) }
+
+        if (playlists.isEmpty()) {
+            val emptyCard = column().apply {
+                setPadding(dp(16), dp(24), dp(16), dp(24))
+                gravity = Gravity.CENTER_HORIZONTAL
+                focusableCard(0xFF1A1A1A.toInt())
+                addView(label("No Playlists Yet", 18f, true).apply {
+                    gravity = Gravity.CENTER_HORIZONTAL
+                })
+                addView(TextView(context).apply {
+                    text = "Import public Spotify playlists or an entire user profile. Tracks are automatically downloaded in MP3 format via Soulseek (slskd) directly into your personal music profile."
+                    textSize = 13f
+                    setTextColor(MUTED)
+                    gravity = Gravity.CENTER_HORIZONTAL
+                    setPadding(dp(8), dp(8), dp(8), dp(16))
+                })
+                addView(action("Import Spotify Playlists", primary = true) {
+                    showSpotifyImportDialog()
+                })
+            }
+            staged.addView(emptyCard)
+            return
+        }
+
+        artworkGrid(staged, playlists.map { pl ->
+            val sub = if (pl.totalTracks == 0) "0 tracks"
+            else if (pl.downloadedTracks >= pl.totalTracks) "${pl.totalTracks} tracks • Downloaded"
+            else "${pl.downloadedTracks}/${pl.totalTracks} downloaded • Soulseek"
+
+            ArtworkTile(
+                title = pl.name,
+                subtitle = sub,
+                cover = pl.coverUrl?.takeIf { it.isNotBlank() }?.let(api::absolute),
+                poster = false,
+                placeholder = R.drawable.nav_music
+            ) {
+                selectedPlaylistId = pl.id
+                mediaHub("music")
+            }
+        })
+    }
+
+    private suspend fun renderPlaylistDetail(staged: LinearLayout, playlistId: String) {
+        val SPOTIFY_GREEN = 0xFF1DB954.toInt()
+        val data = runCatching { api.call("music/playlist", mapOf("playlistId" to playlistId)) }.getOrNull()
+        val plObj = data?.optJSONObject("playlist")
+        if (plObj == null) {
+            staged.addView(action("← All Playlists") { selectedPlaylistId = null; mediaHub("music") })
+            staged.addView(label("Playlist not found or removed"))
+            return
+        }
+        val playlist = MusicPlaylist(plObj)
+        val tracks = data.objects("tracks").map(::MusicPlaylistTrack)
+
+        staged.addView(action("← All Playlists") {
+            selectedPlaylistId = null
+            mediaHub("music")
+        })
+
+        val header = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(dp(8), dp(8), dp(8), dp(16))
+            gravity = Gravity.CENTER_VERTICAL
+            val coverView = ImageView(context).apply {
+                val cover = playlist.coverUrl?.takeIf { it.isNotBlank() }?.let(api::absolute)
+                if (cover != null) {
+                    coil.Coil.imageLoader(context).enqueue(
+                        coil.request.ImageRequest.Builder(context)
+                            .data(cover)
+                            .target(this)
+                            .placeholder(R.drawable.nav_music)
+                            .error(R.drawable.nav_music)
+                            .crossfade(true)
+                            .build()
+                    )
+                } else {
+                    setImageResource(R.drawable.nav_music)
+                }
+                scaleType = ImageView.ScaleType.CENTER_CROP
+                background = rounded(0xFF222222.toInt())
+                clipToOutline = true
+            }
+            addView(coverView, LinearLayout.LayoutParams(dp(80), dp(80)).apply { marginEnd = dp(14) })
+
+            val infoCol = column().apply { layoutParams = LinearLayout.LayoutParams(0, -2, 1f) }
+            infoCol.addView(label(playlist.name, 22f, true))
+            if (playlist.description.isNotBlank()) {
+                infoCol.addView(TextView(context).apply {
+                    text = playlist.description
+                    textSize = 12f
+                    setTextColor(MUTED)
+                    maxLines = 2
+                    ellipsize = android.text.TextUtils.TruncateAt.END
+                    setPadding(0, dp(2), 0, 0)
+                })
+            }
+            val progressText = "${playlist.downloadedTracks}/${playlist.totalTracks} downloaded • Soulseek"
+            infoCol.addView(TextView(context).apply {
+                text = progressText
+                textSize = 12f
+                setTextColor(if (playlist.downloadedTracks >= playlist.totalTracks && playlist.totalTracks > 0) SPOTIFY_GREEN else 0xFF64B5F6.toInt())
+                setPadding(0, dp(4), 0, 0)
+            })
+            addView(infoCol)
+        }
+        staged.addView(header)
+
+        val actions = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(dp(4), 0, dp(4), dp(12))
+
+            val playAllBtn = action("▶  Play All", primary = true) {
+                playPlaylist(tracks, playlist.coverUrl, startIndex = 0)
+            }.apply {
+                background = StateListDrawable().apply {
+                    addState(intArrayOf(android.R.attr.state_focused), rounded(Color.WHITE))
+                    addState(intArrayOf(android.R.attr.state_pressed), rounded(0xFF1ED760.toInt()))
+                    addState(intArrayOf(), rounded(SPOTIFY_GREEN))
+                }
+                setTextColor(Color.BLACK)
+            }
+            addView(playAllBtn)
+
+            val shuffleBtn = action("🔀  Shuffle") {
+                val ready = tracks.filter { it.isReady }
+                if (ready.isEmpty()) {
+                    toast("No downloaded tracks ready to play yet")
+                } else {
+                    playPlaylist(ready.shuffled(), playlist.coverUrl, startIndex = 0)
+                }
+            }
+            addView(shuffleBtn)
+
+            val refreshBtn = action("⟳  Refresh") {
+                mediaHub("music")
+            }
+            addView(refreshBtn)
+
+            val deleteBtn = action("🗑  Delete") {
+                AlertDialog.Builder(this@MainActivity)
+                    .setTitle("Delete Playlist")
+                    .setMessage("Remove '${playlist.name}' from your profile? Downloaded music files will remain in your library.")
+                    .setPositiveButton("Delete") { _, _ ->
+                        lifecycleScope.launch {
+                            try {
+                                api.call("music/playlist", mapOf("playlistId" to playlist.id), method = "DELETE")
+                                toast("Playlist deleted")
+                                selectedPlaylistId = null
+                                mediaHub("music")
+                            } catch (e: Exception) {
+                                toast(e.message ?: "Could not delete playlist")
+                            }
+                        }
+                    }
+                    .setNegativeButton("Cancel", null)
+                    .show()
+            }
+            addView(deleteBtn)
+        }
+        staged.addView(actions)
+
+        if (tracks.isEmpty()) {
+            staged.addView(label("No tracks in playlist", 14f).apply { setPadding(dp(8), dp(8), dp(8), dp(8)) })
+        } else {
+            tracks.forEachIndexed { idx, track ->
+                staged.addView(renderPlaylistTrackRow(track, idx, playlist.coverUrl) {
+                    if (track.isReady) {
+                        playPlaylist(tracks, playlist.coverUrl, startIndex = idx)
+                    } else {
+                        val msg = when (track.status) {
+                            "downloading" -> "Downloading track via Soulseek (slskd)..."
+                            "searching" -> "Searching Soulseek network for track..."
+                            "failed" -> "Download failed: ${track.errorMessage.ifBlank { "No Soulseek match found" }}"
+                            else -> "Track download queued in Soulseek..."
+                        }
+                        toast(msg)
+                    }
+                })
+            }
+        }
+    }
+
+    private fun renderPlaylistTrackRow(track: MusicPlaylistTrack, index: Int, defaultCover: String?, click: () -> Unit): View {
+        val SPOTIFY_GREEN = 0xFF1DB954.toInt()
+        val AMBER = 0xFFFFB300.toInt()
+        val CYAN = 0xFF4DD0E1.toInt()
+        val RED_ERR = 0xFFFF5252.toInt()
+
+        return LinearLayout(this).apply {
+            gravity = Gravity.CENTER_VERTICAL
+            minimumHeight = dp(56)
+            setPadding(dp(12), dp(8), dp(12), dp(8))
+            focusableCard(if (track.isReady) 0xFF202020.toInt() else 0xFF181818.toInt())
+
+            addView(label((index + 1).toString(), 13f, true).apply {
+                setTextColor(if (track.isReady) Color.WHITE else MUTED)
+            }, LinearLayout.LayoutParams(dp(30), -2))
+
+            val infoCol = column().apply {
+                addView(label(track.title, 15f, true).apply {
+                    maxLines = 1
+                    ellipsize = android.text.TextUtils.TruncateAt.END
+                    if (!track.isReady) setTextColor(0xFFCCCCCC.toInt())
+                })
+                val sub = "${track.artist} • ${track.album}"
+                addView(label(sub, 12f).apply {
+                    setTextColor(MUTED)
+                    maxLines = 1
+                    ellipsize = android.text.TextUtils.TruncateAt.END
+                })
+            }
+            addView(infoCol, LinearLayout.LayoutParams(0, -2, 1f))
+
+            val statusBadge = TextView(context).apply {
+                textSize = 11f
+                typeface = android.graphics.Typeface.DEFAULT_BOLD
+                when (track.status) {
+                    "completed" -> {
+                        val dur = track.durationSeconds
+                        val durText = if (dur > 0) "%d:%02d".format(dur / 60, dur % 60) else ""
+                        text = if (durText.isNotBlank()) "✓ Ready  $durText" else "✓ Ready"
+                        setTextColor(SPOTIFY_GREEN)
+                    }
+                    "downloading" -> {
+                        text = "Downloading (slskd)"
+                        setTextColor(AMBER)
+                    }
+                    "searching" -> {
+                        text = "Searching Soulseek"
+                        setTextColor(CYAN)
+                    }
+                    "failed" -> {
+                        text = "Failed"
+                        setTextColor(RED_ERR)
+                    }
+                    else -> {
+                        text = "Queued"
+                        setTextColor(MUTED)
+                    }
+                }
+                setPadding(dp(6), dp(2), dp(8), dp(2))
+            }
+            addView(statusBadge)
+
+            val icon = ImageView(context).apply {
+                setImageResource(if (track.isReady) R.drawable.ic_play_arrow else R.drawable.ic_download)
+                setColorFilter(if (track.isReady) Color.WHITE else MUTED)
+            }
+            addView(icon, LinearLayout.LayoutParams(dp(20), dp(20)))
+
+            layoutParams = LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(6) }
+            setOnClickListener { click() }
+        }
+    }
+
+    private fun playPlaylist(tracks: List<MusicPlaylistTrack>, defaultCover: String?, startIndex: Int = 0) {
+        if (settings.isKids) return
+        val readyTracks = tracks.filter { it.isReady }
+        if (readyTracks.isEmpty()) {
+            toast("No downloaded tracks ready to play yet")
+            return
+        }
+        val targetIndex = if (startIndex < tracks.size && tracks[startIndex].isReady) {
+            val sel = tracks[startIndex]
+            readyTracks.indexOfFirst { it.id == sel.id }.coerceAtLeast(0)
+        } else {
+            0
+        }
+        val payload = org.json.JSONArray().apply {
+            readyTracks.forEach { t ->
+                val obj = JSONObject(t.json.toString())
+                if (!obj.has("coverUrl") || obj.optString("coverUrl").isBlank()) {
+                    obj.put("coverUrl", defaultCover ?: "")
+                }
+                if (!obj.has("trackNumber")) {
+                    obj.put("trackNumber", t.position + 1)
+                }
+                put(obj)
+            }
+        }
+        castContext(this)?.sessionManager?.currentCastSession?.remoteMediaClient?.stop()
+        androidx.core.content.ContextCompat.startForegroundService(this,
+            Intent(this, MusicService::class.java).putExtra("tracks", payload.toString()).putExtra("index", targetIndex))
+        musicControls()
+    }
+
+    private fun showSpotifyImportDialog() {
+        val form = column().apply {
+            setPadding(dp(20), dp(12), dp(20), dp(12))
+            addView(label("Import from Spotify", 18f, true))
+            addView(TextView(context).apply {
+                text = "Paste Spotify playlist link(s) or a user profile link below (one per line). Tracks will be searched and downloaded from Soulseek (slskd) directly into your profile's music library in MP3 format."
+                textSize = 13f
+                setTextColor(MUTED)
+                setPadding(0, dp(4), 0, dp(12))
+            })
+        }
+
+        val urlInput = EditText(this).apply {
+            hint = "https://open.spotify.com/playlist/...\nhttps://open.spotify.com/user/..."
+            setTextColor(Color.WHITE)
+            setHintTextColor(MUTED)
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
+            minLines = 4
+            maxLines = 8
+            setPadding(dp(12), dp(10), dp(12), dp(10))
+            background = rounded(0xFF262626.toInt())
+            form.addView(this)
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle("Import Spotify Playlists")
+            .setView(ScrollView(this).apply { addView(form) })
+            .setPositiveButton("Start Import") { _, _ ->
+                val text = urlInput.text.toString().trim()
+                if (text.isBlank()) {
+                    toast("Please enter at least one Spotify URL")
+                    return@setPositiveButton
+                }
+                lifecycleScope.launch {
+                    try {
+                        val res = api.call("music/playlists/import", body = JSONObject().put("urls", text))
+                        toast(res.optString("message", "Import started"))
+                        mediaHub("music")
+                    } catch (e: Exception) {
+                        toast(e.message ?: "Failed to import Spotify playlist")
+                    }
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
     }
 
     private fun adminIntegrations() {
