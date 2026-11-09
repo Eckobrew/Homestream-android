@@ -459,9 +459,6 @@ class MainActivity : AppCompatActivity() {
                 BottomNavItem("Movies", R.drawable.nav_movies, currentTab == "movies" && screen != "search") {
                     loadTab("movies")
                 },
-                BottomNavItem("Music", R.drawable.nav_music, currentTab == "music" && screen != "search") {
-                    loadTab("music")
-                },
                 BottomNavItem("Discover", R.drawable.ic_download, currentTab == "requests" && screen != "search") {
                     loadTab("requests")
                 },
@@ -2813,7 +2810,7 @@ class MainActivity : AppCompatActivity() {
                     staged.addView(label(e.message ?: "Video discovery is unavailable"))
                 }
             }
-            if (filter in listOf("all", "music") && !settings.isKids) {
+            if (filter == "music" && !settings.isKids) {
                 try {
                     var offset = 0
                     val musicAlbums = mutableListOf<MusicAlbum>()

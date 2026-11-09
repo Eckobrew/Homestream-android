@@ -46,7 +46,7 @@ class HomeStreamApiTest {
     @Test fun adminTestPostsUnsavedInputsWithoutChangingCaller() = runBlocking {
         MockWebServer().use { server ->
             server.enqueue(MockResponse().setBody("{\"success\":true}"))
-            val payload = JSONObject().put("integration", "droppedneedle").put("action", "test").put("url", "http://music:8688").put("secret", "")
+            val payload = JSONObject().put("integration", "slskd").put("action", "test").put("url", "http://music:5030").put("secret", "")
             HomeStreamApi(settings(server.url("/").toString())).call("integrations", body = payload)
             val request = server.takeRequest()
             assertFalse(request.path!!.contains("secret"))

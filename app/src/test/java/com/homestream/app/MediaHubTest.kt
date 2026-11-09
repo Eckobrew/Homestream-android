@@ -50,7 +50,7 @@ class MediaHubTest {
             val activity = controller.get(); ShadowDialog.getLatestDialog().dismiss()
             val nav = activity.findViewById<View>(R.id.phone_bottom_navigation)
             val labels = descendants(nav).filterIsInstance<TextView>().map { it.text.toString() }
-            assertEquals(listOf("Home", "TV Shows", "Movies", "Music", "Discover", "Search"), labels)
+            assertEquals(listOf("Home", "TV Shows", "Movies", "Discover", "Search"), labels)
             val labelsAll = descendants(activity.window.decorView).filterIsInstance<TextView>().map { it.text.toString() }
             assertTrue(labelsAll.indexOfLast { it == "Music" } < labelsAll.indexOf("YouTube"))
             assertFalse(labelsAll.contains("Requested"))
