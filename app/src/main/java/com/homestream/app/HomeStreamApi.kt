@@ -139,6 +139,10 @@ class HomeStreamApi(private val settings: ConnectionSettings) {
             return target.newBuilder().encodedPath(target.encodedPath.replaceFirst("/api/v1/music/", "/api/mobile/v1/music/"))
                 .apply { if (settings.profile.isNotBlank()) setQueryParameter("userId", settings.profile) }.build().toString()
         }
+        if (sameOrigin && (target.encodedPath.startsWith("/api/youtube/") || target.encodedPath.startsWith("/api/mobile/v1/youtube/"))) {
+            return target.newBuilder().encodedPath(target.encodedPath.replaceFirst("/api/youtube/", "/api/mobile/v1/youtube/"))
+                .apply { if (settings.profile.isNotBlank()) setQueryParameter("profileId", settings.profile) }.build().toString()
+        }
         return if (target.scheme == base.scheme && target.host == base.host && target.port == base.port &&
             target.encodedPath.endsWith("/api/stream/download")) {
             target.newBuilder().encodedPath(target.encodedPath.removeSuffix("/api/stream/download") + "/api/mobile/v1/stream/download").build().toString()
