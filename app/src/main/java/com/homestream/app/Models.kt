@@ -11,8 +11,13 @@ data class Media(val json: JSONObject) {
     val title: String get() = json.optString("title", json.optString("name"))
     val type: String get() = json.optString("type", "Episode")
     val overview: String get() = json.optString("overview")
-    val poster: String get() = json.optString("posterUrl", json.optString("thumbnailUrl"))
-    val backdrop: String get() = json.optString("backdropUrl", poster)
+    val poster: String get() = json.optString("posterUrl")
+        .ifBlank { json.optString("thumbnailUrl") }
+        .ifBlank { json.optString("poster") }
+        .ifBlank { json.optString("coverUrl") }
+    val backdrop: String get() = json.optString("backdropUrl")
+        .ifBlank { json.optString("backdrop") }
+        .ifBlank { poster }
     val playbackId: String get() = json.optString("jellyfinId").ifBlank { id }
     val downloadUrl: String get() = json.optString("downloadStreamUrl").ifBlank { json.optString("videoStreamUrl") }
     val isDownload: Boolean get() = (json.optBoolean("isDownloading") || json.optString("source") == "youtube" || downloadUrl.contains("/youtube/")) && downloadUrl.isNotBlank()
