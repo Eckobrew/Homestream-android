@@ -492,12 +492,18 @@ class PlayerActivity : AppCompatActivity() {
                         timeBar?.setBufferedPosition(bufferedMs)
 
                         val minBufferBytes = 10L * 1024L * 1024L
-                        if (matchedTorrent.optString("streamUrl").isNotBlank() || downloadedBytes >= minBufferBytes || progress >= 0.01) {
-                            val streamPath = buildString {
-                                append("stream/download?hash=").append(hash)
-                                if (isTv) {
-                                    append("&season=").append(sNum)
-                                    append("&episode=").append(epNum)
+                        val isReady = matchedTorrent.optBoolean("streamable") || downloadedBytes >= minBufferBytes || progress >= 0.01
+                        if (isReady) {
+                            val rawStreamUrl = matchedTorrent.optString("streamUrl")
+                            val streamPath = if (!isTv && rawStreamUrl.isNotBlank()) {
+                                rawStreamUrl
+                            } else {
+                                buildString {
+                                    append("stream/download?hash=").append(hash)
+                                    if (isTv) {
+                                        append("&season=").append(sNum)
+                                        append("&episode=").append(epNum)
+                                    }
                                 }
                             }
                             launchStreamUrl(streamPath)
@@ -585,7 +591,8 @@ class PlayerActivity : AppCompatActivity() {
                         return
                     }
                     val status = (error.cause as? androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException)?.responseCode
-                    if (status != 425 || bufferRetries++ >= 10) {
+                    val retryable = status == 425 || (isStreamingDownload && status == 503)
+                    if (!retryable || bufferRetries++ >= 10) {
                         clearMessages()
                         showMessage("Download playback failed (${status ?: error.errorCodeName}).")
                         overlay.addView(action("Retry") { launchStreamUrl(streamPath, compatible) })
