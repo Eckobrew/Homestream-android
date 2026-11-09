@@ -994,7 +994,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun hero(item: Media, showActions: Boolean = true) {
-        if (screen != "home") return
+        if (screen != "home" && screen != "youtube") return
         content.findViewById<View>(R.id.featured_card)?.let { content.removeView(it) }
         if (isTelevision()) {
             televisionHero(item, showActions)
@@ -1045,7 +1045,9 @@ class MainActivity : AppCompatActivity() {
         val metaRow = LinearLayout(this).apply {
             gravity = Gravity.CENTER_VERTICAL; setPadding(0, dp(6), 0, dp(10))
         }
-        if (item.json.optString("rating").isNotBlank()) {
+        if (item.source == "youtube") {
+            metaRow.addView(badgePill("YOUTUBE"))
+        } else if (item.json.optString("rating").isNotBlank()) {
             metaRow.addView(badgePill(item.json.optString("rating")))
         }
         val year = item.json.optString("year").takeUnless { it == "0" }.orEmpty()
@@ -1100,7 +1102,9 @@ class MainActivity : AppCompatActivity() {
                 background = rounded(0x44FFFFFF.toInt(), radius = dp(8).toFloat())
                 minHeight = dp(40); minimumHeight = dp(40)
                 setPadding(dp(14), 0, dp(14), 0)
-                setOnClickListener { details(item) }
+                setOnClickListener {
+                    if (item.source == "youtube") showYouTubeItemDialog(item) else details(item)
+                }
             }
             btnRow.addView(infoBtn, LinearLayout.LayoutParams(-2, dp(40)))
             infoCol.addView(btnRow)
@@ -1152,7 +1156,9 @@ class MainActivity : AppCompatActivity() {
                 else if (!canPlay) streamMedia(item)
                 else details(item)
             })
-            actions.addView(action("More Info") { details(item) })
+            actions.addView(action("More Info") {
+                if (item.source == "youtube") showYouTubeItemDialog(item) else details(item)
+            })
             copy.addView(actions)
         }
 
@@ -2636,29 +2642,59 @@ class MainActivity : AppCompatActivity() {
         if (hubFilter == "music" && settings.isKids) hubFilter = "all"
         shell()
         val music = tab == "music"
-        val titleBar = LinearLayout(this).apply {
-            gravity = Gravity.CENTER_VERTICAL; setPadding(gutter, dp(8), gutter, dp(4))
-        }
-        titleBar.addView(label(if (music) "Music" else "Discover", 24f, true), LinearLayout.LayoutParams(0, -2, 1f))
-        if (music || hubFilter != "music") {
-            titleBar.addView(action(if (music) "Now playing" else "Categories") {
-                if (music) musicControls() else loadCategories("requests")
-            }.apply {
-                val icon = if (music) R.drawable.ic_play_arrow else R.drawable.nav_list
-                setCompoundDrawablesWithIntrinsicBounds(icon, 0, 0, 0)
-                compoundDrawablePadding = dp(4)
-                compoundDrawableTintList = textColors
-            })
-        }
-        content.addView(titleBar)
+        val SPOTIFY_GREEN = 0xFF1DB954.toInt()
+
         if (music) {
-            hubFilters(listOf("artists" to "Artists", "albums" to "Albums", "songs" to "Songs"), musicCategory) {
+            val hour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
+            val timeGreeting = if (hour in 5..11) "Good morning" else if (hour in 12..17) "Good afternoon" else "Good evening"
+            val userProfile = settings.profileName.ifBlank { "Nathan" }
+
+            val titleBar = LinearLayout(this).apply {
+                gravity = Gravity.CENTER_VERTICAL; setPadding(gutter, dp(12), gutter, dp(4))
+            }
+            val titleCol = column().apply { layoutParams = LinearLayout.LayoutParams(0, -2, 1f) }
+            titleCol.addView(label("$timeGreeting, $userProfile", 24f, true))
+            titleCol.addView(TextView(this).apply {
+                text = "Spotify Music Hub • Per-Profile Library"
+                textSize = 12f
+                setTextColor(SPOTIFY_GREEN)
+                typeface = android.graphics.Typeface.DEFAULT_BOLD
+                setPadding(0, dp(2), 0, 0)
+            })
+            titleBar.addView(titleCol)
+
+            val npBtn = Button(this).apply {
+                text = "▶  Now Playing"
+                textSize = 12f
+                typeface = android.graphics.Typeface.DEFAULT_BOLD
+                setTextColor(Color.BLACK)
+                background = rounded(SPOTIFY_GREEN, radius = dp(18).toFloat())
+                minHeight = dp(36); minimumHeight = dp(36)
+                setPadding(dp(14), 0, dp(14), 0)
+                isAllCaps = false
+                setOnClickListener { musicControls() }
+            }
+            titleBar.addView(npBtn)
+            content.addView(titleBar)
+
+            hubFilters(listOf("albums" to "Your Albums", "artists" to "Artists", "songs" to "All Songs"), musicCategory) {
                 musicCategory = it; musicArtist = null; mediaHub(tab)
             }
         } else {
+            val titleBar = LinearLayout(this).apply {
+                gravity = Gravity.CENTER_VERTICAL; setPadding(gutter, dp(8), gutter, dp(4))
+            }
+            titleBar.addView(label("Discover", 24f, true), LinearLayout.LayoutParams(0, -2, 1f))
+            titleBar.addView(action("Categories") { loadCategories("requests") }.apply {
+                setCompoundDrawablesWithIntrinsicBounds(R.drawable.nav_list, 0, 0, 0)
+                compoundDrawablePadding = dp(4)
+                compoundDrawableTintList = textColors
+            })
+            content.addView(titleBar)
             val options = listOf("all" to "All media", "movie" to "Movies", "tv" to "TV")
             hubFilters(options, hubFilter) { hubFilter = it; mediaHub(tab) }
         }
+
         val results = column().apply { setPadding(gutter, dp(8), gutter, dp(12)) }
         val input = EditText(this).apply {
             hint = when {
@@ -2667,20 +2703,20 @@ class MainActivity : AppCompatActivity() {
                     "tv" -> "Search TV shows"
                     else -> "Search movies and TV"
                 }
-                musicCategory == "songs" -> "Search songs"
-                musicCategory == "artists" -> "Search artists"
-                else -> "Search artists and albums"
+                musicCategory == "songs" -> "Search songs..."
+                musicCategory == "artists" -> "Search artists..."
+                else -> "Search Spotify catalog & albums..."
             }
             setTextColor(Color.WHITE); setHintTextColor(MUTED)
             setSingleLine(); inputType = InputType.TYPE_CLASS_TEXT
             setText(if (tab == "music") musicQuery else hubQuery)
         }
         input.background = android.graphics.drawable.StateListDrawable().apply {
-            addState(intArrayOf(android.R.attr.state_focused), rounded(0xFF222222.toInt(), 0xFF777777.toInt(), dp(12).toFloat()))
+            addState(intArrayOf(android.R.attr.state_focused), rounded(0xFF222222.toInt(), if (music) SPOTIFY_GREEN else 0xFF777777.toInt(), dp(12).toFloat()))
             addState(intArrayOf(), rounded(0xFF1D1D1D.toInt(), radius = dp(12).toFloat()))
         }
         input.setCompoundDrawablesWithIntrinsicBounds(R.drawable.nav_search, 0, 0, 0)
-        input.compoundDrawableTintList = ColorStateList.valueOf(MUTED)
+        input.compoundDrawableTintList = ColorStateList.valueOf(if (music) SPOTIFY_GREEN else MUTED)
         input.compoundDrawablePadding = dp(10)
         input.setPadding(dp(12), dp(8), dp(12), dp(8))
         input.textSize = 14f
@@ -2796,50 +2832,139 @@ class MainActivity : AppCompatActivity() {
         .takeIf { it.isNotBlank() && it != "null" }?.let(api::absolute)
 
     private fun albumTile(album: MusicAlbum) = ArtworkTile(album.title,
-        if (album.requested && !album.inLibrary) "${album.artist} • Requested" else album.artist,
+        if (album.inLibrary) album.artist
+        else if (album.isDownloaded) "${album.artist} • On Server (Instant Add)"
+        else if (album.requested) "${album.artist} • Requested"
+        else album.artist,
         albumArtwork(album)) { openAlbum(album) }
 
     private fun openAlbum(album: MusicAlbum) {
+        val SPOTIFY_GREEN = 0xFF1DB954.toInt()
         lifecycleScope.launch {
             try {
                 val data = api.call("music/album", mapOf("albumId" to album.id))
                 val current = MusicAlbum(data.getJSONObject("album"))
                 val tracks = data.objects("tracks").map(::MusicTrack)
-                val form = column().apply { setPadding(dp(20), dp(12), dp(20), dp(12)) }
+                val form = column().apply { setPadding(dp(20), dp(16), dp(20), dp(16)) }
                 val albumHeader = LinearLayout(this@MainActivity).apply {
-                    gravity = Gravity.CENTER_VERTICAL; setPadding(0, 0, 0, dp(12))
+                    gravity = Gravity.CENTER_VERTICAL; setPadding(0, 0, 0, dp(14))
                 }
-                albumHeader.addView(LibraryArtwork(this@MainActivity).apply { show(albumArtwork(current)) }, LinearLayout.LayoutParams(dp(84), dp(84)))
+                albumHeader.addView(LibraryArtwork(this@MainActivity).apply { show(albumArtwork(current)) }, LinearLayout.LayoutParams(dp(96), dp(96)))
                 albumHeader.addView(column().apply {
-                    setPadding(dp(12), 0, 0, 0)
-                    addView(label(current.artist, 16f, true))
-                    addView(label("Release: ${releaseLabel(current.json.optString("releaseDate").ifBlank { current.json.optString("year") })}", 13f).apply { setTextColor(MUTED) })
+                    setPadding(dp(14), 0, 0, 0)
+                    addView(label(current.title, 18f, true))
+                    addView(label(current.artist, 14f).apply { setTextColor(SPOTIFY_GREEN); typeface = android.graphics.Typeface.DEFAULT_BOLD; setPadding(0, dp(2), 0, 0) })
+                    addView(label("${releaseLabel(current.json.optString("releaseDate").ifBlank { current.json.optString("year") })} • ${tracks.size.takeIf { it > 0 } ?: current.trackCount} tracks", 12f).apply { setTextColor(MUTED); setPadding(0, dp(2), 0, 0) })
                 }, LinearLayout.LayoutParams(0, -2, 1f))
                 form.addView(albumHeader)
-                val dialog = AlertDialog.Builder(this@MainActivity).setTitle(current.title)
-                    .setView(ScrollView(this@MainActivity).apply { addView(form) }).setNegativeButton("Close", null).create()
-                if (tracks.isEmpty()) {
-                    form.addView(label(if (current.requested) "Requested • awaiting download/import" else "Not imported yet"))
-                    if (!current.requested) form.addView(action("Request album") {
-                        if (albumRequests.add(current.id)) {
+
+                val dialog = AlertDialog.Builder(this@MainActivity)
+                    .setView(ScrollView(this@MainActivity).apply { addView(form) })
+                    .setNegativeButton("Close", null)
+                    .create()
+
+                // Actions row
+                if (current.inLibrary && tracks.isNotEmpty()) {
+                    // Big green Spotify Play button
+                    val playBtn = Button(this@MainActivity).apply {
+                        text = "▶  Play Album"
+                        textSize = 14f
+                        typeface = android.graphics.Typeface.DEFAULT_BOLD
+                        setTextColor(Color.BLACK)
+                        isAllCaps = false
+                        background = rounded(SPOTIFY_GREEN, radius = dp(24).toFloat())
+                        minHeight = dp(44); minimumHeight = dp(44)
+                        setOnClickListener {
+                            dialog.dismiss()
+                            startMusicTracks(tracks, current, 0)
+                        }
+                    }
+                    form.addView(playBtn, LinearLayout.LayoutParams(-1, dp(44)).apply { bottomMargin = dp(8) })
+
+                    val removeBtn = Button(this@MainActivity).apply {
+                        text = "Remove from My Profile"
+                        textSize = 12f
+                        setTextColor(MUTED)
+                        isAllCaps = false
+                        background = rounded(0x22FFFFFF.toInt(), radius = dp(8).toFloat())
+                        minHeight = dp(36); minimumHeight = dp(36)
+                        setOnClickListener {
                             dialog.dismiss()
                             lifecycleScope.launch {
                                 try {
-                                    val response = api.call("music/request", body = JSONObject().put("musicbrainzId", current.id))
-                                    toast(response.optString("message", response.optString("status", "Request submitted")))
-                                    if (response.optBoolean("success")) mediaHub(if (currentTab == "music") "music" else "requests")
+                                    api.call("music/profile-album", method = "DELETE", body = JSONObject().put("albumId", current.id))
+                                    toast("Removed ${current.title} from your profile")
+                                    mediaHub("music")
                                 } catch (e: Exception) {
-                                    if (e is kotlinx.coroutines.CancellationException) throw e
-                                    toast(e.message ?: "Album request failed")
-                                } finally { albumRequests.remove(current.id) }
+                                    toast("Failed: ${e.message}")
+                                }
                             }
                         }
-                    }.apply { isEnabled = current.id !in albumRequests })
-                } else tracks.forEachIndexed { index, track ->
-                    form.addView(musicTrackRow(track.title, "", track.json.optInt("trackNumber", index + 1)) {
-                        dialog.dismiss()
-                        startMusicTracks(tracks, current, index)
-                    })
+                    }
+                    form.addView(removeBtn, LinearLayout.LayoutParams(-1, dp(36)).apply { bottomMargin = dp(14) })
+                } else if (current.isDownloaded && !current.inLibrary) {
+                    val addBtn = Button(this@MainActivity).apply {
+                        text = "+ Add to My Profile (Instant)"
+                        textSize = 13.5f
+                        typeface = android.graphics.Typeface.DEFAULT_BOLD
+                        setTextColor(Color.BLACK)
+                        isAllCaps = false
+                        background = rounded(SPOTIFY_GREEN, radius = dp(24).toFloat())
+                        minHeight = dp(44); minimumHeight = dp(44)
+                        setOnClickListener {
+                            dialog.dismiss()
+                            lifecycleScope.launch {
+                                try {
+                                    api.call("music/profile-album", body = JSONObject().put("albumId", current.id))
+                                    toast("Added ${current.title} to your profile library!")
+                                    mediaHub("music")
+                                } catch (e: Exception) {
+                                    toast("Failed: ${e.message}")
+                                }
+                            }
+                        }
+                    }
+                    form.addView(addBtn, LinearLayout.LayoutParams(-1, dp(44)).apply { bottomMargin = dp(12) })
+                } else if (!current.inLibrary) {
+                    val reqText = if (current.requested) "Requested • downloading via Soulseek" else "Download / Request Album"
+                    val reqBtn = Button(this@MainActivity).apply {
+                        text = reqText
+                        textSize = 13f
+                        typeface = android.graphics.Typeface.DEFAULT_BOLD
+                        setTextColor(Color.WHITE)
+                        isAllCaps = false
+                        background = rounded(0x44FFFFFF.toInt(), radius = dp(8).toFloat())
+                        isEnabled = !current.requested && current.id !in albumRequests
+                        setOnClickListener {
+                            if (albumRequests.add(current.id)) {
+                                dialog.dismiss()
+                                lifecycleScope.launch {
+                                    try {
+                                        val response = api.call("music/request", body = JSONObject().put("musicbrainzId", current.id))
+                                        toast(response.optString("message", response.optString("status", "Request submitted")))
+                                        mediaHub("music")
+                                    } catch (e: Exception) {
+                                        toast(e.message ?: "Request failed")
+                                    } finally {
+                                        albumRequests.remove(current.id)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    form.addView(reqBtn, LinearLayout.LayoutParams(-1, dp(44)).apply { bottomMargin = dp(12) })
+                }
+
+                if (tracks.isNotEmpty()) {
+                    form.addView(label("Tracks", 15f, true).apply { setPadding(0, dp(4), 0, dp(8)) })
+                    tracks.forEachIndexed { index, track ->
+                        val dur = track.durationSeconds
+                        val durText = if (dur > 0) "%d:%02d".format(dur / 60, dur % 60) else ""
+                        form.addView(musicTrackRow(track.title, durText, track.json.optInt("trackNumber", index + 1)) {
+                            dialog.dismiss()
+                            startMusicTracks(tracks, current, index)
+                        })
+                    }
                 }
                 dialog.show()
             } catch (e: Exception) {
@@ -2966,102 +3091,31 @@ class MainActivity : AppCompatActivity() {
         currentTab = "youtube"; screen = "youtube"
         shell()
 
-        val header = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(gutter, dp(12), gutter, dp(6))
-        }
-
-        val titleCol = column().apply { layoutParams = LinearLayout.LayoutParams(0, -2, 1f) }
-        val titleRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
-        val iconBadge = TextView(this).apply {
-            text = "▶"
-            textSize = 12f
-            typeface = android.graphics.Typeface.DEFAULT_BOLD
-            setTextColor(Color.WHITE)
-            gravity = Gravity.CENTER
-            background = rounded(RED, radius = dp(6).toFloat())
-            layoutParams = LinearLayout.LayoutParams(dp(26), dp(26)).apply { marginEnd = dp(8) }
-        }
-        titleRow.addView(iconBadge)
-        titleRow.addView(label("YouTube Hub", 22f, true))
-        titleCol.addView(titleRow)
-        titleCol.addView(TextView(this).apply {
-            text = "Trending shows, continue watching & podcasts"
-            textSize = 11f
-            setTextColor(MUTED)
-            setPadding(0, dp(2), 0, 0)
-        })
-        header.addView(titleCol)
-
-        // YouTube Account Button (Connect / Manage per-profile login)
-        val authBtn = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            background = rounded(0x22FFFFFF.toInt(), radius = dp(8).toFloat())
-            setPadding(dp(12), dp(7), dp(12), dp(7))
-            isClickable = true
-            isFocusable = true
-            setOnClickListener { openYouTubeAuthDialog() }
-        }
-        authBtn.addView(ImageView(this).apply {
-            setImageResource(R.drawable.nav_profile)
-            imageTintList = ColorStateList.valueOf(Color.WHITE)
-        }, LinearLayout.LayoutParams(dp(16), dp(16)))
-        authBtn.addView(TextView(this).apply {
-            text = "  Account"
-            textSize = 12f
-            typeface = android.graphics.Typeface.DEFAULT_BOLD
-            setTextColor(Color.WHITE)
-        })
-        header.addView(authBtn)
-
-        content.addView(header)
-
-        val subTabs = listOf(
-            "home" to "Dashboard",
-            "search" to "Search & Stream",
-            "subscriptions" to "Subscriptions",
-            "queue" to "Queue",
-            "archive" to "NAS Archive"
-        )
-        val tabScroll = HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false }
-        val tabRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            setPadding(gutter, dp(4), gutter, dp(10))
-        }
-        subTabs.forEach { (key, labelText) ->
-            val isSelected = youtubeSubTab == key
-            val tabBtn = TextView(this).apply {
-                text = labelText
-                textSize = 12f
-                typeface = android.graphics.Typeface.DEFAULT_BOLD
-                setTextColor(if (isSelected) Color.WHITE else MUTED)
-                background = if (isSelected) rounded(RED, radius = dp(8).toFloat())
-                             else rounded(0x18FFFFFF.toInt(), radius = dp(8).toFloat())
-                setPadding(dp(14), dp(7), dp(14), dp(7))
-                isClickable = true
-                isFocusable = true
-                layoutParams = LinearLayout.LayoutParams(-2, -2).apply { marginEnd = dp(6) }
-                setOnClickListener {
-                    youtubeSubTab = key
-                    loadYouTube()
-                }
+        if (youtubeSubTab == "home") {
+            renderYouTubeHome()
+        } else {
+            val pillRow = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                setPadding(gutter, dp(10), gutter, dp(12))
             }
-            tabRow.addView(tabBtn)
-        }
-        tabScroll.addView(tabRow)
-        content.addView(tabScroll)
+            pillRow.addView(categoryPill("All", active = false) { youtubeSubTab = "home"; loadYouTube() })
+            pillRow.addView(categoryPill("Subscriptions", active = youtubeSubTab == "subscriptions") { youtubeSubTab = "subscriptions"; loadYouTube() })
+            pillRow.addView(categoryPill("Queue", active = youtubeSubTab == "queue") { youtubeSubTab = "queue"; loadYouTube() })
+            pillRow.addView(categoryPill("NAS Archive", active = youtubeSubTab == "archive") { youtubeSubTab = "archive"; loadYouTube() })
+            pillRow.addView(categoryPill("Search", active = youtubeSubTab == "search") { youtubeSubTab = "search"; loadYouTube() })
+            pillRow.addView(categoryPill("Account", active = false) { openYouTubeAuthDialog() })
 
-        when (youtubeSubTab) {
-            "home" -> renderYouTubeHome()
-            "search" -> renderYouTubeSearch()
-            "subscriptions" -> renderYouTubeSubscriptions()
-            "queue" -> renderYouTubeQueue()
-            "archive" -> renderYouTubeArchive()
+            content.addView(HorizontalScrollView(this).apply {
+                isHorizontalScrollBarEnabled = false
+                addView(pillRow)
+            })
+
+            when (youtubeSubTab) {
+                "search" -> renderYouTubeSearch()
+                "subscriptions" -> renderYouTubeSubscriptions()
+                "queue" -> renderYouTubeQueue()
+                "archive" -> renderYouTubeArchive()
+            }
         }
     }
 
@@ -3133,14 +3187,31 @@ class MainActivity : AppCompatActivity() {
                 if (screen != "youtube" || youtubeSubTab != "home") return@launch
                 content.removeView(loadBox)
 
-                // 1. Featured Hero Banner
+                // 1. Featured Hero Banner matching Home feed
                 val heroObj = recs?.optJSONObject("hero")
                 if (heroObj != null) {
                     val heroMedia = youtubeItemToMedia(heroObj)
-                    renderYouTubeHero(heroMedia, heroObj)
+                    hero(heroMedia, showActions = true)
                 }
 
-                // 2. Continue Watching Row
+                // 2. Category Navigation Pills
+                val pillRow = LinearLayout(this@MainActivity).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    setPadding(gutter, dp(6), gutter, dp(12))
+                }
+                pillRow.addView(categoryPill("All", active = true) { youtubeSubTab = "home"; loadYouTube() })
+                pillRow.addView(categoryPill("Subscriptions", active = false) { youtubeSubTab = "subscriptions"; loadYouTube() })
+                pillRow.addView(categoryPill("Queue", active = false) { youtubeSubTab = "queue"; loadYouTube() })
+                pillRow.addView(categoryPill("NAS Archive", active = false) { youtubeSubTab = "archive"; loadYouTube() })
+                pillRow.addView(categoryPill("Search", active = false) { youtubeSubTab = "search"; loadYouTube() })
+                pillRow.addView(categoryPill("Account", active = false) { openYouTubeAuthDialog() })
+
+                content.addView(HorizontalScrollView(this@MainActivity).apply {
+                    isHorizontalScrollBarEnabled = false
+                    addView(pillRow)
+                })
+
+                // 3. Continue Watching Row
                 val cwItems = cw?.optJSONArray("items")
                 if (cwItems != null && cwItems.length() > 0) {
                     val list = (0 until cwItems.length()).map { i ->
@@ -3149,7 +3220,7 @@ class MainActivity : AppCompatActivity() {
                     mediaRow("Continue Watching", list, isContinueWatching = true, parent = content)
                 }
 
-                // 3. Section Rows (Trending Podcasts & Shows, Documentaries, Subscriptions, etc.)
+                // 4. Section Rows (Trending Podcasts & Shows, Documentaries, Subscriptions, etc.)
                 val sections = recs?.optJSONArray("sections")
                 if (sections != null && sections.length() > 0) {
                     for (i in 0 until sections.length()) {
@@ -3174,98 +3245,6 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }
-    }
-
-    private fun renderYouTubeHero(item: Media, rawObj: JSONObject) {
-        val frame = FrameLayout(this).apply {
-            clipToOutline = true
-            background = rounded(0xFF1E1E1E.toInt(), radius = dp(12).toFloat())
-        }
-
-        val image = ImageView(this).apply {
-            scaleType = ImageView.ScaleType.CENTER_CROP
-            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-            load(api.absolute(item.backdrop.ifBlank { item.poster })) {
-                crossfade(true); error(R.drawable.ic_homestream)
-            }
-        }
-        frame.addView(image, FrameLayout.LayoutParams(-1, -1))
-
-        val scrim = View(this).apply {
-            background = GradientDrawable(
-                GradientDrawable.Orientation.TOP_BOTTOM,
-                intArrayOf(0x00141414, 0x44141414, 0xDD141414.toInt(), INK)
-            )
-        }
-        frame.addView(scrim, FrameLayout.LayoutParams(-1, -1))
-
-        val infoCol = column().apply {
-            gravity = Gravity.BOTTOM; setPadding(dp(16), dp(16), dp(16), dp(16))
-        }
-
-        infoCol.addView(badgePill("FEATURED YOUTUBE").apply {
-            setPadding(0, 0, 0, dp(6))
-        })
-
-        infoCol.addView(TextView(this).apply {
-            text = item.title
-            textSize = if (isTelevision()) 22f else 17f
-            typeface = android.graphics.Typeface.DEFAULT_BOLD
-            setTextColor(Color.WHITE)
-            maxLines = 2
-            ellipsize = android.text.TextUtils.TruncateAt.END
-        })
-
-        infoCol.addView(TextView(this).apply {
-            text = item.metadata
-            textSize = 12f
-            setTextColor(MUTED)
-            setPadding(0, dp(4), 0, dp(12))
-        })
-
-        val btnRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-
-        val playBtn = Button(this).apply {
-            text = "▶  Play Now"; textSize = 13.5f; typeface = android.graphics.Typeface.DEFAULT_BOLD
-            setTextColor(Color.WHITE); isAllCaps = false
-            background = rounded(RED, radius = dp(8).toFloat())
-            minHeight = dp(40); minimumHeight = dp(40)
-            setPadding(dp(16), 0, dp(16), 0)
-            setOnClickListener { play(item) }
-        }
-        btnRow.addView(playBtn, LinearLayout.LayoutParams(-2, dp(40)).apply { marginEnd = dp(10) })
-
-        val dlBtn = Button(this).apply {
-            text = "⬇  Download to NAS"; textSize = 13f; setTextColor(Color.WHITE); isAllCaps = false
-            background = rounded(0x44FFFFFF.toInt(), radius = dp(8).toFloat())
-            minHeight = dp(40); minimumHeight = dp(40)
-            setPadding(dp(14), 0, dp(14), 0)
-            setOnClickListener {
-                lifecycleScope.launch {
-                    try {
-                        val vid = item.json.optString("videoId")
-                        api.call("youtube/download", body = JSONObject().apply {
-                            put("videoId", vid)
-                            put("title", item.title)
-                            put("channelTitle", item.json.optString("channelTitle"))
-                            put("thumbnailUrl", item.poster)
-                        })
-                        toast("Queued download for: ${item.title}")
-                    } catch (e: Exception) {
-                        toast("Failed: ${e.message}")
-                    }
-                }
-            }
-        }
-        btnRow.addView(dlBtn, LinearLayout.LayoutParams(-2, dp(40)))
-        infoCol.addView(btnRow)
-
-        frame.addView(infoCol, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
-
-        val bannerHeight = dp(if (isTelevision()) 280 else 220)
-        content.addView(frame, LinearLayout.LayoutParams(-1, bannerHeight).apply {
-            setMargins(gutter, dp(4), gutter, dp(14))
-        })
     }
 
     private fun showYouTubeItemDialog(item: Media) {
