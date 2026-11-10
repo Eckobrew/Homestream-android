@@ -31,6 +31,7 @@ import androidx.media3.common.Tracks
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
 import coil.load
+import com.google.android.gms.cast.MediaLoadRequestData
 import com.google.android.gms.cast.MediaQueueItem
 import com.google.android.gms.cast.MediaInfo
 import com.google.android.gms.cast.MediaMetadata
@@ -907,22 +908,23 @@ class PlayerActivity : AppCompatActivity() {
                 if (current.type == "Episode") { media = current; updateEpisodeControls() }
                 val info = castMediaInfo(current, targetId)
                 val upcoming = if (autoplay) episodes.upcoming(targetId).take(50) else emptyList()
-                val firstNext = upcoming.firstOrNull()?.let { next ->
-                    runCatching { castQueueItem(castMediaInfo(next, next.playbackId), true) }.getOrNull()
-                }
-                val queue = listOf(castQueueItem(info, wantsPlay, position)) + listOfNotNull(firstNext)
-                client.queueLoad(queue.toTypedArray(), 0, MediaStatus.REPEAT_MODE_REPEAT_OFF, position, null)
-                    .setResultCallback { result ->
-                        if (generation != castGeneration || !playbackStarted) return@setResultCallback
-                        castLoading = false
-                        if (result.status.isSuccess) {
-                            remote = client; client.registerCallback(remoteCallback)
-                            releaseLocal(); clearMessages(); showCastControls()
-                            if (upcoming.isNotEmpty() && firstNext == null) Toast.makeText(this@PlayerActivity, "Next episode could not be queued. Retry from Episodes.", Toast.LENGTH_LONG).show()
-                            queueJob?.cancel()
+                val subIds = subtitleIds(info)
+                val loadRequest = MediaLoadRequestData.Builder()
+                    .setMediaInfo(info)
+                    .setAutoplay(wantsPlay)
+                    .setCurrentTime(position.coerceAtLeast(0))
+                    .apply { if (subIds.isNotEmpty()) setActiveTrackIds(subIds) }
+                    .build()
+                client.load(loadRequest).setResultCallback { result ->
+                    if (generation != castGeneration || !playbackStarted) return@setResultCallback
+                    castLoading = false
+                    if (result.status.isSuccess) {
+                        remote = client; client.registerCallback(remoteCallback)
+                        releaseLocal(); clearMessages(); showCastControls()
+                        queueJob?.cancel()
+                        if (autoplay && upcoming.isNotEmpty()) {
                             queueJob = lifecycleScope.launch {
-                                if (firstNext == null) return@launch
-                                for (next in upcoming.drop(1)) {
+                                for (next in upcoming) {
                                     if (remote !== client) break
                                     try {
                                         val queued = castQueueItem(castMediaInfo(next, next.playbackId), true)
@@ -938,11 +940,12 @@ class PlayerActivity : AppCompatActivity() {
                                     }
                                 }
                             }
-                        } else if (!castCompatible && currentPlaybackId !in castRejectedItems) {
-                            castRejectedItems.add(currentPlaybackId); castNeedsSafeProfile = true
-                            cast(session, forceReload = true)
-                        } else { Toast.makeText(this@PlayerActivity, "Chromecast could not load this stream. Check receiver access to Jellyfin.", Toast.LENGTH_LONG).show(); returnToLocal() }
-                    }
+                        }
+                    } else if (!castCompatible && currentPlaybackId !in castRejectedItems) {
+                        castRejectedItems.add(currentPlaybackId); castNeedsSafeProfile = true
+                        cast(session, forceReload = true)
+                    } else { Toast.makeText(this@PlayerActivity, "Chromecast could not load this stream. Check receiver access to Jellyfin.", Toast.LENGTH_LONG).show(); returnToLocal() }
+                }
             } catch (_: kotlinx.coroutines.CancellationException) { castLoading = false
             } catch (e: Exception) { castLoading = false; showMessage(e.message ?: "Cast failed"); returnToLocal() }
         }
@@ -975,8 +978,15 @@ class PlayerActivity : AppCompatActivity() {
         if (stream.has("resumePositionTicks")) position = ticksToMs(stream.optLong("resumePositionTicks")).coerceAtLeast(0)
     }
 
-    private fun castQueueItem(info: MediaInfo, play: Boolean, startMs: Long = 0) = MediaQueueItem.Builder(info)
-        .setStartTime(startMs.coerceAtLeast(0) / 1000.0).setAutoplay(play).setPreloadTime(10.0).setActiveTrackIds(subtitleIds(info)).build()
+    private fun castQueueItem(info: MediaInfo, play: Boolean, startMs: Long = 0): MediaQueueItem {
+        val subIds = subtitleIds(info)
+        val builder = MediaQueueItem.Builder(info)
+            .setAutoplay(play)
+            .setPreloadTime(10.0)
+        if (startMs > 0) builder.setStartTime(startMs / 1000.0)
+        if (subIds.isNotEmpty()) builder.setActiveTrackIds(subIds)
+        return builder.build()
+    }
 
     private suspend fun castMediaInfo(item: Media, id: String): MediaInfo {
         val compatible = castCompatible || id in castRejectedItems
