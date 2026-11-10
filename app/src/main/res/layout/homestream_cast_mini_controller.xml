@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- XML inflation is required: the Cast SDK initializes its styles and buttons
      in MiniControllerFragment.onInflate, before creating the controller view. -->
-<androidx.fragment.app.FragmentContainerView xmlns:android="http://schemas.android.com/apk/res/android"
+<fragment xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@id/cast_mini"
     android:name="com.google.android.gms.cast.framework.media.widget.MiniControllerFragment"
     android:tag="cast-mini"

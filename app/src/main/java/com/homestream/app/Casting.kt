@@ -48,6 +48,7 @@ internal fun sendCustomCastIdle(session: com.google.android.gms.cast.framework.C
 internal fun hasCastVideo(client: com.google.android.gms.cast.framework.media.RemoteMediaClient?): Boolean {
     val media = client?.mediaInfo ?: return false
     val video = media.contentType?.startsWith("video/", ignoreCase = true) == true ||
+        media.contentType?.contains("mpegURL", ignoreCase = true) == true ||
         media.metadata?.mediaType in listOf(com.google.android.gms.cast.MediaMetadata.MEDIA_TYPE_MOVIE, com.google.android.gms.cast.MediaMetadata.MEDIA_TYPE_TV_SHOW)
     return video && (client.isPlaying || client.isPaused || client.isBuffering || client.isLoadingNextItem)
 }
@@ -96,16 +97,20 @@ class CastControllerActivity : ExpandedControllerActivity() {
         override fun run() {
             val session = castContext(this@CastControllerActivity)?.sessionManager?.currentCastSession
             val standby = !hasCastVideo(session?.remoteMediaClient)
-            sdkPane?.visibility = if (standby) View.GONE else View.VISIBLE
-            standbyPane?.visibility = if (standby) View.VISIBLE else View.GONE
-            supportActionBar?.show()
-            supportActionBar?.title = "HomeStream"
-            supportActionBar?.subtitle = session?.castDevice?.friendlyName
+            val sdkTarget = if (standby) View.GONE else View.VISIBLE
+            if (sdkPane?.visibility != sdkTarget) sdkPane?.visibility = sdkTarget
+            val standbyTarget = if (standby) View.VISIBLE else View.GONE
+            if (standbyPane?.visibility != standbyTarget) standbyPane?.visibility = standbyTarget
+            if (supportActionBar?.title != "HomeStream") supportActionBar?.title = "HomeStream"
+            val deviceName = session?.castDevice?.friendlyName
+            if (supportActionBar?.subtitle != deviceName) supportActionBar?.subtitle = deviceName
             if (standby && session?.isConnected == true) runCatching {
                 val level = (session.volume * 100).toInt().coerceIn(0, 100)
-                if (idleVolume?.isPressed != true) idleVolume?.progress = level
-                idleLevel?.text = "Volume · $level%"
-                idleMute?.text = if (session.isMute) "Unmute" else "Mute"
+                if (idleVolume?.isPressed != true && idleVolume?.progress != level) idleVolume?.progress = level
+                val levelText = "Volume · $level%"
+                if (idleLevel?.text != levelText) idleLevel?.text = levelText
+                val muteText = if (session.isMute) "Unmute" else "Mute"
+                if (idleMute?.text != muteText) idleMute?.text = muteText
             }
             handler.postDelayed(this, 750)
         }
