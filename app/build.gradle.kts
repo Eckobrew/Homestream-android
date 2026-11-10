@@ -1,6 +1,6 @@
 plugins { id("com.android.application"); id("org.jetbrains.kotlin.android") }
 val previewInstall = providers.gradleProperty("previewInstall").orNull == "true"
-val customCastReceiverId = providers.gradleProperty("castReceiverAppId").orNull.orEmpty().uppercase()
+val customCastReceiverId = providers.gradleProperty("castReceiverAppId").orNull.orEmpty().uppercase().takeUnless { it == "CC1AD845" }.orEmpty()
 require(customCastReceiverId.isEmpty() || customCastReceiverId.matches(Regex("[A-F0-9]{8}"))) { "castReceiverAppId must be an 8-character Cast application ID" }
 android {
     buildFeatures { buildConfig = true }

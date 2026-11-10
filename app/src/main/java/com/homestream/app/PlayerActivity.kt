@@ -916,7 +916,7 @@ class PlayerActivity : AppCompatActivity() {
                 loadEpisodeContextNow(targetId)
                 val current = episodes.items.firstOrNull { it.playbackId == targetId } ?: media
                 if (current.type == "Episode") { media = current; updateEpisodeControls() }
-                castVideoCapabilities = if (castCompatible || targetId in castRejectedItems || selected != null) null
+                castVideoCapabilities = if (BuildConfig.CAST_RECEIVER_APP_ID.isBlank() || castCompatible || targetId in castRejectedItems || selected != null) null
                     else requestCastVideoCapabilities(session)
                 val info = castMediaInfo(current, targetId)
                 castStartPosition = position

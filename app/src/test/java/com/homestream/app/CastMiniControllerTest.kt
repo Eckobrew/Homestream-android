@@ -14,6 +14,11 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class CastMiniControllerTest {
+    @Test fun receiverUsesTheExplicitOverrideOrGoogleDefault() {
+        val options = HomeStreamCastOptions().getCastOptions(org.robolectric.RuntimeEnvironment.getApplication())
+        assertEquals(BuildConfig.CAST_RECEIVER_APP_ID.ifBlank { "CC1AD845" }, options.receiverApplicationId)
+    }
+
     @Test fun castControllerSurvivesActivityRecreation() {
         Robolectric.buildActivity(CastMiniControllerHostActivity::class.java).setup().use { controller ->
             controller.recreate()

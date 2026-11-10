@@ -15,6 +15,12 @@ jobs:
         with:
           packages: 'platform-tools platforms;android-35 build-tools;35.0.0'
       - uses: gradle/actions/setup-gradle@v4
+      - name: Verify public Cast receiver default
+        run: |
+          if grep -Eq '^[[:space:]]*castReceiverAppId[[:space:]]*=' gradle.properties; then
+            echo 'Configure custom Cast receivers with a local build override.'
+            exit 1
+          fi
       - run: ./gradlew assembleDebug testDebugUnitTest lintDebug
       - uses: actions/upload-artifact@v4
         with:

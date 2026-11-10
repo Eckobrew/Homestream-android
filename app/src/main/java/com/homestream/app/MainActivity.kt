@@ -39,13 +39,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import org.json.JSONObject
-import com.google.android.gms.cast.MediaInfo
-import com.google.android.gms.cast.MediaLoadRequestData
-import com.google.android.gms.cast.MediaStatus
-import com.google.android.gms.cast.MediaMetadata
 import com.google.android.gms.cast.framework.CastSession
 import com.google.android.gms.cast.framework.SessionManagerListener
-import com.google.android.gms.common.images.WebImage
 
 class MainActivity : AppCompatActivity() {
     private lateinit var settings: ServerSettings
@@ -1077,27 +1072,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun syncCastIdle(item: Media) {
         val session = castContext(this)?.sessionManager?.currentCastSession ?: return
-        val client = session.remoteMediaClient ?: return
-        if (sendCustomCastIdle(session, heroItems.ifEmpty { listOf(item) }, api)) return
-        if (client.playerState == MediaStatus.PLAYER_STATE_IDLE) {
-            val art = item.backdrop.ifBlank { item.poster }
-            if (art.isNotBlank()) {
-                try {
-                    val fullUrl = api.absolute(art)
-                    val metadata = MediaMetadata(MediaMetadata.MEDIA_TYPE_PHOTO).apply {
-                        putString(MediaMetadata.KEY_TITLE, item.title)
-                        putString(MediaMetadata.KEY_SUBTITLE, "Ready to cast")
-                        addImage(WebImage(Uri.parse(fullUrl)))
-                    }
-                    val photoInfo = MediaInfo.Builder(fullUrl)
-                        .setContentType("image/jpeg")
-                        .setStreamType(MediaInfo.STREAM_TYPE_BUFFERED)
-                        .setMetadata(metadata)
-                        .build()
-                    client.load(MediaLoadRequestData.Builder().setMediaInfo(photoInfo).setAutoplay(true).build())
-                } catch (_: Exception) {}
-            }
-        }
+        sendCustomCastIdle(session, heroItems.ifEmpty { listOf(item) }, api)
     }
 
     private fun hero(item: Media, showActions: Boolean = true) {
