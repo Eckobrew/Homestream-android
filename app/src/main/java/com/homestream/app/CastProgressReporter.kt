@@ -19,7 +19,8 @@ internal fun HomeStreamApplication.observeCastProgress() {
                 val session = cast.sessionManager.currentCastSession
                 val client = session?.remoteMediaClient
                 val id = client?.mediaInfo?.customData?.optString("itemId").orEmpty()
-                if (session?.isConnected != true || !hasCastVideo(client) || id.isBlank()) null else {
+                if (session?.isConnected != true || !hasCastVideo(client) || id.isBlank() ||
+                    client?.playerState == com.google.android.gms.cast.MediaStatus.PLAYER_STATE_IDLE) null else {
                     val settings = ServerSettings(this@observeCastProgress)
                     val connection = object : ConnectionSettings {
                         override val baseUrl = settings.baseUrl

@@ -46,11 +46,12 @@ internal fun sendCustomCastIdle(session: com.google.android.gms.cast.framework.C
 }
 
 internal fun hasCastVideo(client: com.google.android.gms.cast.framework.media.RemoteMediaClient?): Boolean {
-    val media = client?.mediaInfo ?: return false
+    if (client == null || !client.hasMediaSession()) return false
+    val media = client.mediaInfo ?: return false
     val video = media.contentType?.startsWith("video/", ignoreCase = true) == true ||
         media.contentType?.contains("mpegURL", ignoreCase = true) == true ||
         media.metadata?.mediaType in listOf(com.google.android.gms.cast.MediaMetadata.MEDIA_TYPE_MOVIE, com.google.android.gms.cast.MediaMetadata.MEDIA_TYPE_TV_SHOW)
-    return video && (client.isPlaying || client.isPaused || client.isBuffering || client.isLoadingNextItem)
+    return video && client.playerState != com.google.android.gms.cast.MediaStatus.PLAYER_STATE_UNKNOWN
 }
 
 private fun Context.readyToCastView(): android.widget.LinearLayout = column().apply {
@@ -92,31 +93,47 @@ class CastControllerActivity : ExpandedControllerActivity() {
     private var idleVolume: android.widget.SeekBar? = null
     private var idleMute: android.widget.Button? = null
     private var idleLevel: android.widget.TextView? = null
-    private val handler = android.os.Handler(android.os.Looper.getMainLooper())
-    private val refresh = object : Runnable {
-        override fun run() {
-            val session = castContext(this@CastControllerActivity)?.sessionManager?.currentCastSession
-            val standby = !hasCastVideo(session?.remoteMediaClient)
-            val sdkTarget = if (standby) View.GONE else View.VISIBLE
-            if (sdkPane?.visibility != sdkTarget) sdkPane?.visibility = sdkTarget
-            val standbyTarget = if (standby) View.VISIBLE else View.GONE
-            if (standbyPane?.visibility != standbyTarget) standbyPane?.visibility = standbyTarget
-            if (supportActionBar?.title != "HomeStream") supportActionBar?.title = "HomeStream"
-            val deviceName = session?.castDevice?.friendlyName
-            if (supportActionBar?.subtitle != deviceName) supportActionBar?.subtitle = deviceName
-            if (standby && session?.isConnected == true) runCatching {
-                val level = (session.volume * 100).toInt().coerceIn(0, 100)
-                if (idleVolume?.isPressed != true && idleVolume?.progress != level) idleVolume?.progress = level
-                val levelText = "Volume · $level%"
-                if (idleLevel?.text != levelText) idleLevel?.text = levelText
-                val muteText = if (session.isMute) "Unmute" else "Mute"
-                if (idleMute?.text != muteText) idleMute?.text = muteText
-            }
-            handler.postDelayed(this, 750)
+    private var registeredClient: com.google.android.gms.cast.framework.media.RemoteMediaClient? = null
+    private val clientCallback = object : com.google.android.gms.cast.framework.media.RemoteMediaClient.Callback() {
+        override fun onStatusUpdated() { updateUi() }
+        override fun onMetadataUpdated() { updateUi() }
+    }
+
+    private fun updateUi() {
+        val session = castContext(this)?.sessionManager?.currentCastSession
+        val client = session?.remoteMediaClient
+        val hasVideo = hasCastVideo(client)
+        val standby = !hasVideo
+        val sdkTarget = if (standby) View.GONE else View.VISIBLE
+        if (sdkPane?.visibility != sdkTarget) sdkPane?.visibility = sdkTarget
+        val standbyTarget = if (standby) View.VISIBLE else View.GONE
+        if (standbyPane?.visibility != standbyTarget) standbyPane?.visibility = standbyTarget
+        if (supportActionBar?.title != "HomeStream") supportActionBar?.title = "HomeStream"
+        val deviceName = session?.castDevice?.friendlyName
+        if (supportActionBar?.subtitle != deviceName) supportActionBar?.subtitle = deviceName
+        if (standby && session?.isConnected == true) runCatching {
+            val level = (session.volume * 100).toInt().coerceIn(0, 100)
+            if (idleVolume?.isPressed != true && idleVolume?.progress != level) idleVolume?.progress = level
+            val levelText = "Volume · $level%"
+            if (idleLevel?.text != levelText) idleLevel?.text = levelText
+            val muteText = if (session.isMute) "Unmute" else "Mute"
+            if (idleMute?.text != muteText) idleMute?.text = muteText
         }
     }
-    override fun onStart() { super.onStart(); handler.removeCallbacks(refresh); refresh.run() }
-    override fun onStop() { handler.removeCallbacks(refresh); super.onStop() }
+
+    override fun onStart() {
+        super.onStart()
+        val client = castContext(this)?.sessionManager?.currentCastSession?.remoteMediaClient
+        registeredClient = client
+        client?.registerCallback(clientCallback)
+        updateUi()
+    }
+
+    override fun onStop() {
+        registeredClient?.unregisterCallback(clientCallback)
+        registeredClient = null
+        super.onStop()
+    }
     override fun onCreate(savedInstanceState: android.os.Bundle?) {
         requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
         super.onCreate(savedInstanceState)
