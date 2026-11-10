@@ -18,7 +18,7 @@ class CastProfileTest {
     }
     @Test fun unknownReceiversAreProbedAndCanFallBackAutomatically() {
         assertEquals("auto-probe", automaticCastProfile("Chromecast", false).key)
-        assertTrue(automaticCastProfile("Chromecast", false).hevc)
+        assertFalse(automaticCastProfile("Chromecast", false).hevc)
         assertFalse(automaticCastProfile("Chromecast", true).hevc)
         assertEquals(1080, automaticCastProfile("Chromecast", true).height)
     }

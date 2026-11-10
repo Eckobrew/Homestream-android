@@ -31,8 +31,8 @@ import androidx.media3.common.Tracks
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
 import coil.load
-import com.google.android.gms.cast.MediaLoadRequestData
 import com.google.android.gms.cast.MediaQueueItem
+import com.google.android.gms.cast.MediaLoadRequestData
 import com.google.android.gms.cast.MediaInfo
 import com.google.android.gms.cast.MediaMetadata
 import com.google.android.gms.cast.MediaStatus
@@ -41,8 +41,6 @@ import com.google.android.gms.cast.framework.CastSession
 import com.google.android.gms.cast.framework.SessionManagerListener
 import com.google.android.gms.cast.framework.media.RemoteMediaClient
 import com.google.android.gms.common.images.WebImage
-import kotlinx.coroutines.suspendCancellableCoroutine
-import kotlin.coroutines.resume
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -74,6 +72,9 @@ class PlayerActivity : AppCompatActivity() {
     private var downloadPollingJob: Job? = null
     private var castGeneration = 0
     private var castLoading = false
+    private var castStartup: Job? = null
+    private var castStartPosition: Long? = null
+    private var castVideoCapabilities: String? = null
     private var castCompatible = false
     private var castNeedsSafeProfile = false
     private val castRejectedItems = mutableSetOf<String>()
@@ -86,7 +87,6 @@ class PlayerActivity : AppCompatActivity() {
     private var remote: RemoteMediaClient? = null
     private var episodes = EpisodeQueue()
     private var episodeJob: Job? = null
-    private var queueJob: Job? = null
     private var titleColumn: LinearLayout? = null
     private val subtitleAppearance by lazy { SubtitleAppearance(this) }
     private val playbackPrefs by lazy { getSharedPreferences("playback", MODE_PRIVATE) }
@@ -104,30 +104,32 @@ class PlayerActivity : AppCompatActivity() {
     private val remoteCallback: RemoteMediaClient.Callback = object : RemoteMediaClient.Callback() {
         override fun onStatusUpdated() {
             remote?.let { client ->
+                if (client.playerState == MediaStatus.PLAYER_STATE_IDLE && client.idleReason == MediaStatus.IDLE_REASON_ERROR) {
+                    castCtx?.sessionManager?.currentCastSession?.let { recoverCast(it) }
+                    return
+                }
                 val received = client.mediaInfo?.customData?.optJSONObject("media")?.let { Media(it) }
                 if (received != null && received.playbackId != currentPlaybackId) {
                     media = received; currentPlaybackId = received.playbackId; updateEpisodeControls()
                     client.mediaInfo?.customData?.optJSONObject("playback")?.let { describeStream(it) }
                 }
                 val activeId = if (currentPlaybackId.isNotBlank()) currentPlaybackId else media.playbackId
-                if (client.mediaInfo?.customData?.optString("itemId") == activeId) {
+                if (client.mediaInfo?.customData?.optString("itemId") == activeId && (client.isPlaying || client.isPaused)) {
+                    castStartup?.cancel(); castStartup = null; castStartPosition = null
                     position = client.approximateStreamPosition
                     reportStarted()
                 }
-                val isActivelyPlaying = client.isPlaying || client.isLoadingNextItem
-                if (client.playerState == MediaStatus.PLAYER_STATE_IDLE && client.idleReason == MediaStatus.IDLE_REASON_ERROR) {
+                if (client.playerState == MediaStatus.PLAYER_STATE_IDLE && client.idleReason == MediaStatus.IDLE_REASON_FINISHED) {
+                    val next = if (autoplay) episodes.next(currentPlaybackId) else null
                     val session = castCtx?.sessionManager?.currentCastSession
-                    if (!castCompatible && currentPlaybackId !in castRejectedItems && session?.isConnected == true) {
+                    if (next != null && session?.isConnected == true) {
                         client.unregisterCallback(remoteCallback); remote = null
-                        castRejectedItems.add(currentPlaybackId); castNeedsSafeProfile = true; castLoading = false
+                        media = next; currentPlaybackId = next.playbackId; position = 0; wantsPlay = true
                         cast(session, forceReload = true)
-                    } else showMessage("The receiver could not decode this stream. Try another title or play locally.")
+                    }
                     return
                 }
-                val isIdleOrEnded = client.playerState == MediaStatus.PLAYER_STATE_IDLE ||
-                        client.idleReason == MediaStatus.IDLE_REASON_FINISHED
-
-                if (isIdleOrEnded || isActivelyPlaying) openCastController()
+                if (client.isPlaying || client.isPaused || client.isLoadingNextItem) openCastController()
             }
         }
     }
@@ -139,7 +141,13 @@ class PlayerActivity : AppCompatActivity() {
         override fun onSessionStartFailed(session: CastSession, error: Int) { returnToLocal() }
         override fun onSessionResumeFailed(session: CastSession, error: Int) { returnToLocal() }
         override fun onSessionStarting(session: CastSession) {}
-        override fun onSessionEnding(session: CastSession) { remote?.let { position = it.approximateStreamPosition; wantsPlay = it.isPlaying } }
+        override fun onSessionEnding(session: CastSession) {
+            castStartup?.cancel(); castStartup = null
+            remote?.let {
+                position = castStartPosition ?: it.approximateStreamPosition
+                if (castStartPosition == null) wantsPlay = it.isPlaying
+            }
+        }
         override fun onSessionResuming(session: CastSession, id: String) {}
     }
 
@@ -888,7 +896,8 @@ class PlayerActivity : AppCompatActivity() {
             media = receiverMedia; currentPlaybackId = media.playbackId; updateEpisodeControls(); loadEpisodeContext()
             client.mediaInfo?.customData?.optJSONObject("playback")?.let { describeStream(it) }
         }
-        if (!forceReload && client.mediaInfo?.customData?.optString("itemId") == currentPlaybackId) {
+        if (!forceReload && client.mediaInfo?.customData?.optString("itemId") == currentPlaybackId &&
+            (client.isPlaying || client.isPaused || client.isBuffering)) {
             remote = client; client.registerCallback(remoteCallback)
             position = client.approximateStreamPosition
             releaseLocal(); clearMessages(); showCastControls(); return
@@ -897,7 +906,8 @@ class PlayerActivity : AppCompatActivity() {
             position = player?.currentPosition ?: position
             wantsPlay = player?.playWhenReady ?: wantsPlay
         }
-        player?.pause(); negotiation?.cancel(); queueJob?.cancel(); castLoading = true
+        player?.pause(); negotiation?.cancel(); castLoading = true
+        castStartup?.cancel(); castStartup = null; castStartPosition = null
         val generation = ++castGeneration
         negotiation = lifecycleScope.launch {
             try {
@@ -906,50 +916,55 @@ class PlayerActivity : AppCompatActivity() {
                 loadEpisodeContextNow(targetId)
                 val current = episodes.items.firstOrNull { it.playbackId == targetId } ?: media
                 if (current.type == "Episode") { media = current; updateEpisodeControls() }
+                castVideoCapabilities = if (castCompatible || targetId in castRejectedItems || selected != null) null
+                    else requestCastVideoCapabilities(session)
                 val info = castMediaInfo(current, targetId)
-                val upcoming = if (autoplay) episodes.upcoming(targetId).take(50) else emptyList()
-                val subIds = subtitleIds(info)
-                val loadRequest = MediaLoadRequestData.Builder()
+                castStartPosition = position
+                castStartup = lifecycleScope.launch {
+                    delay(30_000)
+                    if (generation == castGeneration) recoverCast(session)
+                }
+                val tracks = subtitleIds(info)
+                val load = MediaLoadRequestData.Builder()
                     .setMediaInfo(info)
                     .setAutoplay(wantsPlay)
                     .setCurrentTime(position.coerceAtLeast(0))
-                    .apply { if (subIds.isNotEmpty()) setActiveTrackIds(subIds) }
+                    .apply { if (tracks.isNotEmpty()) setActiveTrackIds(tracks) }
                     .build()
-                client.load(loadRequest).setResultCallback { result ->
+                client.load(load).setResultCallback { result ->
                     if (generation != castGeneration || !playbackStarted) return@setResultCallback
                     castLoading = false
                     if (result.status.isSuccess) {
                         remote = client; client.registerCallback(remoteCallback)
                         releaseLocal(); clearMessages(); showCastControls()
-                        queueJob?.cancel()
-                        if (autoplay && upcoming.isNotEmpty()) {
-                            queueJob = lifecycleScope.launch {
-                                for (next in upcoming) {
-                                    if (remote !== client) break
-                                    try {
-                                        val queued = castQueueItem(castMediaInfo(next, next.playbackId), true)
-                                        val success = suspendCancellableCoroutine<Boolean> { continuation ->
-                                            client.queueAppendItem(queued, null).setResultCallback { appended ->
-                                                if (continuation.isActive) continuation.resume(appended.status.isSuccess)
-                                            }
-                                        }
-                                        if (!success) break
-                                    } catch (e: Exception) {
-                                        if (e is kotlinx.coroutines.CancellationException) throw e
-                                        break
-                                    }
-                                }
-                            }
-                        }
-                    } else if (!castCompatible && currentPlaybackId !in castRejectedItems) {
-                        castRejectedItems.add(currentPlaybackId); castNeedsSafeProfile = true
-                        cast(session, forceReload = true)
-                    } else { Toast.makeText(this@PlayerActivity, "Chromecast could not load this stream. Check receiver access to Jellyfin.", Toast.LENGTH_LONG).show(); returnToLocal() }
+                        remoteCallback.onStatusUpdated()
+                    } else recoverCast(session)
                 }
-            } catch (_: kotlinx.coroutines.CancellationException) { castLoading = false
-            } catch (e: Exception) { castLoading = false; showMessage(e.message ?: "Cast failed"); returnToLocal() }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                if (generation == castGeneration) recoverCast(session)
+            }
         }
     }
+
+    private fun recoverCast(session: CastSession) {
+        castStartup?.cancel(); castStartup = null
+        castStartPosition?.let { position = it }
+        remote?.unregisterCallback(remoteCallback); remote = null
+        castLoading = false
+        if (session.isConnected && !castCompatible && castRejectedItems.add(currentPlaybackId)) {
+            castNeedsSafeProfile = true
+            cast(session, forceReload = true)
+            return
+        }
+        ++castGeneration
+        castStartPosition = null
+        castControllerOpened = false
+        Toast.makeText(this, "Chromecast could not start playback. Returning to this device.", Toast.LENGTH_LONG).show()
+        if (session.isConnected) castCtx?.sessionManager?.endCurrentSession(true) else returnToLocal()
+    }
+
     private fun chooseCastProfile(session: CastSession) {
         androidx.appcompat.app.AlertDialog.Builder(this).setTitle("Cast device model")
             .setItems(castProfiles.map { it.label }.toTypedArray()) { _, index ->
@@ -959,7 +974,7 @@ class PlayerActivity : AppCompatActivity() {
                 receiverProfile = castProfiles[index]
                 castNeedsSafeProfile = false; castRejectedItems.clear()
                 playbackPrefs.edit().putString("cast-profile-${session.castDevice?.deviceId.orEmpty()}", receiverProfile.key).apply()
-                negotiation?.cancel(); queueJob?.cancel(); castLoading = false
+                negotiation?.cancel(); castLoading = false
                 cast(session, forceReload = true)
             }.setNegativeButton("Cancel") { _, _ -> if (remote == null) startLocal() }.show()
     }
@@ -978,21 +993,12 @@ class PlayerActivity : AppCompatActivity() {
         if (stream.has("resumePositionTicks")) position = ticksToMs(stream.optLong("resumePositionTicks")).coerceAtLeast(0)
     }
 
-    private fun castQueueItem(info: MediaInfo, play: Boolean, startMs: Long = 0): MediaQueueItem {
-        val subIds = subtitleIds(info)
-        val builder = MediaQueueItem.Builder(info)
-            .setAutoplay(play)
-            .setPreloadTime(10.0)
-        if (startMs > 0) builder.setStartTime(startMs / 1000.0)
-        if (subIds.isNotEmpty()) builder.setActiveTrackIds(subIds)
-        return builder.build()
-    }
-
     private suspend fun castMediaInfo(item: Media, id: String): MediaInfo {
         val compatible = castCompatible || id in castRejectedItems
         val stream = api.call("playback", mapOf("itemId" to id, "forceTranscode" to compatible.toString(),
-            "receiver" to "cast", "videoCodecs" to if (receiverProfile.hevc) "h264,hevc,vp8,vp9,av1" else "h264,vp8",
-            "maxWidth" to receiverProfile.width.toString(), "maxHeight" to receiverProfile.height.toString(), "audioCodecs" to "aac,mp3,opus,vorbis"))
+            "receiver" to "cast", "canPlayHevc" to receiverProfile.hevc.toString(),
+            "audioCodecs" to "aac,mp3,opus,vorbis") +
+            (castVideoCapabilities?.let { mapOf("videoCapabilities" to it) } ?: emptyMap()))
         if (id == currentPlaybackId) { applyInitialResume(stream); describeStream(stream); transcode = stream.optBoolean("isTranscoding"); updateModeBadge() }
         val metadata = MediaMetadata(if (item.type == "Episode") MediaMetadata.MEDIA_TYPE_TV_SHOW else MediaMetadata.MEDIA_TYPE_MOVIE).apply {
             putString(MediaMetadata.KEY_TITLE, item.title)
@@ -1090,7 +1096,7 @@ class PlayerActivity : AppCompatActivity() {
             client.queueJumpToItem(queued.itemId, 0, null)
             return
         }
-        queueJob?.cancel(); negotiation?.cancel(); castLoading = false
+        negotiation?.cancel(); castLoading = false
         media = item; currentPlaybackId = item.playbackId; position = 0; wantsPlay = true
         updateEpisodeControls()
         val session = castCtx?.sessionManager?.currentCastSession
@@ -1211,7 +1217,8 @@ class PlayerActivity : AppCompatActivity() {
     }
 
     private fun returnToLocal() {
-        queueJob?.cancel()
+        castStartup?.cancel(); castStartup = null; castStartPosition = null
+        ++castGeneration
         castLoading = false
         remote?.unregisterCallback(remoteCallback)
         remote = null
@@ -1284,7 +1291,7 @@ class PlayerActivity : AppCompatActivity() {
         }
     }
     override fun onStop() {
-        // Keep queue preparation and receiver decode fallback alive behind the
+        // Keep episode autoplay and receiver decode fallback alive behind the
         // SDK controller. Session progress itself is owned by the Application.
         if (castControllerOpened && remote != null && !isFinishing) {
             timer?.cancel()
@@ -1296,6 +1303,7 @@ class PlayerActivity : AppCompatActivity() {
         }
         playbackStarted = false
         ++castGeneration; castLoading = false
+        castStartup?.cancel(); castStartup = null
         episodeJob?.cancel()
         downloadPollingJob?.cancel()
         runCatching { unregisterReceiver(noisyReceiver) }
@@ -1309,7 +1317,7 @@ class PlayerActivity : AppCompatActivity() {
     override fun onDestroy() {
         unregisterReceiver(musicStarted)
         playbackStarted = false
-        negotiation?.cancel(); queueJob?.cancel(); timer?.cancel()
+        negotiation?.cancel(); timer?.cancel(); castStartup?.cancel()
         remote?.unregisterCallback(remoteCallback)
         castCtx?.sessionManager?.removeSessionManagerListener(sessionListener, CastSession::class.java)
         super.onDestroy()
