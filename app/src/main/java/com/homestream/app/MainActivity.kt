@@ -2879,9 +2879,11 @@ class MainActivity : AppCompatActivity() {
                             librarySongs -> {
                                 musicAlbums.filter { it.inLibrary }.forEach { album ->
                                     val tracks = api.call("music/album", mapOf("albumId" to album.id)).objects("tracks").map(::MusicTrack)
+                                    val albumArt = albumArtwork(album)
                                     tracks.forEachIndexed { index, track ->
                                         if (query.isBlank() || listOf(track.title, album.title, album.artist).any { it.contains(query, ignoreCase = true) }) {
-                                            staged.addView(musicTrackRow(track.title, "${album.artist} • ${album.title}", track.json.optInt("trackNumber", index + 1)) { startMusicTracks(tracks, album, index) })
+                                            val songArt = track.coverUrl.takeIf { it.isNotBlank() && it != "null" }?.let(api::absolute) ?: albumArt
+                                            staged.addView(musicTrackRow(track.title, "${album.artist} • ${album.title}", track.json.optInt("trackNumber", index + 1), coverUrl = songArt) { startMusicTracks(tracks, album, index) })
                                         }
                                     }
                                 }
@@ -3061,7 +3063,7 @@ class MainActivity : AppCompatActivity() {
     private fun startMusicTracks(tracks: List<MusicTrack>, album: MusicAlbum, index: Int) {
         if (settings.isKids) return
         val payload = org.json.JSONArray().apply {
-            tracks.forEach { put(JSONObject(it.json.toString()).put("coverUrl", album.json.optString("coverUrl"))) }
+            tracks.forEach { put(JSONObject(it.json.toString()).put("coverUrl", it.json.optString("coverUrl").ifBlank { album.json.optString("coverUrl") })) }
         }
         castContext(this)?.sessionManager?.currentCastSession?.remoteMediaClient?.stop()
         androidx.core.content.ContextCompat.startForegroundService(this,

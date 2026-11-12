@@ -60,13 +60,17 @@ internal fun Context.artworkGrid(target: LinearLayout, tiles: List<ArtworkTile>)
     }
 }
 
-internal fun Context.musicTrackRow(title: String, subtitle: String, number: Int, selected: Boolean = false, click: () -> Unit) =
+internal fun Context.musicTrackRow(title: String, subtitle: String, number: Int, selected: Boolean = false, coverUrl: String? = null, click: () -> Unit) =
     LinearLayout(this).apply {
         gravity = Gravity.CENTER_VERTICAL
         minimumHeight = dp(56)
         setPadding(dp(12), dp(8), dp(12), dp(8))
         focusableCard(if (selected) 0xFF302023.toInt() else 0xFF202020.toInt())
-        addView(label(number.toString(), 13f, true).apply { setTextColor(if (selected) RED else MUTED) }, LinearLayout.LayoutParams(dp(34), -2))
+        if (!coverUrl.isNullOrBlank()) {
+            addView(LibraryArtwork(context).apply { show(coverUrl) }, LinearLayout.LayoutParams(dp(44), dp(44)).apply { rightMargin = dp(12) })
+        } else {
+            addView(label(number.toString(), 13f, true).apply { setTextColor(if (selected) RED else MUTED) }, LinearLayout.LayoutParams(dp(34), -2))
+        }
         addView(column().apply {
             addView(label(title, 15f, true).apply { maxLines = 1; ellipsize = TextUtils.TruncateAt.END })
             if (subtitle.isNotBlank()) addView(label(subtitle, 12f).apply { setTextColor(MUTED); maxLines = 1; ellipsize = TextUtils.TruncateAt.END })

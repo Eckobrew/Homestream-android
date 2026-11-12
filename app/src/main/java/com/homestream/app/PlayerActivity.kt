@@ -226,7 +226,7 @@ class PlayerActivity : AppCompatActivity() {
         refreshInitialResume = savedInstanceState == null && !intent.getBooleanExtra("fromBeginning", false)
         position = savedInstanceState?.getLong("position") ?: if (intent.getBooleanExtra("fromBeginning", false)) 0 else media.resumeMs
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        setPlaybackPresentation(castCtx?.sessionManager?.currentCastSession?.isConnected == true && !media.isDownload)
+        setPlaybackPresentation(castCtx?.sessionManager?.currentCastSession?.isConnected == true)
         val frame = FrameLayout(this).apply { setBackgroundColor(INK) }
         playbackRoot = frame
         playerView = PlayerView(this).apply {
@@ -421,7 +421,8 @@ class PlayerActivity : AppCompatActivity() {
         showMessage(reason)
         if (ServerSettings(this).kidsRating.isBlank()) {
             overlay.addView(action("▶  Stream Now") {
-                startStreamingTorrentPipeline()
+                val session = castCtx?.sessionManager?.currentCastSession
+                if (session?.isConnected == true) cast(session) else startStreamingTorrentPipeline()
             })
             overlay.addView(action("⬇  Request Download") {
                 startStreamingDownloadPipeline()
@@ -704,6 +705,11 @@ class PlayerActivity : AppCompatActivity() {
     }
 
     private fun startLocal() {
+        val castSession = castCtx?.sessionManager?.currentCastSession
+        if (castSession?.isConnected == true) {
+            cast(castSession)
+            return
+        }
         setPlaybackPresentation(false)
         negotiation?.cancel(); clearMessages(); showMessage("Preparing playback…")
         if (media.isDownload || media.source == "youtube") {
@@ -876,10 +882,6 @@ class PlayerActivity : AppCompatActivity() {
         emptyList()
     }
     private fun cast(session: CastSession, forceReload: Boolean = false) {
-        if (media.isDownload || isStreamingDownload) {
-            Toast.makeText(this, "Live download streams play locally on device. Cast after import into Jellyfin.", Toast.LENGTH_LONG).show()
-            startLocal(); return
-        }
         setPlaybackPresentation(true)
         if (castLoading) return
         val deviceKey = "cast-profile-${session.castDevice?.deviceId.orEmpty()}"
@@ -995,19 +997,47 @@ class PlayerActivity : AppCompatActivity() {
 
     private suspend fun castMediaInfo(item: Media, id: String): MediaInfo {
         val compatible = castCompatible || id in castRejectedItems
-        val stream = api.call("playback", mapOf("itemId" to id, "forceTranscode" to compatible.toString(),
-            "receiver" to "cast", "canPlayHevc" to receiverProfile.hevc.toString(),
-            "audioCodecs" to "aac,mp3,opus,vorbis") +
-            (castVideoCapabilities?.let { mapOf("videoCapabilities" to it) } ?: emptyMap()))
+        val isTv = intent.getStringExtra("mediaType") == "tv" || item.type == "Series" || item.type == "Episode"
+        val sNum = intent.getIntExtra("season", 0).takeIf { it > 0 } ?: item.json.optInt("seasonNumber", 1).coerceAtLeast(1)
+        val epNum = intent.getIntExtra("episode", 0).takeIf { it > 0 } ?: item.json.optInt("episodeNumber", 1).coerceAtLeast(1)
+        val sTitle = intent.getStringExtra("seriesTitle")?.ifBlank { null } ?: item.title
+        val tmdb = intent.getIntExtra("tmdbId", 0).takeIf { it > 0 } ?: if (item.tmdbId > 0) item.tmdbId else {
+            val strId = item.id.replace("^(?:seerr|tmdb)-(?:movie-|tv-)?".toRegex(), "")
+            strId.toIntOrNull() ?: 0
+        }
+
+        val params = mutableMapOf(
+            "itemId" to id,
+            "forceTranscode" to compatible.toString(),
+            "receiver" to "cast",
+            "canPlayHevc" to receiverProfile.hevc.toString(),
+            "audioCodecs" to "aac,mp3,opus,vorbis"
+        )
+        if (castVideoCapabilities != null) {
+            params["videoCapabilities"] = castVideoCapabilities!!
+        }
+        if (tmdb > 0) params["tmdbId"] = tmdb.toString()
+        params["type"] = if (isTv) "tv" else "movie"
+        if (isTv) {
+            params["season"] = sNum.toString()
+            params["episode"] = epNum.toString()
+            if (sTitle.isNotBlank()) params["title"] = sTitle
+        }
+
+        val stream = api.call("playback", params)
         if (id == currentPlaybackId) { applyInitialResume(stream); describeStream(stream); transcode = stream.optBoolean("isTranscoding"); updateModeBadge() }
         val metadata = MediaMetadata(if (item.type == "Episode") MediaMetadata.MEDIA_TYPE_TV_SHOW else MediaMetadata.MEDIA_TYPE_MOVIE).apply {
             putString(MediaMetadata.KEY_TITLE, item.title)
-            if (item.json.optString("seriesName").isNotBlank()) putString(MediaMetadata.KEY_SERIES_TITLE, item.json.optString("seriesName"))
-            if (item.poster.isNotBlank()) addImage(WebImage(Uri.parse(api.absolute(item.poster))))
+            val series = item.json.optString("seriesName").ifBlank { item.json.optString("seriesTitle") }
+            if (series.isNotBlank()) putString(MediaMetadata.KEY_SERIES_TITLE, series)
+            val posterUrl = item.backdrop.ifBlank { item.poster }
+            if (posterUrl.isNotBlank()) addImage(WebImage(Uri.parse(api.absolute(posterUrl))))
         }
         val tracks = subtitleItems(id).mapIndexed { index, track -> MediaTrack.Builder((index + 1).toLong(), MediaTrack.TYPE_TEXT)
             .setSubtype(MediaTrack.SUBTYPE_SUBTITLES).setContentId(track.uri.toString()).setContentType("text/vtt")
             .setName(track.label ?: "Subtitle").setLanguage(track.language ?: "und").build() }
+        val durationSec = stream.optDouble("durationSeconds").takeIf { it > 0 }
+            ?: (item.json.optInt("durationMinutes").takeIf { it > 0 } ?: 120) * 60.0
         return MediaInfo.Builder(api.absolute(stream.getString("streamUrl")))
             .setContentType(stream.optString("contentType").ifBlank { when {
                 Uri.parse(stream.getString("streamUrl")).path.orEmpty().endsWith(".m3u8", ignoreCase = true) -> "application/x-mpegURL"
@@ -1017,9 +1047,10 @@ class PlayerActivity : AppCompatActivity() {
             .setStreamType(MediaInfo.STREAM_TYPE_BUFFERED).setMetadata(metadata).setMediaTracks(tracks)
             .setCustomData(JSONObject().put("itemId", id).put("media", item.json).put("playback", JSONObject(stream.toString()).apply {
                 put("transport", stream.optString("transport").ifBlank { if (Uri.parse(stream.optString("streamUrl")).path.orEmpty().endsWith(".m3u8", ignoreCase = true)) "HLS" else "file" })
+                put("durationSeconds", durationSec)
                 remove("streamUrl")
             }))
-            .apply { if (stream.optDouble("durationSeconds") > 0) setStreamDuration((stream.getDouble("durationSeconds") * 1000).toLong()) }.build()
+            .apply { if (durationSec > 0) setStreamDuration((durationSec * 1000).toLong()) }.build()
     }
 
     private suspend fun loadEpisodeContextNow(id: String = currentPlaybackId) {

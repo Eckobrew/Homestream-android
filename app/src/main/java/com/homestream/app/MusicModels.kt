@@ -27,6 +27,7 @@ data class MusicTrack(val json: JSONObject) {
     val discNumber get() = json.optInt("discNumber", 1)
     val durationSeconds get() = json.optInt("durationSeconds", 0)
     val streamUrl get() = json.optString("streamUrl")
+    val coverUrl get() = json.optString("coverUrl")
 }
 data class MusicPlaylist(val json: JSONObject) {
     val id get() = json.optString("id")
