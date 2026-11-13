@@ -4778,6 +4778,7 @@ class MainActivity : AppCompatActivity() {
         val author = book.optString("author")
         val coverUrl = book.optString("coverUrl")
         val inLibrary = book.optBoolean("inLibrary")
+        val onShelf = book.optBoolean("onShelf")
         val formatsArr = book.optJSONArray("formats")
         val firstFormat = if (formatsArr != null && formatsArr.length() > 0) formatsArr.optString(0, "epub") else "epub"
         val reqStatus = book.optString("requestStatus")
@@ -4812,7 +4813,8 @@ class MainActivity : AppCompatActivity() {
 
         val actionBtn = TextView(this).apply {
             text = when {
-                inLibrary -> "Read"
+                inLibrary && onShelf -> "Read"
+                inLibrary && !onShelf -> "+ Shelf"
                 reqStatus.isNotBlank() -> reqStatus.replaceFirstChar { it.uppercase() }
                 else -> "Request"
             }
@@ -4821,7 +4823,7 @@ class MainActivity : AppCompatActivity() {
             background = rounded(if (inLibrary) RED else 0xFF303030.toInt(), radius = dp(10).toFloat())
             setPadding(dp(14), dp(8), dp(14), dp(8))
             setOnClickListener {
-                if (inLibrary && id.isNotBlank()) {
+                if (inLibrary && onShelf && id.isNotBlank()) {
                     startActivity(
                         Intent(this@MainActivity, BookReaderActivity::class.java)
                             .putExtra("bookId", id)
@@ -4829,6 +4831,19 @@ class MainActivity : AppCompatActivity() {
                             .putExtra("author", author)
                             .putExtra("format", firstFormat)
                     )
+                } else if (inLibrary && !onShelf && id.isNotBlank()) {
+                    text = "…"
+                    lifecycleScope.launch {
+                        try {
+                            api.call("books/profile-book", body = JSONObject().put("bookId", id), method = "POST")
+                            book.put("onShelf", true)
+                            text = "Read"
+                            toast("Added \"$title\" to your bookshelf")
+                        } catch (e: Exception) {
+                            text = "+ Shelf"
+                            toast("Failed: ${e.message}")
+                        }
+                    }
                 } else if (!inLibrary && foreignId.isNotBlank()) {
                     text = "…"
                     lifecycleScope.launch {
