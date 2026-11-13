@@ -74,16 +74,24 @@ class MediaHubTest {
                 val activity = controller.get(); ShadowDialog.getLatestDialog().dismiss(); api(activity, server)
                 invoke(activity, "loadTab", "music")
                 fun texts() = descendants(activity.window.decorView).filterIsInstance<TextView>().map { it.text.toString() }
-                assertTrue(texts().containsAll(listOf("Artists", "Albums", "Songs")))
+                val nav = activity.findViewById<View>(R.id.phone_bottom_navigation)
+                assertEquals(listOf("Albums", "Artists", "Songs", "Playlists", "Player"),
+                    descendants(nav).filterIsInstance<TextView>().map { it.text.toString() })
+                assertEquals(1, texts().count { it == "Artists" })
+                fun clickMusicTab(label: String) {
+                    val currentNav = activity.findViewById<View>(R.id.phone_bottom_navigation)
+                    val tab = descendants(currentNav).filterIsInstance<TextView>().first { it.text == label }
+                    (tab.parent as View).performClick()
+                }
                 waitUntil { texts().any { it.startsWith("Second album") } }
                 assertTrue(texts().any { it.startsWith("First album") })
                 val input = descendants(activity.window.decorView).filterIsInstance<EditText>().first()
                 input.setText("Ar"); input.setText("Artist")
                 waitUntil { texts().any { it.startsWith("Catalog album") } }
                 assertFalse(texts().any { it.startsWith("First album") })
-                descendants(activity.window.decorView).filterIsInstance<android.widget.Button>().first { it.text == "Artists" }.performClick()
+                clickMusicTab("Artists")
                 waitUntil { "Artist" in texts() && "1 album" in texts() }
-                descendants(activity.window.decorView).filterIsInstance<android.widget.Button>().first { it.text == "Songs" }.performClick()
+                clickMusicTab("Songs")
                 waitUntil { texts().any { it.startsWith("Fixture song") } }
                 invoke(activity, "loadTab", "home")
             }
