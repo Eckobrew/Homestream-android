@@ -12,8 +12,8 @@ android {
         minSdk = 26
         targetSdk = 35
         buildConfigField("String", "CAST_RECEIVER_APP_ID", "\"$customCastReceiverId\"")
-        versionCode = 14
-        versionName = "1.2.10"
+        versionCode = 15
+        versionName = "1.0.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     buildTypes {
