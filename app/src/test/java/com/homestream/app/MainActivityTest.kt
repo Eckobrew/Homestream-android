@@ -72,7 +72,7 @@ class MainActivityTest {
             assertNotNull(controller.get().findViewById<View>(R.id.tv_navigation_rail))
             assertNull(controller.get().findViewById<View>(R.id.phone_bottom_navigation))
             val buttons = descendants(controller.get().window.decorView).filterIsInstance<Button>()
-            for (title in listOf("Home", "Movies", "TV Shows", "Search", "Settings")) {
+            for (title in listOf("Home", "Movies", "TV Shows", "Music")) {
                 val button = buttons.first { it.contentDescription?.toString() == title }
                 assertTrue("$title must be reachable by D-pad", button.isFocusable)
                 assertTrue("$title must support remote activation", button.isClickable)

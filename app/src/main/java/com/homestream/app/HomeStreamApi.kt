@@ -21,6 +21,15 @@ class HomeStreamApi(private val settings: ConnectionSettings) {
             .readTimeout(45, TimeUnit.SECONDS).followRedirects(false).build()
     }
 
+    suspend fun musicDownloadFilename(url: String, token: String): String = withContext(Dispatchers.IO) {
+        val request = Request.Builder().url(url).head().header("Authorization", "Bearer $token").build()
+        awaitResponse(client.newCall(request)).use { response ->
+            if (!response.isSuccessful) throw ResponseException(response.code, "Track download unavailable (${response.code})")
+            val encoded = response.header("Content-Disposition")?.substringAfter("filename*=UTF-8''", "").orEmpty()
+            android.net.Uri.decode(encoded).ifBlank { "Music" }
+        }
+    }
+
     private fun cacheKey(path: String, params: Map<String, String>): String {
         val identity = (settings as? ServerSettings)?.serverIdentity ?: settings.baseUrl
         val token = java.security.MessageDigest.getInstance("SHA-256").digest(settings.token.toByteArray()).joinToString("") { "%02x".format(it) }
@@ -135,11 +144,20 @@ class HomeStreamApi(private val settings: ConnectionSettings) {
         val base = settings.baseUrl.toHttpUrl()
         val normalized = when {
             url.startsWith("http://") || url.startsWith("https://") -> url
-            url.startsWith("youtube/") || url.startsWith("music/") -> "/api/mobile/v1/$url"
+            url.startsWith("youtube/") || url.startsWith("music/") || url.startsWith("books/") -> "/api/mobile/v1/$url"
             else -> url
         }
         val target = base.resolve(normalized) ?: return ""
         val sameOrigin = target.scheme == base.scheme && target.host == base.host && target.port == base.port
+        if (sameOrigin && (target.encodedPath.startsWith("/api/v1/books/") || target.encodedPath.startsWith("/api/mobile/v1/books/") || target.encodedPath.startsWith("/api/books/"))) {
+            val newPath = when {
+                target.encodedPath.startsWith("/api/v1/books/") -> target.encodedPath.replaceFirst("/api/v1/books/", "/api/mobile/v1/books/")
+                target.encodedPath.startsWith("/api/books/") -> target.encodedPath.replaceFirst("/api/books/", "/api/mobile/v1/books/")
+                else -> target.encodedPath
+            }
+            return target.newBuilder().encodedPath(newPath)
+                .apply { if (settings.profile.isNotBlank()) setQueryParameter("userId", settings.profile) }.build().toString()
+        }
         if (sameOrigin && (target.encodedPath.startsWith("/api/v1/music/") || target.encodedPath.startsWith("/api/mobile/v1/music/") || target.encodedPath.startsWith("/api/music/"))) {
             val newPath = when {
                 target.encodedPath.startsWith("/api/v1/music/") -> target.encodedPath.replaceFirst("/api/v1/music/", "/api/mobile/v1/music/")

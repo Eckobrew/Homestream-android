@@ -27,6 +27,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.recyclerview.widget.RecyclerView
 import androidx.recyclerview.widget.GridLayoutManager
 import coil.load
@@ -114,7 +115,7 @@ class MainActivity : AppCompatActivity() {
                 input.setText(text); input.setSelection(cursor.coerceIn(0, text.length))
             }
         }
-        if (saved.loading || saved.screen in listOf("requests", "music", "youtube")) saved.reload?.invoke()
+        if (saved.loading || saved.screen in listOf("requests", "music", "youtube", "books")) saved.reload?.invoke()
         else root.post { saved.focus?.takeIf { it.isAttachedToWindow }?.requestFocus() }
         return true
     }
@@ -146,6 +147,11 @@ class MainActivity : AppCompatActivity() {
                 if (screen == "youtube" && youtubeSubTab != "home") {
                     youtubeSubTab = "home"
                     loadYouTube()
+                    return
+                }
+                if (screen == "books" && booksSubTab != "shelf") {
+                    booksSubTab = "shelf"
+                    loadBooks()
                     return
                 }
                 if (isTelevision()) {
@@ -434,12 +440,12 @@ class MainActivity : AppCompatActivity() {
         val SPOTIFY_GREEN = 0xFF1DB954.toInt()
         val accentColor = when (screen) {
             "music" -> SPOTIFY_GREEN
-            "youtube" -> RED
+            "youtube", "books" -> RED
             else -> RED
         }
         val strokeColor = when (screen) {
             "music" -> 0x551DB954.toInt()
-            "youtube" -> 0x55E50914.toInt()
+            "youtube", "books" -> 0x55E50914.toInt()
             else -> 0x33FFFFFF.toInt()
         }
 
@@ -487,6 +493,20 @@ class MainActivity : AppCompatActivity() {
                 },
                 BottomNavItem("Player", R.drawable.ic_play_arrow, false) {
                     musicControls()
+                }
+            )
+            "books" -> listOf(
+                BottomNavItem("Shelf", R.drawable.nav_list, booksSubTab == "shelf") {
+                    booksSubTab = "shelf"; loadBooks()
+                },
+                BottomNavItem("Search", R.drawable.nav_search, booksSubTab == "discover") {
+                    booksSubTab = "discover"; loadBooks()
+                },
+                BottomNavItem("Queue", R.drawable.ic_download, booksSubTab == "downloads") {
+                    booksSubTab = "downloads"; loadBooks()
+                },
+                BottomNavItem("Home", R.drawable.nav_home, false) {
+                    loadTab("home")
                 }
             )
             else -> listOf(
@@ -569,19 +589,11 @@ class MainActivity : AppCompatActivity() {
         }
 
         val entries = listOf(
-            Triple("Search", R.drawable.nav_search, { openSearch() }),
             Triple("Home", R.drawable.nav_home, { loadTab("home") }),
-            Triple("TV Shows", R.drawable.nav_series, { loadTab("series") }),
             Triple("Movies", R.drawable.nav_movies, { loadTab("movies") }),
-            Triple("Music", R.drawable.nav_music, { loadTab("music") }),
-            Triple("YouTube", R.drawable.ic_play_arrow, { loadYouTube() }),
-            Triple("Discover", R.drawable.ic_download, { loadTab("requests") }),
-            Triple("Music player", R.drawable.nav_music, { musicControls() }),
-            Triple("More", R.drawable.ic_menu, { showTvBrowseMenu() }),
-            Triple("My List", R.drawable.nav_list, { myHomeStream() }),
-            Triple("Profiles", R.drawable.nav_profile, { profiles() }),
-            Triple("Settings", R.drawable.nav_settings, { openServerSettingsDialog() })
-        ).filter { (it.first !in listOf("Music", "Music player", "YouTube") || !settings.isKids) && (it.first != "Profiles" || settings.canUseProfiles) && (it.first != "Downloads" || settings.kidsRating.isBlank()) }
+            Triple("TV Shows", R.drawable.nav_series, { loadTab("series") }),
+            Triple("Music", R.drawable.nav_music, { loadTab("music") })
+        ).filter { it.first != "Music" || !settings.isKids }
 
         val buttons = entries.map { (title, icon, click) ->
             action("", click = click).apply {
@@ -720,6 +732,23 @@ class MainActivity : AppCompatActivity() {
             musicBtn.addView(badgePill("MUSIC"))
             panel.addView(musicBtn, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
 
+            val booksBtn = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+                background = rounded(if (screen == "books" || currentTab == "books") RED else 0x22FFFFFF.toInt())
+                setPadding(dp(14), dp(12), dp(14), dp(12))
+                isClickable = true
+                setOnClickListener { closeSidebar(); loadBooks() }
+            }
+            booksBtn.addView(ImageView(this).apply {
+                setImageResource(R.drawable.nav_list); imageTintList = ColorStateList.valueOf(Color.WHITE)
+            }, LinearLayout.LayoutParams(dp(22), dp(22)))
+            val booksText = column().apply { setPadding(dp(12), 0, 0, 0); layoutParams = LinearLayout.LayoutParams(0, -2, 1f) }
+            booksText.addView(label("Books Hub", 14f, true))
+            booksText.addView(TextView(this).apply { text = "Bookshelf, 1-page reader & requests"; textSize = 11f; setTextColor(MUTED) })
+            booksBtn.addView(booksText)
+            booksBtn.addView(badgePill("HUB"))
+            panel.addView(booksBtn, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
+
             val ytBtn = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
                 background = rounded(if (screen == "youtube") RED else 0x22FFFFFF.toInt())
@@ -842,6 +871,7 @@ class MainActivity : AppCompatActivity() {
     private fun loadTab(tab: String) {
         if (tab == "requests" || tab == "music") { mediaHub(tab); return }
         if (tab == "youtube") { loadYouTube(); return }
+        if (tab == "books") { loadBooks(); return }
         if (tab == "search") { openSearch(); return }
         if (tab == "downloads") { loadDownloads(); return }
         if (tab == "mine") { myHomeStream(); return }
@@ -2723,6 +2753,68 @@ class MainActivity : AppCompatActivity() {
         content.addView(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(row) })
     }
 
+    private fun downloadMusic(name: String, scope: Pair<String, String>? = null) {
+        if (settings.isKids) return
+        val url = android.net.Uri.parse(settings.baseUrl.trimEnd('/') + "/api/mobile/v1/music/download")
+            .buildUpon().apply {
+                if (settings.profile.isNotBlank()) appendQueryParameter("userId", settings.profile)
+                scope?.let { appendQueryParameter(it.first, it.second) }
+            }.build()
+        val token = settings.token
+        lifecycleScope.launch {
+            try {
+                val filename = if (scope?.first == "trackId") api.musicDownloadFilename(url.toString(), token) else name
+                val safeFilename = filename.replace(Regex("[^\\p{L}\\p{N} ._()-]"), "_").trim().ifBlank { "Music" }
+                val extension = safeFilename.substringAfterLast('.', "")
+                val basename = safeFilename.substringBeforeLast('.').take(110)
+                val destination = "${System.currentTimeMillis()}-$basename" +
+                    if (extension.isNotBlank()) ".${extension.take(12)}" else ""
+                val request = android.app.DownloadManager.Request(url)
+                    .addRequestHeader("Authorization", "Bearer $token")
+                    .setTitle(name)
+                    .setNotificationVisibility(android.app.DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                if (android.os.Build.VERSION.SDK_INT >= 29) {
+                    request.setDestinationInExternalPublicDir(android.os.Environment.DIRECTORY_DOWNLOADS, destination)
+                } else {
+                    request.setDestinationInExternalFilesDir(this@MainActivity, android.os.Environment.DIRECTORY_DOWNLOADS, destination)
+                }
+                getSystemService(android.app.DownloadManager::class.java).enqueue(request)
+                toast("Download started")
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                toast(error.message ?: "Could not start download")
+            }
+        }
+    }
+
+    private fun musicImportIndicator(): TextView = label("", 13f).apply {
+        setTextColor(MUTED)
+        var statusJob: Job? = null
+        addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
+            override fun onViewAttachedToWindow(view: View) {
+                statusJob = lifecycleScope.launch {
+                    lifecycle.repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.STARTED) {
+                        while (true) {
+                            try {
+                                val status = api.call("music/import-status")
+                                val summary = listOf("queued", "searching", "downloading", "importing", "ready", "failed")
+                                    .mapNotNull { key -> status.optInt(key).takeIf { it > 0 }?.let { "$it $key" } }
+                                text = "Import status • " + summary.joinToString(" • ").ifBlank { "No imports yet" }
+                            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                                throw cancelled
+                            } catch (_: Exception) {
+                                text = "Import status unavailable"
+                            }
+                            delay(8000)
+                        }
+                    }
+                }
+            }
+            override fun onViewDetachedFromWindow(view: View) { statusJob?.cancel() }
+        })
+    }
+
     private fun mediaHub(tab: String) {
         if (tab == "music" && settings.isKids) return
         rememberScreen(tab) { mediaHub(tab) }
@@ -2752,6 +2844,13 @@ class MainActivity : AppCompatActivity() {
             })
             titleBar.addView(titleCol)
             content.addView(titleBar)
+
+            content.addView(LinearLayout(this).apply {
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(gutter, dp(4), gutter, dp(4))
+                addView(musicImportIndicator(), LinearLayout.LayoutParams(0, -2, 1f))
+                addView(action("Download collection") { downloadMusic("HomeStream Music.zip") })
+            })
 
             hubFilters(listOf("albums" to "Albums", "artists" to "Artists", "songs" to "Songs", "playlists" to "Playlists"), musicCategory) {
                 musicCategory = it; musicArtist = null; selectedPlaylistId = null; mediaHub(tab)
@@ -2883,7 +2982,7 @@ class MainActivity : AppCompatActivity() {
                                     tracks.forEachIndexed { index, track ->
                                         if (query.isBlank() || listOf(track.title, album.title, album.artist).any { it.contains(query, ignoreCase = true) }) {
                                             val songArt = track.coverUrl.takeIf { it.isNotBlank() && it != "null" }?.let(api::absolute) ?: albumArt
-                                            staged.addView(musicTrackRow(track.title, "${album.artist} • ${album.title}", track.json.optInt("trackNumber", index + 1), coverUrl = songArt) { startMusicTracks(tracks, album, index) })
+                                            staged.addView(musicTrackRow(track.title, "${album.artist} • ${album.title}", track.json.optInt("trackNumber", index + 1), coverUrl = songArt, download = { downloadMusic(track.title, "trackId" to track.id) }) { startMusicTracks(tracks, album, index) })
                                         }
                                     }
                                 }
@@ -2967,6 +3066,10 @@ class MainActivity : AppCompatActivity() {
                     }
                     form.addView(playBtn, LinearLayout.LayoutParams(-1, dp(44)).apply { bottomMargin = dp(8) })
 
+                    form.addView(action("Download album ZIP") {
+                        downloadMusic("${current.artist} - ${current.title}.zip", "albumId" to current.id)
+                    })
+
                     val removeBtn = Button(this@MainActivity).apply {
                         text = "Remove from My Profile"
                         textSize = 12f
@@ -3046,7 +3149,10 @@ class MainActivity : AppCompatActivity() {
                     tracks.forEachIndexed { index, track ->
                         val dur = track.durationSeconds
                         val durText = if (dur > 0) "%d:%02d".format(dur / 60, dur % 60) else ""
-                        form.addView(musicTrackRow(track.title, durText, track.json.optInt("trackNumber", index + 1)) {
+                        val download = if (current.inLibrary) ({
+                            downloadMusic(track.title, "trackId" to track.id)
+                        }) else null
+                        form.addView(musicTrackRow(track.title, durText, track.json.optInt("trackNumber", index + 1), download = download) {
                             dialog.dismiss()
                             startMusicTracks(tracks, current, index)
                         })
@@ -3269,6 +3375,7 @@ class MainActivity : AppCompatActivity() {
                         playPlaylist(tracks, playlist.coverUrl, startIndex = idx)
                     } else {
                         val msg = when (track.status) {
+                            "importing" -> "Importing track into your library..."
                             "downloading" -> "Downloading track via Soulseek (slskd)..."
                             "searching" -> "Searching Soulseek network for track..."
                             "failed" -> "Download failed: ${track.errorMessage.ifBlank { "No Soulseek match found" }}"
@@ -3322,6 +3429,10 @@ class MainActivity : AppCompatActivity() {
                         text = if (durText.isNotBlank()) "✓ Ready  $durText" else "✓ Ready"
                         setTextColor(SPOTIFY_GREEN)
                     }
+                    "importing" -> {
+                        text = "Importing"
+                        setTextColor(CYAN)
+                    }
                     "downloading" -> {
                         text = "Downloading (slskd)"
                         setTextColor(AMBER)
@@ -3348,6 +3459,9 @@ class MainActivity : AppCompatActivity() {
                 setColorFilter(if (track.isReady) Color.WHITE else MUTED)
             }
             addView(icon, LinearLayout.LayoutParams(dp(20), dp(20)))
+            if (track.isReady && track.trackId.isNotBlank()) {
+                addView(musicDownloadIcon(track.title) { downloadMusic(track.title, "trackId" to track.trackId) })
+            }
 
             layoutParams = LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(6) }
             setOnClickListener { click() }
@@ -4455,5 +4569,287 @@ class MainActivity : AppCompatActivity() {
                 })
             }
         }
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // Books Hub (Red HomeStream Theme + 1-Page Android Reader)
+    // -----------------------------------------------------------------------------------------
+    private var booksSubTab = "shelf"
+    private var booksSearchQuery = ""
+
+    private fun loadBooks() {
+        if (settings.isKids) {
+            toast("Books Hub is unavailable in Kids mode")
+            return
+        }
+        rememberScreen("books") { loadBooks() }
+        work?.cancel(); ++generation
+        currentTab = "books"; screen = "books"
+        shell()
+
+        val pillRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(gutter, dp(10), gutter, dp(12))
+        }
+        pillRow.addView(categoryPill("Bookshelf", active = booksSubTab == "shelf") { booksSubTab = "shelf"; loadBooks() })
+        pillRow.addView(categoryPill("Search & Request", active = booksSubTab == "discover") { booksSubTab = "discover"; loadBooks() })
+        pillRow.addView(categoryPill("Downloads", active = booksSubTab == "downloads") { booksSubTab = "downloads"; loadBooks() })
+        content.addView(HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+            addView(pillRow)
+        })
+
+        when (booksSubTab) {
+            "discover" -> renderBooksDiscover()
+            "downloads" -> renderBooksDownloads()
+            else -> renderBooksShelf()
+        }
+    }
+
+    private fun renderBooksShelf() {
+        val box = column().apply { setPadding(gutter, dp(4), gutter, dp(96)) }
+        box.addView(label("Bookshelf Library", 18f, true))
+        box.addView(TextView(this).apply {
+            text = "Tap any book in your library to open the 1-page reader."
+            textSize = 12f; setTextColor(MUTED); setPadding(0, dp(2), 0, dp(12))
+        })
+        val listHost = column()
+        listHost.addView(TextView(this).apply { text = "Loading books…"; textSize = 12f; setTextColor(MUTED) })
+        box.addView(listHost)
+        content.addView(box)
+
+        lifecycleScope.launch {
+            try {
+                val res = api.call("books")
+                val arr = res.optJSONArray("books") ?: org.json.JSONArray()
+                listHost.removeAllViews()
+                if (arr.length() == 0) {
+                    listHost.addView(TextView(this@MainActivity).apply {
+                        text = "Your bookshelf is empty. Use Search & Request to grab books via Bookshelf & qBittorrent."
+                        textSize = 13f; setTextColor(MUTED); setPadding(0, dp(12), 0, dp(12))
+                    })
+                    return@launch
+                }
+                for (i in 0 until arr.length()) {
+                    listHost.addView(buildBookRow(arr.getJSONObject(i), isDiscover = false))
+                }
+            } catch (e: Exception) {
+                listHost.removeAllViews()
+                listHost.addView(TextView(this@MainActivity).apply {
+                    text = "Failed loading books: ${e.message}"
+                    textSize = 12f; setTextColor(Color.RED)
+                })
+            }
+        }
+    }
+
+    private fun renderBooksDiscover() {
+        val box = column().apply { setPadding(gutter, dp(4), gutter, dp(96)) }
+        box.addView(label("Search & Request Books", 18f, true))
+        val searchBar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(8), 0, dp(12))
+        }
+        val input = EditText(this).apply {
+            hint = "Title, author, or ISBN…"
+            setText(booksSearchQuery)
+            setTextColor(Color.WHITE)
+            setHintTextColor(MUTED)
+            background = rounded(0xFF1E1E1E.toInt(), radius = dp(10).toFloat())
+            setPadding(dp(12), dp(10), dp(12), dp(10))
+            layoutParams = LinearLayout.LayoutParams(0, -2, 1f).apply { marginEnd = dp(8) }
+        }
+        val resultsHost = column()
+        val goBtn = TextView(this).apply {
+            text = "Search"
+            textSize = 13f; typeface = android.graphics.Typeface.DEFAULT_BOLD
+            setTextColor(Color.WHITE)
+            background = rounded(RED, radius = dp(10).toFloat())
+            setPadding(dp(16), dp(10), dp(16), dp(10))
+            setOnClickListener {
+                booksSearchQuery = input.text.toString().trim()
+                if (booksSearchQuery.isNotBlank()) runBooksSearch(booksSearchQuery, resultsHost)
+            }
+        }
+        searchBar.addView(input)
+        searchBar.addView(goBtn)
+        box.addView(searchBar)
+        box.addView(resultsHost)
+        content.addView(box)
+
+        if (booksSearchQuery.isNotBlank()) runBooksSearch(booksSearchQuery, resultsHost)
+    }
+
+    private fun runBooksSearch(query: String, host: LinearLayout) {
+        host.removeAllViews()
+        host.addView(TextView(this).apply { text = "Searching Bookshelf catalogue…"; textSize = 12f; setTextColor(MUTED) })
+        lifecycleScope.launch {
+            try {
+                val res = api.call("books/search?q=${Uri.encode(query)}")
+                val arr = res.optJSONArray("books") ?: org.json.JSONArray()
+                host.removeAllViews()
+                if (arr.length() == 0) {
+                    host.addView(TextView(this@MainActivity).apply {
+                        text = "No matching books found."
+                        textSize = 12f; setTextColor(MUTED)
+                    })
+                    return@launch
+                }
+                for (i in 0 until arr.length()) {
+                    host.addView(buildBookRow(arr.getJSONObject(i), isDiscover = true))
+                }
+            } catch (e: Exception) {
+                host.removeAllViews()
+                host.addView(TextView(this@MainActivity).apply {
+                    text = "Search failed: ${e.message}"
+                    textSize = 12f; setTextColor(Color.RED)
+                })
+            }
+        }
+    }
+
+    private fun renderBooksDownloads() {
+        val box = column().apply { setPadding(gutter, dp(4), gutter, dp(96)) }
+        box.addView(label("Book Downloads & Requests", 18f, true))
+        val host = column().apply { setPadding(0, dp(8), 0, 0) }
+        host.addView(TextView(this).apply { text = "Loading queue…"; textSize = 12f; setTextColor(MUTED) })
+        box.addView(host)
+        content.addView(box)
+
+        lifecycleScope.launch {
+            try {
+                val qRes = api.call("books/queue")
+                val bRes = api.call("books")
+                val queue = qRes.optJSONArray("queue") ?: org.json.JSONArray()
+                val reqs = bRes.optJSONArray("requests") ?: org.json.JSONArray()
+                host.removeAllViews()
+                if (queue.length() == 0 && reqs.length() == 0) {
+                    host.addView(TextView(this@MainActivity).apply {
+                        text = "No active book downloads or pending requests."
+                        textSize = 12f; setTextColor(MUTED)
+                    })
+                    return@launch
+                }
+                for (i in 0 until queue.length()) {
+                    val item = queue.getJSONObject(i)
+                    val row = column().apply {
+                        background = rounded(0x18FFFFFF.toInt(), radius = dp(10).toFloat())
+                        setPadding(dp(12), dp(10), dp(12), dp(10))
+                        layoutParams = LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) }
+                    }
+                    row.addView(label(item.optString("title", "Book"), 13f, true))
+                    row.addView(TextView(this@MainActivity).apply {
+                        text = "${item.optString("status")} • ${item.optInt("progress")}%"
+                        textSize = 11f; setTextColor(0xFFEF5350.toInt())
+                    })
+                    host.addView(row)
+                }
+                for (i in 0 until reqs.length()) {
+                    val r = reqs.getJSONObject(i)
+                    val row = column().apply {
+                        background = rounded(0x18FFFFFF.toInt(), radius = dp(10).toFloat())
+                        setPadding(dp(12), dp(10), dp(12), dp(10))
+                        layoutParams = LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) }
+                    }
+                    row.addView(label(r.optString("title"), 13f, true))
+                    row.addView(TextView(this@MainActivity).apply {
+                        text = "${r.optString("author")} • ${r.optString("status").uppercase()}"
+                        textSize = 11f; setTextColor(MUTED)
+                    })
+                    host.addView(row)
+                }
+            } catch (e: Exception) {
+                host.removeAllViews()
+                host.addView(TextView(this@MainActivity).apply {
+                    text = "Failed loading queue: ${e.message}"
+                    textSize = 12f; setTextColor(Color.RED)
+                })
+            }
+        }
+    }
+
+    private fun buildBookRow(book: JSONObject, isDiscover: Boolean): View {
+        val id = book.optString("id")
+        val foreignId = book.optString("foreignBookId")
+        val title = book.optString("title")
+        val author = book.optString("author")
+        val coverUrl = book.optString("coverUrl")
+        val inLibrary = book.optBoolean("inLibrary")
+        val formatsArr = book.optJSONArray("formats")
+        val firstFormat = if (formatsArr != null && formatsArr.length() > 0) formatsArr.optString(0, "epub") else "epub"
+        val reqStatus = book.optString("requestStatus")
+
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = rounded(0x18FFFFFF.toInt(), radius = dp(10).toFloat())
+            setPadding(dp(10), dp(10), dp(10), dp(10))
+            layoutParams = LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) }
+        }
+
+        val cover = ImageView(this).apply {
+            scaleType = ImageView.ScaleType.CENTER_CROP
+            background = rounded(0xFF1A1A1A.toInt(), radius = dp(6).toFloat())
+            clipToOutline = true
+            layoutParams = LinearLayout.LayoutParams(dp(52), dp(76)).apply { marginEnd = dp(12) }
+        }
+        if (coverUrl.isNotBlank()) cover.load(api.absolute(coverUrl)) { crossfade(true) }
+        card.addView(cover)
+
+        val meta = column().apply { layoutParams = LinearLayout.LayoutParams(0, -2, 1f) }
+        meta.addView(TextView(this).apply {
+            text = title; textSize = 14f; typeface = android.graphics.Typeface.DEFAULT_BOLD
+            setTextColor(Color.WHITE); maxLines = 2
+        })
+        meta.addView(TextView(this).apply {
+            text = author.ifBlank { "Unknown Author" }
+            textSize = 12f; setTextColor(MUTED)
+        })
+        card.addView(meta)
+
+        val actionBtn = TextView(this).apply {
+            text = when {
+                inLibrary -> "Read"
+                reqStatus.isNotBlank() -> reqStatus.replaceFirstChar { it.uppercase() }
+                else -> "Request"
+            }
+            textSize = 12f; typeface = android.graphics.Typeface.DEFAULT_BOLD
+            setTextColor(Color.WHITE)
+            background = rounded(if (inLibrary) RED else 0xFF303030.toInt(), radius = dp(10).toFloat())
+            setPadding(dp(14), dp(8), dp(14), dp(8))
+            setOnClickListener {
+                if (inLibrary && id.isNotBlank()) {
+                    startActivity(
+                        Intent(this@MainActivity, BookReaderActivity::class.java)
+                            .putExtra("bookId", id)
+                            .putExtra("title", title)
+                            .putExtra("author", author)
+                            .putExtra("format", firstFormat)
+                    )
+                } else if (!inLibrary && foreignId.isNotBlank()) {
+                    text = "…"
+                    lifecycleScope.launch {
+                        try {
+                            api.call(
+                                "books/request",
+                                body = JSONObject()
+                                    .put("foreignBookId", foreignId)
+                                    .put("title", title)
+                                    .put("author", author.ifBlank { "Unknown Author" }),
+                                method = "POST"
+                            )
+                            text = "Requested"
+                            toast("Requested \"$title\"")
+                        } catch (e: Exception) {
+                            text = "Request"
+                            toast("Request failed: ${e.message}")
+                        }
+                    }
+                }
+            }
+        }
+        card.addView(actionBtn)
+        return card
     }
 }

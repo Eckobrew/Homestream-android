@@ -32,6 +32,7 @@
             </intent-filter>
         </activity>
         <activity android:name=".MusicPlayerActivity" android:exported="false" />
+        <activity android:name=".BookReaderActivity" android:exported="false" />
         <activity android:name=".ProfilesActivity" android:exported="false" />
         <activity android:name=".PlayerActivity" android:exported="false"
             android:supportsPictureInPicture="true"

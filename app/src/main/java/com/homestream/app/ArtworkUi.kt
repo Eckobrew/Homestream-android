@@ -60,7 +60,7 @@ internal fun Context.artworkGrid(target: LinearLayout, tiles: List<ArtworkTile>)
     }
 }
 
-internal fun Context.musicTrackRow(title: String, subtitle: String, number: Int, selected: Boolean = false, coverUrl: String? = null, click: () -> Unit) =
+internal fun Context.musicTrackRow(title: String, subtitle: String, number: Int, selected: Boolean = false, coverUrl: String? = null, download: (() -> Unit)? = null, click: () -> Unit) =
     LinearLayout(this).apply {
         gravity = Gravity.CENTER_VERTICAL
         minimumHeight = dp(56)
@@ -76,6 +76,19 @@ internal fun Context.musicTrackRow(title: String, subtitle: String, number: Int,
             if (subtitle.isNotBlank()) addView(label(subtitle, 12f).apply { setTextColor(MUTED); maxLines = 1; ellipsize = TextUtils.TruncateAt.END })
         }, LinearLayout.LayoutParams(0, -2, 1f))
         addView(ImageView(context).apply { setImageResource(R.drawable.ic_play_arrow); setColorFilter(Color.WHITE) }, LinearLayout.LayoutParams(dp(24), dp(24)))
+        if (download != null) addView(musicDownloadIcon(title, download))
         layoutParams = LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(6) }
         setOnClickListener { click() }
     }
+
+
+internal fun Context.musicDownloadIcon(title: String, download: () -> Unit) = android.widget.ImageButton(this).apply {
+    setImageResource(R.drawable.ic_download)
+    setColorFilter(MUTED)
+    contentDescription = "Download $title"
+    scaleType = ImageView.ScaleType.CENTER_INSIDE
+    setPadding(dp(12), dp(12), dp(12), dp(12))
+    focusableCard(0x22FFFFFF)
+    layoutParams = LinearLayout.LayoutParams(dp(48), dp(48)).apply { marginStart = dp(8) }
+    setOnClickListener { download() }
+}
