@@ -3,6 +3,7 @@ package com.homestream.app
 import android.annotation.SuppressLint
 import android.graphics.Bitmap
 import android.graphics.Color
+import android.graphics.LightingColorFilter
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.graphics.pdf.PdfRenderer
@@ -349,6 +350,7 @@ class BookReaderActivity : AppCompatActivity() {
         pdfPageIndex = (initialLocation.toIntOrNull()?.minus(1) ?: 0).coerceIn(0, pdfPageCount - 1)
 
         val img = ImageView(this).apply {
+            colorFilter = LightingColorFilter(PAPER_CREAM, 0)
             scaleType = ImageView.ScaleType.FIT_CENTER
             setBackgroundColor(PAPER_CREAM)
         }
@@ -376,7 +378,7 @@ class BookReaderActivity : AppCompatActivity() {
                 (page.height * scale).toInt().coerceAtLeast(1),
                 Bitmap.Config.ARGB_8888
             )
-            bmp.eraseColor(PAPER_CREAM)
+            bmp.eraseColor(Color.WHITE)
             page.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
             img.setImageBitmap(bmp)
         }
@@ -558,7 +560,7 @@ class BookReaderActivity : AppCompatActivity() {
                     'html, body { margin: 0 !important; padding: 0 !important; background: #f7f1e3 !important; color: #231c14 !important; ' +
                     'height: ' + h + 'px !important; overflow: hidden !important; font-family: Georgia, "Noto Serif", serif !important; ' +
                     'font-size: ${fontSizePercent}% !important; line-height: 1.72 !important; text-align: justify !important; } ' +
-                    'body { column-width: ' + lineWidth + 'px !important; column-gap: ' + (margin * 2) + 'px !important; column-fill: auto !important; ' +
+                    'body { background: white !important; mix-blend-mode: multiply; column-width: ' + lineWidth + 'px !important; column-gap: ' + (margin * 2) + 'px !important; column-fill: auto !important; ' +
                     'box-sizing: border-box !important; padding: 12px ' + margin + 'px !important; overflow-wrap: anywhere; } ' +
                     'p { text-indent: 1.35em !important; margin-top: 0 !important; margin-bottom: 0.4em !important; } ' +
                     'h1, h2, h3, h4 { color: #1b140e !important; text-align: center !important; } ' +
