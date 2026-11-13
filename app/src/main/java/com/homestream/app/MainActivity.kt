@@ -1041,7 +1041,8 @@ class MainActivity : AppCompatActivity() {
                 if (!queued) { queued = true; slot.postOnAnimation { queued = false; reconcile() } }
             }
             virtualHost.addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
-                override fun onViewAttachedToWindow(view: View) {
+                @android.annotation.SuppressLint("RepeatOnLifecycleWrongUsage")
+            override fun onViewAttachedToWindow(view: View) {
                     view.viewTreeObserver.addOnScrollChangedListener(observer)
                     view.post { reconcile() }
                 }
@@ -2792,6 +2793,7 @@ class MainActivity : AppCompatActivity() {
         setTextColor(MUTED)
         var statusJob: Job? = null
         addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
+            @android.annotation.SuppressLint("RepeatOnLifecycleWrongUsage")
             override fun onViewAttachedToWindow(view: View) {
                 statusJob = lifecycleScope.launch {
                     lifecycle.repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.STARTED) {
