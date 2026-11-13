@@ -99,26 +99,32 @@ class BookReaderActivity : AppCompatActivity() {
         initialLocation = intent.getStringExtra("location").orEmpty()
 
         val outerBinding = FrameLayout(this).apply {
-            setBackgroundColor(LEATHER_BG)
+            background = GradientDrawable(
+                GradientDrawable.Orientation.LEFT_RIGHT,
+                intArrayOf(0xFF3C261A.toInt(), LEATHER_BG, 0xFF2A1A11.toInt())
+            )
             setPadding(dp(10), dp(12), dp(10), dp(12))
         }
 
         // Stacked paper edge border
         val paperStack = FrameLayout(this).apply {
             background = GradientDrawable().apply {
-                setColor(PAPER_EDGE)
+                orientation = GradientDrawable.Orientation.LEFT_RIGHT
+                colors = intArrayOf(0xFF937B60.toInt(), PAPER_EDGE, 0xFFC0AC90.toInt(), PAPER_EDGE)
                 cornerRadius = dp(10).toFloat()
                 setStroke(dp(1), 0xFF4E3020.toInt())
             }
-            setPadding(dp(3), dp(3), dp(5), dp(4))
+            setPadding(dp(6), dp(4), dp(6), dp(5))
         }
 
         // Actual turning book page sheet
         pageSheet = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             background = GradientDrawable().apply {
-                setColor(PAPER_CREAM)
+                orientation = GradientDrawable.Orientation.LEFT_RIGHT
+                colors = intArrayOf(0xFFBCAB90.toInt(), PAPER_CREAM, PAPER_CREAM, PAPER_CREAM)
                 cornerRadius = dp(8).toFloat()
+                setStroke(dp(1), PAPER_EDGE)
             }
             elevation = dp(8).toFloat()
             cameraDistance = 16000f * resources.displayMetrics.density
@@ -152,8 +158,12 @@ class BookReaderActivity : AppCompatActivity() {
         pageSheet.addView(runningHeader, LinearLayout.LayoutParams(-1, -2))
 
         // Main 1-page viewport
-        stage = FrameLayout(this).apply {
-            setBackgroundColor(PAPER_CREAM)
+        stage = FrameLayout(this)
+        stage.setPadding(dp(16), 0, dp(10), 0)
+        stage.addOnLayoutChangeListener { _, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom ->
+            if (right - left != oldRight - oldLeft || bottom - top != oldBottom - oldTop) {
+                webView?.post { applyEpubPagination() }
+            }
         }
         pageSheet.addView(stage, LinearLayout.LayoutParams(-1, 0, 1f))
 
@@ -519,8 +529,18 @@ class BookReaderActivity : AppCompatActivity() {
         val js = """
             (function() {
                 var d = document;
-                var h = window.innerHeight || d.documentElement.clientHeight;
-                var w = window.innerWidth || d.documentElement.clientWidth;
+                var viewport = d.querySelector('meta[name="viewport"]');
+                if (!viewport) {
+                    viewport = d.createElement('meta');
+                    viewport.name = 'viewport';
+                    d.head.appendChild(viewport);
+                }
+                viewport.content = 'width=device-width, initial-scale=1';
+                var h = d.documentElement.clientHeight;
+                var w = d.documentElement.clientWidth;
+                if (!w || !h) return '';
+                var margin = Math.min(18, Math.floor(w / 12));
+                var lineWidth = w - margin * 2;
                 var style = d.getElementById('hs-reader-style');
                 if (!style) {
                     style = d.createElement('style');
@@ -531,13 +551,13 @@ class BookReaderActivity : AppCompatActivity() {
                     'html, body { margin: 0 !important; padding: 0 !important; background: #f7f1e3 !important; color: #231c14 !important; ' +
                     'height: ' + h + 'px !important; overflow: hidden !important; font-family: Georgia, "Noto Serif", serif !important; ' +
                     'font-size: ${fontSizePercent}% !important; line-height: 1.72 !important; text-align: justify !important; } ' +
-                    'body { column-width: ' + w + 'px !important; column-gap: 0px !important; column-fill: auto !important; ' +
-                    'box-sizing: border-box !important; padding: 14px 24px !important; } ' +
+                    'body { column-width: ' + lineWidth + 'px !important; column-gap: ' + (margin * 2) + 'px !important; column-fill: auto !important; ' +
+                    'box-sizing: border-box !important; padding: 12px ' + margin + 'px !important; overflow-wrap: anywhere; } ' +
                     'p { text-indent: 1.35em !important; margin-top: 0 !important; margin-bottom: 0.4em !important; } ' +
                     'h1, h2, h3, h4 { color: #1b140e !important; text-align: center !important; } ' +
-                    'img, svg, video { max-width: 100% !important; max-height: ' + (h - 36) + 'px !important; height: auto !important; } ' +
+                    'img, svg, video { max-width: 100% !important; max-height: ' + Math.max(1, h - 32) + 'px !important; height: auto !important; } ' +
                     'a { color: #7c2d12 !important; text-decoration: none !important; }';
-                var total = Math.max(1, Math.round(d.body.scrollWidth / Math.max(1, w)));
+                var total = Math.max(1, Math.ceil(d.body.scrollWidth / w));
                 var page = Math.min(total - 1, Math.max(0, $epubPageInChapter));
                 window.scrollTo(page * w, 0);
                 return page + '/' + total;
@@ -545,6 +565,7 @@ class BookReaderActivity : AppCompatActivity() {
         """.trimIndent()
         wv.evaluateJavascript(js) { raw ->
             val cleaned = raw?.trim('"').orEmpty()
+            if (!cleaned.contains('/')) return@evaluateJavascript
             val parts = cleaned.split("/")
             epubPageInChapter = parts.getOrNull(0)?.toIntOrNull() ?: 0
             epubPagesInChapter = (parts.getOrNull(1)?.toIntOrNull() ?: 1).coerceAtLeast(1)
@@ -555,7 +576,7 @@ class BookReaderActivity : AppCompatActivity() {
     private fun scrollEpubToPage() {
         val wv = webView ?: return
         wv.evaluateJavascript(
-            "(function(){ var w = window.innerWidth || 1; window.scrollTo(${epubPageInChapter} * w, 0); })();",
+            "(function(){ var w = document.documentElement.clientWidth || 1; window.scrollTo(${epubPageInChapter} * w, 0); })();",
             null
         )
         updateEpubStatus()
