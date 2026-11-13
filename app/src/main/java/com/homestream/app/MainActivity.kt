@@ -4848,7 +4848,7 @@ class MainActivity : AppCompatActivity() {
                     text = "…"
                     lifecycleScope.launch {
                         try {
-                            api.call(
+                            val resp = api.call(
                                 "books/request",
                                 body = JSONObject()
                                     .put("foreignBookId", foreignId)
@@ -4856,8 +4856,18 @@ class MainActivity : AppCompatActivity() {
                                     .put("author", author.ifBlank { "Unknown Author" }),
                                 method = "POST"
                             )
-                            text = "Requested"
-                            toast("Requested \"$title\"")
+                            val st = resp.optString("status", "requested")
+                            if (st == "available") {
+                                book.put("inLibrary", true)
+                                book.put("onShelf", true)
+                                resp.optString("bookId").takeIf { it.isNotBlank() }?.let { book.put("id", it) }
+                                text = "Read"
+                                background = rounded(RED, radius = dp(10).toFloat())
+                                toast("Added \"$title\" to your bookshelf")
+                            } else {
+                                text = "Requested"
+                                toast("Requested \"$title\"")
+                            }
                         } catch (e: Exception) {
                             text = "Request"
                             toast("Request failed: ${e.message}")
