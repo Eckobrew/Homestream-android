@@ -74,13 +74,13 @@ class MediaHubTest {
                 val activity = controller.get(); ShadowDialog.getLatestDialog().dismiss(); api(activity, server)
                 invoke(activity, "loadTab", "music")
                 fun texts() = descendants(activity.window.decorView).filterIsInstance<TextView>().map { it.text.toString() }
-                val nav = activity.findViewById<View>(R.id.phone_bottom_navigation)
+                fun currentNav() = descendants(activity.window.decorView).last { it.id == R.id.phone_bottom_navigation }
+                val nav = currentNav()
                 assertEquals(listOf("Albums", "Artists", "Songs", "Playlists", "Player"),
                     descendants(nav).filterIsInstance<TextView>().map { it.text.toString() })
                 assertEquals(1, texts().count { it == "Artists" })
                 fun clickMusicTab(label: String) {
-                    val currentNav = activity.findViewById<View>(R.id.phone_bottom_navigation)
-                    val tab = descendants(currentNav).filterIsInstance<TextView>().first { it.text == label }
+                    val tab = descendants(currentNav()).filterIsInstance<TextView>().first { it.text == label }
                     (tab.parent as View).performClick()
                 }
                 waitUntil { texts().any { it.startsWith("Second album") } }

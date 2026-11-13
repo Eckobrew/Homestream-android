@@ -26,6 +26,8 @@ import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -195,6 +197,11 @@ class BookReaderActivity : AppCompatActivity() {
         paperStack.addView(pageSheet, FrameLayout.LayoutParams(-1, -1))
         outerBinding.addView(paperStack, FrameLayout.LayoutParams(-1, -1))
 
+        ViewCompat.setOnApplyWindowInsetsListener(outerBinding) { view, insets ->
+            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
+            view.setPadding(bars.left + dp(10), bars.top + dp(12), bars.right + dp(10), bars.bottom + dp(12))
+            insets
+        }
         setContentView(outerBinding)
         loadBook()
     }

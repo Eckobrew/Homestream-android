@@ -2885,6 +2885,11 @@ class MainActivity : AppCompatActivity() {
                 addView(musicImportIndicator(), LinearLayout.LayoutParams(0, -2, 1f))
                 addView(action("Download collection") { downloadMusic("HomeStream Music.zip") })
             })
+            if (isTelevision()) {
+                hubFilters(listOf("albums" to "Albums", "artists" to "Artists", "songs" to "Songs", "playlists" to "Playlists"), musicCategory) {
+                    musicCategory = it; musicArtist = null; selectedPlaylistId = null; mediaHub(tab)
+                }
+            }
         } else {
             val titleBar = LinearLayout(this).apply {
                 gravity = Gravity.CENTER_VERTICAL; setPadding(gutter, dp(8), gutter, dp(4))
@@ -3779,6 +3784,23 @@ class MainActivity : AppCompatActivity() {
         })
         content.addView(headerRow)
 
+        if (isTelevision()) {
+            val pillRow = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                setPadding(gutter, dp(8), gutter, dp(10))
+            }
+            pillRow.addView(categoryPill("qBittorrent", active = downloadManagerSubTab == "torrents") {
+                downloadManagerSubTab = "torrents"; adminDownloadManager()
+            })
+            pillRow.addView(categoryPill("System Queues", active = downloadManagerSubTab == "system") {
+                downloadManagerSubTab = "system"; adminDownloadManager()
+            })
+            pillRow.addView(categoryPill("+ Add Magnet", active = false) { showAddTorrentDialog() })
+            content.addView(HorizontalScrollView(this).apply {
+                isHorizontalScrollBarEnabled = false; addView(pillRow)
+            })
+        }
+
         val host = column().apply { setPadding(gutter, dp(4), gutter, dp(96)) }
         host.addView(TextView(this).apply { text = "Loading Download Manager…"; textSize = 12f; setTextColor(MUTED) })
         content.addView(host)
@@ -4042,6 +4064,24 @@ class MainActivity : AppCompatActivity() {
         work?.cancel(); youtubeSearchJob?.cancel(); ++generation
         currentTab = "youtube"; screen = "youtube"
         shell()
+
+        if (isTelevision()) {
+            val pillRow = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                setPadding(gutter, dp(10), gutter, dp(12))
+            }
+            pillRow.addView(categoryPill("All", active = youtubeSubTab == "home") { youtubeSubTab = "home"; loadYouTube() })
+            pillRow.addView(categoryPill("Subscriptions", active = youtubeSubTab == "subscriptions") { youtubeSubTab = "subscriptions"; loadYouTube() })
+            pillRow.addView(categoryPill("Queue", active = youtubeSubTab == "queue") { youtubeSubTab = "queue"; loadYouTube() })
+            pillRow.addView(categoryPill("NAS Archive", active = youtubeSubTab == "archive") { youtubeSubTab = "archive"; loadYouTube() })
+            pillRow.addView(categoryPill("Search", active = youtubeSubTab == "search") { youtubeSubTab = "search"; loadYouTube() })
+            pillRow.addView(categoryPill("Account", active = false) { openYouTubeAuthDialog() })
+
+            content.addView(HorizontalScrollView(this).apply {
+                isHorizontalScrollBarEnabled = false
+                addView(pillRow)
+            })
+        }
 
         when (youtubeSubTab) {
             "home" -> renderYouTubeHome()
@@ -4892,6 +4932,20 @@ class MainActivity : AppCompatActivity() {
         work?.cancel(); ++generation
         currentTab = "books"; screen = "books"
         shell()
+
+        if (isTelevision()) {
+            val pillRow = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                setPadding(gutter, dp(10), gutter, dp(12))
+            }
+            pillRow.addView(categoryPill("Bookshelf", active = booksSubTab == "shelf") { booksSubTab = "shelf"; loadBooks() })
+            pillRow.addView(categoryPill("Search & Request", active = booksSubTab == "discover") { booksSubTab = "discover"; loadBooks() })
+            pillRow.addView(categoryPill("Downloads", active = booksSubTab == "downloads") { booksSubTab = "downloads"; loadBooks() })
+            content.addView(HorizontalScrollView(this).apply {
+                isHorizontalScrollBarEnabled = false
+                addView(pillRow)
+            })
+        }
 
         when (booksSubTab) {
             "discover" -> renderBooksDiscover()
