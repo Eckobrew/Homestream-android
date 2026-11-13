@@ -109,3 +109,9 @@ is imported into Jellyfin.
 
 See [audit fixes and playback additions](docs/audit-fixes.md) for migration notes,
 queue limits and validation details.
+
+## Books Hub
+
+Install the [release APK](https://github.com/Eckobrew/Homestream-android/releases/latest) on Android or Android TV. In Books Hub, use Shelf, Search, and Queue to find imported books and track requests. Open an EPUB or PDF and turn pages by swiping, tapping either page edge, or using the directional keys. Android Back returns to the hub. Progress is saved to the active profile.
+
+The server administrator configures [Bookshelf and the library mount](https://github.com/Eckobrew/HomeStream/blob/main/docs/integrations.md#bookshelf).
