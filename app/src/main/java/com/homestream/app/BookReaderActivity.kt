@@ -11,8 +11,11 @@ import android.os.ParcelFileDescriptor
 import android.util.TypedValue
 import android.view.GestureDetector
 import android.view.Gravity
+import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
+import android.view.animation.AccelerateInterpolator
+import android.view.animation.DecelerateInterpolator
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
@@ -22,7 +25,6 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.TextView
-import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
@@ -40,8 +42,8 @@ import java.util.concurrent.TimeUnit
 import java.util.zip.ZipFile
 
 /**
- * Single-page (1 page per screen) eBook reader for Android with Red HomeStream theme.
- * Supports EPUB (single-column CSS-paginated WebView) and PDF (native PdfRenderer).
+ * Physical book-styled 1-page reader for Android with cream paper, serif typography,
+ * 3D page-turning animation, edge-tap / swipe navigation, and zero button clutter.
  */
 class BookReaderActivity : AppCompatActivity() {
     private lateinit var settings: ServerSettings
@@ -53,9 +55,11 @@ class BookReaderActivity : AppCompatActivity() {
     private var bookFormat: String = "epub"
     private var initialLocation: String = ""
 
+    private lateinit var pageSheet: LinearLayout
     private lateinit var stage: FrameLayout
-    private lateinit var statusLabel: TextView
-    private lateinit var progressFill: View
+    private lateinit var folioLeftLabel: TextView
+    private lateinit var folioRightLabel: TextView
+    private var isAnimatingTurn = false
 
     // PDF single-page state
     private var pdfRenderer: PdfRenderer? = null
@@ -72,10 +76,13 @@ class BookReaderActivity : AppCompatActivity() {
     private var epubPageInChapter = 0
     private var epubPagesInChapter = 1
     private var webView: WebView? = null
-    private var fontSizePercent = 105
+    private var fontSizePercent = 108
 
-    private val RED = 0xFFE50914.toInt()
-    private val INK = 0xFF0E0E0E.toInt()
+    private val LEATHER_BG = 0xFF1A110B.toInt()
+    private val PAPER_CREAM = 0xFFF7F1E3.toInt()
+    private val PAPER_EDGE = 0xFFDFD3BE.toInt()
+    private val INK_BROWN = 0xFF231C14.toInt()
+    private val MUTED_SERIF = 0xFF7B6A55.toInt()
 
     private fun dp(v: Int): Int =
         TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v.toFloat(), resources.displayMetrics).toInt()
@@ -91,154 +98,180 @@ class BookReaderActivity : AppCompatActivity() {
         bookFormat = intent.getStringExtra("format").orEmpty().lowercase().ifBlank { "epub" }
         initialLocation = intent.getStringExtra("location").orEmpty()
 
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setBackgroundColor(INK)
+        val outerBinding = FrameLayout(this).apply {
+            setBackgroundColor(LEATHER_BG)
+            setPadding(dp(10), dp(12), dp(10), dp(12))
         }
 
-        // Top Header Bar (Red HomeStream accent)
-        val header = LinearLayout(this).apply {
+        // Stacked paper edge border
+        val paperStack = FrameLayout(this).apply {
+            background = GradientDrawable().apply {
+                setColor(PAPER_EDGE)
+                cornerRadius = dp(10).toFloat()
+                setStroke(dp(1), 0xFF4E3020.toInt())
+            }
+            setPadding(dp(3), dp(3), dp(5), dp(4))
+        }
+
+        // Actual turning book page sheet
+        pageSheet = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = GradientDrawable().apply {
+                setColor(PAPER_CREAM)
+                cornerRadius = dp(8).toFloat()
+            }
+            elevation = dp(8).toFloat()
+            cameraDistance = 16000f * resources.displayMetrics.density
+        }
+
+        // Running book header inside top paper margin
+        val runningHeader = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setBackgroundColor(0xFF161616.toInt())
-            setPadding(dp(12), dp(10), dp(12), dp(10))
+            setPadding(dp(22), dp(12), dp(22), dp(4))
         }
-
-        val closeBtn = TextView(this).apply {
-            text = "✕"
-            textSize = 16f
-            typeface = Typeface.DEFAULT_BOLD
-            setTextColor(Color.WHITE)
-            setPadding(dp(10), dp(6), dp(12), dp(6))
-            setOnClickListener { finish() }
-        }
-        header.addView(closeBtn)
-
-        val titleCol = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            layoutParams = LinearLayout.LayoutParams(0, -2, 1f)
-        }
-        titleCol.addView(TextView(this).apply {
-            text = bookTitle
-            textSize = 14f
-            typeface = Typeface.DEFAULT_BOLD
-            setTextColor(Color.WHITE)
+        runningHeader.addView(TextView(this).apply {
+            text = bookAuthor.ifBlank { bookTitle }
+            textSize = 10.5f
+            typeface = Typeface.create(Typeface.SERIF, Typeface.ITALIC)
+            setTextColor(MUTED_SERIF)
             maxLines = 1
             ellipsize = android.text.TextUtils.TruncateAt.END
+            layoutParams = LinearLayout.LayoutParams(0, -2, 1f)
         })
-        titleCol.addView(TextView(this).apply {
-            text = "$bookAuthor • ${bookFormat.uppercase()} • 1 Page / Screen"
-            textSize = 11f
-            setTextColor(0xFFEF5350.toInt())
+        runningHeader.addView(TextView(this).apply {
+            text = bookTitle
+            textSize = 10.5f
+            typeface = Typeface.SERIF
+            setTextColor(MUTED_SERIF)
+            gravity = Gravity.END
             maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
+            layoutParams = LinearLayout.LayoutParams(0, -2, 1f)
         })
-        header.addView(titleCol)
-
-        if (bookFormat == "epub") {
-            header.addView(topButton("A-") {
-                fontSizePercent = (fontSizePercent - 10).coerceAtLeast(80)
-                applyEpubPagination()
-            })
-            header.addView(topButton("A+") {
-                fontSizePercent = (fontSizePercent + 10).coerceAtMost(160)
-                applyEpubPagination()
-            })
-        }
-        root.addView(header, LinearLayout.LayoutParams(-1, -2))
+        pageSheet.addView(runningHeader, LinearLayout.LayoutParams(-1, -2))
 
         // Main 1-page viewport
         stage = FrameLayout(this).apply {
-            setBackgroundColor(0xFF121212.toInt())
+            setBackgroundColor(PAPER_CREAM)
         }
-        root.addView(stage, LinearLayout.LayoutParams(-1, 0, 1f))
+        pageSheet.addView(stage, LinearLayout.LayoutParams(-1, 0, 1f))
 
-        // Bottom Bar with Prev / Progress / Next
-        val footer = LinearLayout(this).apply {
+        // Printed book folio footer inside bottom paper margin
+        val runningFooter = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setBackgroundColor(0xFF161616.toInt())
-            setPadding(dp(12), dp(8), dp(12), dp(8))
+            setPadding(dp(22), dp(4), dp(22), dp(12))
         }
-
-        val prevBtn = navButton("‹ Prev") { prevPage() }
-        val nextBtn = navButton("Next ›") { nextPage() }
-
-        val centerCol = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
-            layoutParams = LinearLayout.LayoutParams(0, -2, 1f)
-            setPadding(dp(12), 0, dp(12), 0)
-        }
-        statusLabel = TextView(this).apply {
-            text = "Loading…"
+        folioLeftLabel = TextView(this).apply {
+            text = ""
             textSize = 11f
-            setTextColor(0xFFCCCCCC.toInt())
-            gravity = Gravity.CENTER
+            typeface = Typeface.SERIF
+            setTextColor(MUTED_SERIF)
+            layoutParams = LinearLayout.LayoutParams(0, -2, 1f)
         }
-        centerCol.addView(statusLabel)
-
-        val progressTrack = FrameLayout(this).apply {
-            background = GradientDrawable().apply {
-                setColor(0xFF2A2A2A.toInt())
-                cornerRadius = dp(4).toFloat()
-            }
-            layoutParams = LinearLayout.LayoutParams(-1, dp(4)).apply { topMargin = dp(4) }
+        folioRightLabel = TextView(this).apply {
+            text = ""
+            textSize = 11f
+            typeface = Typeface.create(Typeface.SERIF, Typeface.ITALIC)
+            setTextColor(MUTED_SERIF)
+            gravity = Gravity.END
+            layoutParams = LinearLayout.LayoutParams(-2, -2)
         }
-        progressFill = View(this).apply {
-            background = GradientDrawable().apply {
-                setColor(RED)
-                cornerRadius = dp(4).toFloat()
-            }
-            layoutParams = FrameLayout.LayoutParams(0, -1)
-        }
-        progressTrack.addView(progressFill)
-        centerCol.addView(progressTrack)
+        runningFooter.addView(folioLeftLabel)
+        runningFooter.addView(folioRightLabel)
+        pageSheet.addView(runningFooter, LinearLayout.LayoutParams(-1, -2))
 
-        footer.addView(prevBtn)
-        footer.addView(centerCol)
-        footer.addView(nextBtn)
-        root.addView(footer, LinearLayout.LayoutParams(-1, -2))
+        paperStack.addView(pageSheet, FrameLayout.LayoutParams(-1, -1))
+        outerBinding.addView(paperStack, FrameLayout.LayoutParams(-1, -1))
 
-        setContentView(root)
+        setContentView(outerBinding)
         loadBook()
     }
 
-    private fun topButton(label: String, click: () -> Unit): TextView = TextView(this).apply {
-        text = label
-        textSize = 12f
-        typeface = Typeface.DEFAULT_BOLD
-        setTextColor(Color.WHITE)
-        background = GradientDrawable().apply {
-            setColor(0xFF262626.toInt())
-            cornerRadius = dp(8).toFloat()
+    override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
+        when (keyCode) {
+            KeyEvent.KEYCODE_VOLUME_DOWN, KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_PAGE_DOWN -> {
+                nextPage()
+                return true
+            }
+            KeyEvent.KEYCODE_VOLUME_UP, KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_PAGE_UP -> {
+                prevPage()
+                return true
+            }
         }
-        setPadding(dp(10), dp(6), dp(10), dp(6))
-        layoutParams = LinearLayout.LayoutParams(-2, -2).apply { marginStart = dp(6) }
-        setOnClickListener { click() }
+        return super.onKeyDown(keyCode, event)
     }
 
-    private fun navButton(label: String, click: () -> Unit): TextView = TextView(this).apply {
-        text = label
-        textSize = 12f
-        typeface = Typeface.DEFAULT_BOLD
-        setTextColor(Color.WHITE)
-        background = GradientDrawable().apply {
-            setColor(RED)
-            cornerRadius = dp(10).toFloat()
+    private fun animatePageTurn(forward: Boolean, onMidTurn: () -> Unit) {
+        if (isAnimatingTurn) return
+        if (!android.animation.ValueAnimator.areAnimatorsEnabled()) {
+            onMidTurn()
+            return
         }
-        setPadding(dp(14), dp(8), dp(14), dp(8))
-        setOnClickListener { click() }
+        isAnimatingTurn = true
+        val width = pageSheet.width.takeIf { it > 0 }?.toFloat() ?: 1080f
+        pageSheet.pivotX = if (forward) 0f else width
+        pageSheet.pivotY = pageSheet.height / 2f
+
+        val edgeAngle = if (forward) -88f else 88f
+        pageSheet.animate()
+            .rotationY(edgeAngle)
+            .setDuration(200)
+            .setInterpolator(AccelerateInterpolator())
+            .withEndAction {
+                onMidTurn()
+                pageSheet.pivotX = if (forward) width else 0f
+                pageSheet.rotationY = -edgeAngle
+                pageSheet.animate()
+                    .rotationY(0f)
+                    .setDuration(240)
+                    .setInterpolator(DecelerateInterpolator())
+                    .withEndAction {
+                        isAnimatingTurn = false
+                    }
+                    .start()
+            }
+            .start()
+    }
+
+    private fun buildPageGestureDetector(): GestureDetector {
+        return GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
+            override fun onDown(e: MotionEvent): Boolean = true
+
+            override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
+                val w = stage.width.takeIf { it > 0 } ?: resources.displayMetrics.widthPixels
+                if (e.x < w * 0.30f) {
+                    prevPage()
+                    return true
+                } else if (e.x > w * 0.70f) {
+                    nextPage()
+                    return true
+                }
+                return false
+            }
+
+            override fun onFling(e1: MotionEvent?, e2: MotionEvent, vx: Float, vy: Float): Boolean {
+                if (e1 == null) return false
+                val dx = e2.x - e1.x
+                val dy = e2.y - e1.y
+                if (kotlin.math.abs(dx) > kotlin.math.abs(dy) && kotlin.math.abs(dx) > dp(42) && kotlin.math.abs(vx) > 120) {
+                    if (dx < 0) nextPage() else prevPage()
+                    return true
+                }
+                return false
+            }
+        })
     }
 
     private fun loadBook() {
         stage.removeAllViews()
         stage.addView(ProgressBar(this).apply {
-            indeterminateTintList = android.content.res.ColorStateList.valueOf(RED)
-        }, FrameLayout.LayoutParams(dp(42), dp(42), Gravity.CENTER))
+            indeterminateTintList = android.content.res.ColorStateList.valueOf(0xFF8C3B2B.toInt())
+        }, FrameLayout.LayoutParams(dp(36), dp(36), Gravity.CENTER))
 
         lifecycleScope.launch {
             try {
-                // Fetch saved progress if not passed
                 if (initialLocation.isBlank()) {
                     runCatching {
                         val prog = api.call("books/progress?bookId=$bookId").optJSONObject("progress")
@@ -254,9 +287,10 @@ class BookReaderActivity : AppCompatActivity() {
             } catch (e: Exception) {
                 stage.removeAllViews()
                 stage.addView(TextView(this@BookReaderActivity).apply {
-                    text = "Unable to open book: ${e.message}"
+                    text = "Unable to open volume: ${e.message}"
                     textSize = 13f
-                    setTextColor(0xFFFF8A80.toInt())
+                    typeface = Typeface.SERIF
+                    setTextColor(INK_BROWN)
                     gravity = Gravity.CENTER
                     setPadding(dp(24), dp(24), dp(24), dp(24))
                 }, FrameLayout.LayoutParams(-1, -1))
@@ -299,25 +333,15 @@ class BookReaderActivity : AppCompatActivity() {
 
         val img = ImageView(this).apply {
             scaleType = ImageView.ScaleType.FIT_CENTER
-            setBackgroundColor(Color.WHITE)
+            setBackgroundColor(PAPER_CREAM)
         }
-        val detector = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
-            override fun onFling(e1: MotionEvent?, e2: MotionEvent, vx: Float, vy: Float): Boolean {
-                if (e1 == null) return false
-                val dx = e2.x - e1.x
-                if (kotlin.math.abs(dx) > dp(48) && kotlin.math.abs(vx) > 150) {
-                    if (dx < 0) nextPage() else prevPage()
-                    return true
-                }
-                return false
-            }
-        })
+        val detector = buildPageGestureDetector()
         img.setOnTouchListener { _, ev -> detector.onTouchEvent(ev); true }
 
         pdfImageView = img
         stage.removeAllViews()
         stage.addView(img, FrameLayout.LayoutParams(-1, -1).apply {
-            setMargins(dp(8), dp(8), dp(8), dp(8))
+            setMargins(dp(8), dp(4), dp(8), dp(4))
         })
         renderPdfSinglePage()
     }
@@ -335,7 +359,7 @@ class BookReaderActivity : AppCompatActivity() {
                 (page.height * scale).toInt().coerceAtLeast(1),
                 Bitmap.Config.ARGB_8888
             )
-            bmp.eraseColor(Color.WHITE)
+            bmp.eraseColor(PAPER_CREAM)
             page.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
             img.setImageBitmap(bmp)
         }
@@ -345,7 +369,7 @@ class BookReaderActivity : AppCompatActivity() {
     }
 
     // -------------------------------------------------------------------------
-    // EPUB 1-Page Renderer (Single-column CSS paginated WebView)
+    // EPUB 1-Page Renderer (Single-column CSS paginated WebView on cream paper)
     // -------------------------------------------------------------------------
     @SuppressLint("SetJavaScriptEnabled", "ClickableViewAccessibility")
     private suspend fun openEpub(file: File) {
@@ -361,7 +385,7 @@ class BookReaderActivity : AppCompatActivity() {
         epubPageInChapter = (parts.getOrNull(1)?.toIntOrNull() ?: 0).coerceAtLeast(0)
 
         val wv = WebView(this).apply {
-            setBackgroundColor(0xFF141414.toInt())
+            setBackgroundColor(PAPER_CREAM)
             isHorizontalScrollBarEnabled = false
             isVerticalScrollBarEnabled = false
             settings.javaScriptEnabled = true
@@ -403,17 +427,7 @@ class BookReaderActivity : AppCompatActivity() {
             }
         }
 
-        val detector = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
-            override fun onFling(e1: MotionEvent?, e2: MotionEvent, vx: Float, vy: Float): Boolean {
-                if (e1 == null) return false
-                val dx = e2.x - e1.x
-                if (kotlin.math.abs(dx) > dp(48) && kotlin.math.abs(vx) > 150) {
-                    if (dx < 0) nextPage() else prevPage()
-                    return true
-                }
-                return false
-            }
-        })
+        val detector = buildPageGestureDetector()
         wv.setOnTouchListener { _, ev -> detector.onTouchEvent(ev); true }
 
         webView = wv
@@ -514,13 +528,15 @@ class BookReaderActivity : AppCompatActivity() {
                     d.head.appendChild(style);
                 }
                 style.textContent =
-                    'html, body { margin: 0 !important; padding: 0 !important; background: #141414 !important; color: #ececec !important; ' +
-                    'height: ' + h + 'px !important; overflow: hidden !important; font-family: Georgia, serif !important; ' +
-                    'font-size: ${fontSizePercent}% !important; line-height: 1.65 !important; } ' +
+                    'html, body { margin: 0 !important; padding: 0 !important; background: #f7f1e3 !important; color: #231c14 !important; ' +
+                    'height: ' + h + 'px !important; overflow: hidden !important; font-family: Georgia, "Noto Serif", serif !important; ' +
+                    'font-size: ${fontSizePercent}% !important; line-height: 1.72 !important; text-align: justify !important; } ' +
                     'body { column-width: ' + w + 'px !important; column-gap: 0px !important; column-fill: auto !important; ' +
-                    'box-sizing: border-box !important; padding: 20px 22px !important; } ' +
-                    'img, svg, video { max-width: 100% !important; max-height: ' + (h - 48) + 'px !important; height: auto !important; } ' +
-                    'a { color: #f87171 !important; }';
+                    'box-sizing: border-box !important; padding: 14px 24px !important; } ' +
+                    'p { text-indent: 1.35em !important; margin-top: 0 !important; margin-bottom: 0.4em !important; } ' +
+                    'h1, h2, h3, h4 { color: #1b140e !important; text-align: center !important; } ' +
+                    'img, svg, video { max-width: 100% !important; max-height: ' + (h - 36) + 'px !important; height: auto !important; } ' +
+                    'a { color: #7c2d12 !important; text-decoration: none !important; }';
                 var total = Math.max(1, Math.round(d.body.scrollWidth / Math.max(1, w)));
                 var page = Math.min(total - 1, Math.max(0, $epubPageInChapter));
                 window.scrollTo(page * w, 0);
@@ -550,7 +566,7 @@ class BookReaderActivity : AppCompatActivity() {
         val frac = (epubChapterIndex.toDouble() + (epubPageInChapter + 1).toDouble() / epubPagesInChapter.toDouble()) / totalChapters.toDouble()
         val pct = (frac * 100.0).coerceIn(0.0, 100.0)
         updateProgressUi(
-            "Chapter ${epubChapterIndex + 1}/$totalChapters • Page ${epubPageInChapter + 1}/$epubPagesInChapter",
+            "Ch. ${epubChapterIndex + 1} · Page ${epubPageInChapter + 1} of $epubPagesInChapter",
             pct
         )
         saveProgress("ch:$epubChapterIndex:$epubPageInChapter", pct)
@@ -559,17 +575,23 @@ class BookReaderActivity : AppCompatActivity() {
     private fun prevPage() {
         if (bookFormat == "pdf") {
             if (pdfPageIndex > 0) {
-                pdfPageIndex--
-                renderPdfSinglePage()
+                animatePageTurn(forward = false) {
+                    pdfPageIndex--
+                    renderPdfSinglePage()
+                }
             }
         } else {
             if (epubPageInChapter > 0) {
-                epubPageInChapter--
-                scrollEpubToPage()
+                animatePageTurn(forward = false) {
+                    epubPageInChapter--
+                    scrollEpubToPage()
+                }
             } else if (epubChapterIndex > 0) {
-                epubChapterIndex--
-                epubPageInChapter = 9999 // snap to last page of previous chapter
-                loadEpubChapter()
+                animatePageTurn(forward = false) {
+                    epubChapterIndex--
+                    epubPageInChapter = 9999
+                    loadEpubChapter()
+                }
             }
         }
     }
@@ -577,30 +599,30 @@ class BookReaderActivity : AppCompatActivity() {
     private fun nextPage() {
         if (bookFormat == "pdf") {
             if (pdfPageIndex + 1 < pdfPageCount) {
-                pdfPageIndex++
-                renderPdfSinglePage()
+                animatePageTurn(forward = true) {
+                    pdfPageIndex++
+                    renderPdfSinglePage()
+                }
             }
         } else {
             if (epubPageInChapter + 1 < epubPagesInChapter) {
-                epubPageInChapter++
-                scrollEpubToPage()
+                animatePageTurn(forward = true) {
+                    epubPageInChapter++
+                    scrollEpubToPage()
+                }
             } else if (epubChapterIndex + 1 < epubSpine.size) {
-                epubChapterIndex++
-                epubPageInChapter = 0
-                loadEpubChapter()
+                animatePageTurn(forward = true) {
+                    epubChapterIndex++
+                    epubPageInChapter = 0
+                    loadEpubChapter()
+                }
             }
         }
     }
 
     private fun updateProgressUi(label: String, pct: Double) {
-        statusLabel.text = "$label (${pct.toInt()}%)"
-        progressFill.post {
-            val parentW = (progressFill.parent as? View)?.width ?: 0
-            progressFill.layoutParams = FrameLayout.LayoutParams(
-                ((parentW * (pct / 100.0)).toInt()).coerceIn(0, parentW),
-                -1
-            )
-        }
+        folioLeftLabel.text = label
+        folioRightLabel.text = "${pct.toInt()}%"
     }
 
     private fun saveProgress(location: String, pct: Double) {
