@@ -74,15 +74,18 @@ class ServerSettings(context: Context, private val keyProvider: (() -> SecretKey
         private set(value) { prefs.edit().putString("profileName", value).apply() }
 
     val isKids: Boolean get() = prefs.getBoolean("isKids", false) || kidsRating.isNotBlank()
+    val isAdmin: Boolean get() = prefs.getBoolean("isAdmin", true) && !isKids
 
-    fun applyProfilePolicy(profile: org.json.JSONObject?, revision: String) {
+    fun applyProfilePolicy(profile: org.json.JSONObject?, revision: String, canManage: Boolean? = null) {
         val id = profile?.optString("id").orEmpty()
         val name = profile?.optString("name").orEmpty()
         val rating = if (profile?.optBoolean("isKids") == true) profile.optString("kidsRating") else ""
         val kids = profile?.optBoolean("isKids") == true
-        val changed = this.profile != id || policyRevision != revision || kidsRating != rating || isKids != kids
+        val admin = canManage ?: (profile == null || (profile.optBoolean("isAdministrator", true) && !kids))
+        val changed = this.profile != id || policyRevision != revision || kidsRating != rating || isKids != kids || isAdmin != admin
         prefs.edit().putString("profile", id).putString("profileName", name.ifBlank { "Nathan" })
-            .putString("policyRevision", revision).putString("kidsRating", rating).putBoolean("isKids", kids).apply()
+            .putString("policyRevision", revision).putString("kidsRating", rating)
+            .putBoolean("isKids", kids).putBoolean("isAdmin", admin).apply()
         if (changed) { appContext.stopService(android.content.Intent(appContext, MusicService::class.java)); BrowseCache.clear(); WatchNext.refresh(appContext) }
     }
 

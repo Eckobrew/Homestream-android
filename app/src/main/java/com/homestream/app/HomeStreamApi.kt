@@ -133,10 +133,11 @@ class HomeStreamApi(private val settings: ConnectionSettings) {
     suspend fun refreshProfilePolicy(): Boolean {
         val local = settings as? ServerSettings ?: return false
         if (local.token.isBlank()) return false
-        val before = "${local.profile}|${local.policyRevision}"
+        val before = "${local.profile}|${local.policyRevision}|${local.isAdmin}"
         val status = call("session/status")
-        local.applyProfilePolicy(status.optJSONObject("profile"), status.optString("revision"))
-        return before != "${local.profile}|${local.policyRevision}"
+        val canManage = if (status.has("canManageIntegrations")) status.optBoolean("canManageIntegrations") else null
+        local.applyProfilePolicy(status.optJSONObject("profile"), status.optString("revision"), canManage)
+        return before != "${local.profile}|${local.policyRevision}|${local.isAdmin}"
     }
 
     fun absolute(url: String): String {

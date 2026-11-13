@@ -509,6 +509,20 @@ class MainActivity : AppCompatActivity() {
                     loadTab("home")
                 }
             )
+            "download-manager" -> listOf(
+                BottomNavItem("qBittorrent", R.drawable.ic_download, downloadManagerSubTab == "torrents") {
+                    downloadManagerSubTab = "torrents"; adminDownloadManager()
+                },
+                BottomNavItem("System Queue", R.drawable.nav_list, downloadManagerSubTab == "system") {
+                    downloadManagerSubTab = "system"; adminDownloadManager()
+                },
+                BottomNavItem("+ Magnet", R.drawable.ic_play_arrow, false) {
+                    showAddTorrentDialog()
+                },
+                BottomNavItem("Home", R.drawable.nav_home, false) {
+                    loadTab("home")
+                }
+            )
             else -> listOf(
                 BottomNavItem("Home", R.drawable.nav_home, currentTab == "home" && screen == "home") {
                     loadTab("home")
@@ -764,7 +778,26 @@ class MainActivity : AppCompatActivity() {
             ytText.addView(TextView(this).apply { text = "Continue watching, podcasts & trending"; textSize = 11f; setTextColor(MUTED) })
             ytBtn.addView(ytText)
             ytBtn.addView(badgePill("HUB"))
-            panel.addView(ytBtn, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(20) })
+            panel.addView(ytBtn, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = if (settings.isAdmin) dp(8) else dp(20) })
+
+            if (settings.isAdmin) {
+                val dlMgrBtn = LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+                    background = rounded(if (screen == "download-manager") RED else 0x22FFFFFF.toInt())
+                    setPadding(dp(14), dp(12), dp(14), dp(12))
+                    isClickable = true
+                    setOnClickListener { closeSidebar(); adminDownloadManager() }
+                }
+                dlMgrBtn.addView(ImageView(this).apply {
+                    setImageResource(R.drawable.ic_download); imageTintList = ColorStateList.valueOf(Color.WHITE)
+                }, LinearLayout.LayoutParams(dp(22), dp(22)))
+                val dlMgrText = column().apply { setPadding(dp(12), 0, 0, 0); layoutParams = LinearLayout.LayoutParams(0, -2, 1f) }
+                dlMgrText.addView(label("Download Manager", 14f, true))
+                dlMgrText.addView(TextView(this).apply { text = "qBittorrent & system queues"; textSize = 11f; setTextColor(MUTED) })
+                dlMgrBtn.addView(dlMgrText)
+                dlMgrBtn.addView(badgePill("ADMIN"))
+                panel.addView(dlMgrBtn, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(20) })
+            }
         }
 
         // Section: Jellyfin Media (A–Z)
@@ -874,6 +907,7 @@ class MainActivity : AppCompatActivity() {
         if (tab == "books") { loadBooks(); return }
         if (tab == "search") { openSearch(); return }
         if (tab == "downloads") { loadDownloads(); return }
+        if (tab == "download-manager") { adminDownloadManager(); return }
         if (tab == "mine") { myHomeStream(); return }
         rememberScreen(tab) { loadTab(tab) }
         heroRotationJob?.cancel()
@@ -2234,8 +2268,12 @@ class MainActivity : AppCompatActivity() {
             try {
                 if (api.call("capabilities").optBoolean("canManageIntegrations")) {
                     AlertDialog.Builder(this@MainActivity).setTitle("Server settings")
-                        .setItems(arrayOf("Connection", "Admin integrations")) { _, choice ->
-                            if (choice == 1) adminIntegrations() else connectionSettingsDialog()
+                        .setItems(arrayOf("Connection", "Download Manager", "Admin integrations")) { _, choice ->
+                            when (choice) {
+                                1 -> adminDownloadManager()
+                                2 -> adminIntegrations()
+                                else -> connectionSettingsDialog()
+                            }
                         }.show()
                 } else connectionSettingsDialog()
             } catch (e: Exception) {
@@ -3608,6 +3646,326 @@ class MainActivity : AppCompatActivity() {
             }
             .setNegativeButton("Cancel", null)
             .show()
+    }
+
+    private var downloadManagerSubTab = "torrents"
+
+    private fun showAddTorrentDialog() {
+        val form = column().apply { setPadding(dp(20), dp(12), dp(20), dp(12)) }
+        val input = EditText(this).apply {
+            hint = "magnet:?xt=urn:btih:... or .torrent URL"; setTextColor(Color.WHITE); setHintTextColor(MUTED)
+            minLines = 2; maxLines = 4
+            background = rounded(0xFF1E1E1E.toInt(), radius = dp(8).toFloat())
+            setPadding(dp(12), dp(10), dp(12), dp(10))
+        }
+        val catInput = EditText(this).apply {
+            hint = "Category (optional: books, radarr, tv-sonarr)"; setTextColor(Color.WHITE); setHintTextColor(MUTED)
+            background = rounded(0xFF1E1E1E.toInt(), radius = dp(8).toFloat())
+            setPadding(dp(12), dp(10), dp(12), dp(10))
+            layoutParams = LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) }
+        }
+        form.addView(input)
+        form.addView(catInput)
+        AlertDialog.Builder(this).setTitle("Add to qBittorrent").setView(form)
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Add") { _, _ ->
+                val urls = input.text.toString().trim()
+                val category = catInput.text.toString().trim()
+                if (urls.isNotEmpty()) {
+                    lifecycleScope.launch {
+                        try {
+                            val body = JSONObject().put("action", "add").put("urls", urls)
+                            if (category.isNotEmpty()) body.put("category", category)
+                            api.call("downloads/manager", body = body)
+                            toast("Added to qBittorrent")
+                            adminDownloadManager()
+                        } catch (e: Exception) { toast(e.message ?: "Failed to add torrent") }
+                    }
+                }
+            }.show()
+    }
+
+    private fun formatDlBytes(bytes: Long): String {
+        if (bytes <= 0) return "0 B"
+        val units = arrayOf("B", "KB", "MB", "GB", "TB")
+        var v = bytes.toDouble()
+        var idx = 0
+        while (v >= 1024 && idx < units.lastIndex) { v /= 1024; idx++ }
+        return if (idx >= 2) String.format("%.1f %s", v, units[idx]) else String.format("%.0f %s", v, units[idx])
+    }
+
+    private fun showTorrentFilesDialog(hash: String, name: String) {
+        lifecycleScope.launch {
+            try {
+                val res = api.call("downloads/manager", params = mapOf("hash" to hash))
+                val files = res.objects("files")
+                if (files.isEmpty()) {
+                    toast("No file list available for this torrent yet")
+                    return@launch
+                }
+                val box = column().apply { setPadding(dp(16), dp(10), dp(16), dp(10)) }
+                box.addView(TextView(this@MainActivity).apply {
+                    text = "Tap any file to change its download priority (e.g. skip unwanted books/episodes in a pack)."
+                    textSize = 11.5f; setTextColor(MUTED); setPadding(0, 0, 0, dp(10))
+                })
+                var dialogRef: AlertDialog? = null
+                files.forEach { f ->
+                    val fIdx = f.optInt("index")
+                    val fName = f.optString("name")
+                    val fPct = (f.optDouble("progress", 0.0) * 100).toInt()
+                    val fSize = formatDlBytes(f.optLong("size", 0))
+                    val fPrio = f.optInt("priority", 1)
+                    val prioLabel = when (fPrio) { 0 -> "SKIP"; 6, 7 -> "MAX"; else -> "NORMAL" }
+                    val row = column().apply {
+                        background = rounded(if (fPrio == 0) 0x10FFFFFF else 0x20FFFFFF, radius = dp(8).toFloat())
+                        setPadding(dp(10), dp(8), dp(10), dp(8))
+                        layoutParams = LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(6) }
+                        isClickable = true
+                        setOnClickListener {
+                            val opts = arrayOf("Do Not Download (Skip)", "Normal Priority", "High / Max Priority")
+                            AlertDialog.Builder(this@MainActivity).setTitle(fName.substringAfterLast('/'))
+                                .setItems(opts) { _, which ->
+                                    val newPrio = when (which) { 0 -> 0; 2 -> 6; else -> 1 }
+                                    lifecycleScope.launch {
+                                        try {
+                                            api.call("downloads/manager", body = JSONObject()
+                                                .put("action", "file-priority")
+                                                .put("hash", hash)
+                                                .put("fileIndex", fIdx)
+                                                .put("priority", newPrio))
+                                            dialogRef?.dismiss()
+                                            showTorrentFilesDialog(hash, name)
+                                        } catch (e: Exception) { toast(e.message ?: "Failed updating priority") }
+                                    }
+                                }.show()
+                        }
+                    }
+                    row.addView(TextView(this@MainActivity).apply {
+                        text = fName.substringAfterLast('/')
+                        textSize = 12.5f; typeface = android.graphics.Typeface.DEFAULT_BOLD
+                        setTextColor(if (fPrio == 0) MUTED else Color.WHITE)
+                    })
+                    row.addView(TextView(this@MainActivity).apply {
+                        text = "$prioLabel • $fSize • $fPct%"
+                        textSize = 11f
+                        setTextColor(if (fPrio == 0) 0xFFEF5350.toInt() else 0xFF81C784.toInt())
+                    })
+                    box.addView(row)
+                }
+                dialogRef = AlertDialog.Builder(this@MainActivity)
+                    .setTitle("Files (${files.size})")
+                    .setView(ScrollView(this@MainActivity).apply { addView(box) })
+                    .setNegativeButton("Close", null)
+                    .show()
+            } catch (e: Exception) {
+                toast(e.message ?: "Could not load torrent files")
+            }
+        }
+    }
+
+    private fun adminDownloadManager() {
+        if (!settings.isAdmin) {
+            toast("Administrator access required")
+            return
+        }
+        rememberScreen("download-manager") { adminDownloadManager() }
+        work?.cancel(); ++generation
+        currentTab = "download-manager"; screen = "download-manager"
+        shell()
+
+        val headerRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+            setPadding(gutter, dp(10), gutter, dp(4))
+        }
+        val titleCol = column().apply { layoutParams = LinearLayout.LayoutParams(0, -2, 1f) }
+        titleCol.addView(label("Download Manager", 22f, true))
+        titleCol.addView(TextView(this).apply {
+            text = "ADMIN ONLY • QBITTORRENT & SYSTEM QUEUES"
+            textSize = 10.5f; typeface = android.graphics.Typeface.DEFAULT_BOLD; setTextColor(RED)
+        })
+        headerRow.addView(titleCol)
+        headerRow.addView(action("+ Add Magnet", primary = true) { showAddTorrentDialog() }.apply {
+            textSize = 12f; setPadding(dp(12), dp(6), dp(12), dp(6))
+        })
+        content.addView(headerRow)
+
+        val pillRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(gutter, dp(8), gutter, dp(10))
+        }
+        pillRow.addView(categoryPill("qBittorrent", active = downloadManagerSubTab == "torrents") {
+            downloadManagerSubTab = "torrents"; adminDownloadManager()
+        })
+        pillRow.addView(categoryPill("System Queues", active = downloadManagerSubTab == "system") {
+            downloadManagerSubTab = "system"; adminDownloadManager()
+        })
+        pillRow.addView(categoryPill("Refresh", active = false) {
+            adminDownloadManager()
+        })
+        content.addView(HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false; addView(pillRow)
+        })
+
+        val host = column().apply { setPadding(gutter, dp(4), gutter, dp(96)) }
+        host.addView(TextView(this).apply { text = "Loading Download Manager…"; textSize = 12f; setTextColor(MUTED) })
+        content.addView(host)
+
+        lifecycleScope.launch {
+            try {
+                val data = api.call("downloads/manager")
+                if (screen != "download-manager") return@launch
+                host.removeAllViews()
+                val torrents = data.objects("torrents")
+                val sysItems = data.objects("systemDownloads")
+                val totalDl = torrents.sumOf { it.optLong("downloadSpeed", it.optLong("dlspeed", 0L)) }
+                val totalUp = torrents.sumOf { it.optLong("uploadSpeed", it.optLong("upspeed", 0L)) }
+
+                val statsRow = LinearLayout(this@MainActivity).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    background = rounded(0x18FFFFFF, radius = dp(10).toFloat())
+                    setPadding(dp(12), dp(10), dp(12), dp(10))
+                    layoutParams = LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(12) }
+                }
+                statsRow.addView(TextView(this@MainActivity).apply {
+                    text = "↓ ${formatDlBytes(totalDl)}/s   ↑ ${formatDlBytes(totalUp)}/s   •   ${torrents.size} Torrents   •   ${sysItems.size} Tasks"
+                    textSize = 12f; typeface = android.graphics.Typeface.DEFAULT_BOLD; setTextColor(Color.WHITE)
+                })
+                host.addView(statsRow)
+
+                if (downloadManagerSubTab == "torrents") {
+                    if (torrents.isEmpty()) {
+                        host.addView(label("No torrents in qBittorrent", 13f).apply { setTextColor(MUTED) })
+                    } else {
+                        torrents.forEach { t ->
+                            val hash = t.optString("hash")
+                            val name = t.optString("name")
+                            val pct = t.optInt("progressPercent", 0)
+                            val state = t.optString("state")
+                            val cat = t.optString("category")
+                            val dlspeed = t.optLong("downloadSpeed", t.optLong("dlspeed", 0L))
+                            val size = t.optLong("size", 0L)
+                            val seq = t.optBoolean("seqDl", false)
+                            val paused = state.lowercase().contains("paused") || state.lowercase().contains("stopped")
+
+                            val card = column().apply {
+                                background = rounded(0x18FFFFFF, radius = dp(10).toFloat())
+                                setPadding(dp(12), dp(10), dp(12), dp(10))
+                                layoutParams = LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) }
+                                isClickable = true
+                                setOnClickListener {
+                                    val opts = arrayOf(
+                                        if (paused) "▶ Resume Torrent" else "⏸ Pause Torrent",
+                                        "📁 Inspect Files & Priorities",
+                                        if (seq) "Disable Sequential Download" else "Enable Sequential Download",
+                                        "🔄 Force Recheck",
+                                        "🗑 Remove (Keep Files on Disk)",
+                                        "⚠️ Remove + Delete Files"
+                                    )
+                                    AlertDialog.Builder(this@MainActivity).setTitle(name).setItems(opts) { _, which ->
+                                        if (which == 1) {
+                                            showTorrentFilesDialog(hash, name)
+                                            return@setItems
+                                        }
+                                        lifecycleScope.launch {
+                                            try {
+                                                val body = when (which) {
+                                                    0 -> JSONObject().put("action", if (paused) "resume" else "pause").put("hash", hash)
+                                                    2 -> JSONObject().put("action", "sequential").put("hash", hash)
+                                                    3 -> JSONObject().put("action", "recheck").put("hash", hash)
+                                                    4 -> JSONObject().put("action", "delete").put("hash", hash).put("deleteFiles", false)
+                                                    else -> JSONObject().put("action", "delete").put("hash", hash).put("deleteFiles", true)
+                                                }
+                                                api.call("downloads/manager", body = body)
+                                                adminDownloadManager()
+                                            } catch (e: Exception) { toast(e.message ?: "Action failed") }
+                                        }
+                                    }.show()
+                                }
+                            }
+                            card.addView(TextView(this@MainActivity).apply {
+                                text = name; textSize = 13.5f; typeface = android.graphics.Typeface.DEFAULT_BOLD
+                                setTextColor(Color.WHITE); maxLines = 2
+                            })
+                            card.addView(TextView(this@MainActivity).apply {
+                                val catBadge = if (cat.isNotBlank()) "[$cat] " else ""
+                                val speedStr = if (dlspeed > 0) " • ↓ ${formatDlBytes(dlspeed)}/s" else ""
+                                text = "$catBadge$state • $pct% of ${formatDlBytes(size)}$speedStr"
+                                textSize = 11.5f
+                                setTextColor(if (paused) MUTED else 0xFF81C784.toInt())
+                                setPadding(0, dp(3), 0, dp(6))
+                            })
+                            val pb = ProgressBar(this@MainActivity, null, android.R.attr.progressBarStyleHorizontal).apply {
+                                max = 100; progress = pct
+                                progressTintList = ColorStateList.valueOf(if (pct >= 100) 0xFF10B981.toInt() else RED)
+                                layoutParams = LinearLayout.LayoutParams(-1, dp(5))
+                            }
+                            card.addView(pb)
+                            host.addView(card)
+                        }
+                    }
+                } else {
+                    if (sysItems.isEmpty()) {
+                        host.addView(label("No active system tasks", 13f).apply { setTextColor(MUTED) })
+                    } else {
+                        sysItems.forEach { s ->
+                            val id = s.optString("id")
+                            val qId = s.optString("queueId")
+                            val title = s.optString("title")
+                            val sub = s.optString("subtitle")
+                            val src = s.optString("source").uppercase()
+                            val st = s.optString("status")
+                            val pct = s.optInt("progressPercent", 0)
+                            val err = s.optString("error")
+
+                            val card = column().apply {
+                                background = rounded(0x18FFFFFF, radius = dp(10).toFloat())
+                                setPadding(dp(12), dp(10), dp(12), dp(10))
+                                layoutParams = LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) }
+                                isClickable = true
+                                setOnClickListener {
+                                    AlertDialog.Builder(this@MainActivity).setTitle(title)
+                                        .setMessage("Remove or cancel this [$src] download task?")
+                                        .setNegativeButton("Close", null)
+                                        .setPositiveButton("Remove") { _, _ ->
+                                            lifecycleScope.launch {
+                                                try {
+                                                    val body = JSONObject().put("action", "cancel-system").put("id", id)
+                                                    if (qId.isNotBlank()) body.put("queueId", qId)
+                                                    api.call("downloads/manager", body = body)
+                                                    adminDownloadManager()
+                                                } catch (e: Exception) { toast(e.message ?: "Failed to remove") }
+                                            }
+                                        }.show()
+                                }
+                            }
+                            card.addView(TextView(this@MainActivity).apply {
+                                text = "[$src] $title"; textSize = 13.5f; typeface = android.graphics.Typeface.DEFAULT_BOLD
+                                setTextColor(Color.WHITE)
+                            })
+                            card.addView(TextView(this@MainActivity).apply {
+                                text = "${if (sub.isNotBlank()) "$sub • " else ""}${st.uppercase()} • $pct%"
+                                textSize = 11.5f; setTextColor(MUTED)
+                                setPadding(0, dp(2), 0, 0)
+                            })
+                            if (err.isNotBlank() && err != "null") {
+                                card.addView(TextView(this@MainActivity).apply {
+                                    text = err; textSize = 11f; setTextColor(0xFFEF5350.toInt())
+                                    setPadding(0, dp(2), 0, 0)
+                                })
+                            }
+                            host.addView(card)
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                host.removeAllViews()
+                host.addView(TextView(this@MainActivity).apply {
+                    text = e.message ?: "Download Manager unavailable"
+                    textSize = 12f; setTextColor(Color.RED)
+                })
+            }
+        }
     }
 
     private fun adminIntegrations() {
