@@ -41,6 +41,7 @@ class MusicService : MediaSessionService() {
         val player = ExoPlayer.Builder(this).setMediaSourceFactory(DefaultMediaSourceFactory(source)).build().apply {
             setAudioAttributes(AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MUSIC).build(), true)
             setHandleAudioBecomingNoisy(true)
+            setWakeMode(C.WAKE_MODE_NETWORK)
             addListener(object : Player.Listener {
                 override fun onPlayerError(error: PlaybackException) {
                     playbackError = "Playback unavailable. Check your connection and try again."
@@ -52,6 +53,7 @@ class MusicService : MediaSessionService() {
         session = MediaSession.Builder(this, player).setSessionActivity(android.app.PendingIntent.getActivity(this, 0,
             Intent(this, MusicPlayerActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
             android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT)).build()
+        session?.let { addSession(it) }
         scope.launch {
             while (isActive) {
                 delay(30_000)
@@ -81,8 +83,13 @@ class MusicService : MediaSessionService() {
             val tracks = runCatching { JSONArray(raw) }.getOrNull() ?: return START_NOT_STICKY
             val items = (0 until tracks.length()).mapNotNull { index ->
                 val track = tracks.optJSONObject(index) ?: return@mapNotNull null
-                val url = api.absolute(track.optString("streamUrl"))
-                if (!api.isServerUrl(url) || !android.net.Uri.parse(url).path.orEmpty().endsWith("/api/mobile/v1/music/stream")) return@mapNotNull null
+                val rawStream = track.optString("streamUrl").ifBlank {
+                    val tid = track.optString("trackId").ifBlank { track.optString("id") }
+                    if (tid.isNotBlank()) "/api/mobile/v1/music/stream?trackId=$tid" else ""
+                }
+                val url = api.absolute(rawStream)
+                val path = android.net.Uri.parse(url).path.orEmpty()
+                if (!api.isServerUrl(url) || (!path.endsWith("/api/mobile/v1/music/stream") && !path.endsWith("/api/v1/music/stream"))) return@mapNotNull null
                 MediaItem.Builder().setMediaId(track.optString("id")).setUri(url)
                     .setMediaMetadata(MediaMetadata.Builder().setTitle(track.optString("title"))
                         .setArtist(track.optString("artist")).setAlbumTitle(track.optString("album"))

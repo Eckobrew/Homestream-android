@@ -310,7 +310,9 @@ class MainActivity : AppCompatActivity() {
                 }
                 work?.cancel(); searchJob?.cancel(); categoryJob?.cancel(); heroRotationJob?.cancel()
                 trailerView?.onPause()
-                stopService(Intent(this@MainActivity, MusicService::class.java))
+                if (e is HomeStreamApi.ResponseException && e.statusCode in listOf(401, 403)) {
+                    stopService(Intent(this@MainActivity, MusicService::class.java))
+                }
                 policyReady = false; sceneHost = null; setContentView(blocked)
             }
         }
@@ -3203,13 +3205,21 @@ class MainActivity : AppCompatActivity() {
 
     private fun startMusicTracks(tracks: List<MusicTrack>, album: MusicAlbum, index: Int) {
         if (settings.isKids) return
+        requestNotificationPermissionIfNeeded()
         val payload = org.json.JSONArray().apply {
             tracks.forEach { put(JSONObject(it.json.toString()).put("coverUrl", it.json.optString("coverUrl").ifBlank { album.json.optString("coverUrl") })) }
         }
         castContext(this)?.sessionManager?.currentCastSession?.remoteMediaClient?.stop()
-        androidx.core.content.ContextCompat.startForegroundService(this,
-            Intent(this, MusicService::class.java).putExtra("tracks", payload.toString()).putExtra("index", index))
+        startService(Intent(this, MusicService::class.java).putExtra("tracks", payload.toString()).putExtra("index", index))
         musicControls()
+    }
+
+    private fun requestNotificationPermissionIfNeeded() {
+        if (!isTelevision() && android.os.Build.VERSION.SDK_INT >= 33) {
+            if (androidx.core.content.ContextCompat.checkSelfPermission(this, android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                runCatching { requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 1001) }
+            }
+        }
     }
 
     private fun musicControls() {
@@ -3505,6 +3515,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun playPlaylist(tracks: List<MusicPlaylistTrack>, defaultCover: String?, startIndex: Int = 0) {
         if (settings.isKids) return
+        requestNotificationPermissionIfNeeded()
         val readyTracks = tracks.filter { it.isReady }
         if (readyTracks.isEmpty()) {
             toast("No downloaded tracks ready to play yet")
@@ -3529,8 +3540,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
         castContext(this)?.sessionManager?.currentCastSession?.remoteMediaClient?.stop()
-        androidx.core.content.ContextCompat.startForegroundService(this,
-            Intent(this, MusicService::class.java).putExtra("tracks", payload.toString()).putExtra("index", targetIndex))
+        startService(Intent(this, MusicService::class.java).putExtra("tracks", payload.toString()).putExtra("index", targetIndex))
         musicControls()
     }
 

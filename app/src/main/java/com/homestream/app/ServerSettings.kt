@@ -82,11 +82,13 @@ class ServerSettings(context: Context, private val keyProvider: (() -> SecretKey
         val rating = if (profile?.optBoolean("isKids") == true) profile.optString("kidsRating") else ""
         val kids = profile?.optBoolean("isKids") == true
         val admin = canManage ?: (profile == null || (profile.optBoolean("isAdministrator", true) && !kids))
-        val changed = this.profile != id || policyRevision != revision || kidsRating != rating || isKids != kids || isAdmin != admin
+        val musicStopped = this.profile != id || policyRevision != revision || isKids != kids || kids
+        val changed = musicStopped || kidsRating != rating || isAdmin != admin
         prefs.edit().putString("profile", id).putString("profileName", name.ifBlank { "Nathan" })
             .putString("policyRevision", revision).putString("kidsRating", rating)
             .putBoolean("isKids", kids).putBoolean("isAdmin", admin).apply()
-        if (changed) { appContext.stopService(android.content.Intent(appContext, MusicService::class.java)); BrowseCache.clear(); WatchNext.refresh(appContext) }
+        if (musicStopped) appContext.stopService(android.content.Intent(appContext, MusicService::class.java))
+        if (changed) { BrowseCache.clear(); WatchNext.refresh(appContext) }
     }
 
     private fun key(): SecretKey {

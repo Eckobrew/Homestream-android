@@ -60,6 +60,7 @@ class BookReaderActivity : AppCompatActivity() {
 
     private lateinit var pageSheet: LinearLayout
     private lateinit var stage: FrameLayout
+    private lateinit var curlOverlay: View
     private lateinit var folioLeftLabel: TextView
     private lateinit var folioRightLabel: TextView
     private var isAnimatingTurn = false
@@ -86,6 +87,10 @@ class BookReaderActivity : AppCompatActivity() {
     private val PAPER_EDGE = 0xFFDFD3BE.toInt()
     private val INK_BROWN = 0xFF231C14.toInt()
     private val MUTED_SERIF = 0xFF7B6A55.toInt()
+    private lateinit var pageGestureDetector: GestureDetector
+    private var touchDownX = 0f
+    private var touchDownY = 0f
+    private var touchDownTime = 0L
 
     private fun dp(v: Int): Int =
         TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v.toFloat(), resources.displayMetrics).toInt()
@@ -94,6 +99,7 @@ class BookReaderActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         settings = ServerSettings(this)
         api = HomeStreamApi(settings)
+        pageGestureDetector = buildPageGestureDetector()
 
         bookId = intent.getStringExtra("bookId").orEmpty()
         bookTitle = intent.getStringExtra("title").orEmpty().ifBlank { "Book" }
@@ -101,47 +107,58 @@ class BookReaderActivity : AppCompatActivity() {
         bookFormat = intent.getStringExtra("format").orEmpty().lowercase().ifBlank { "epub" }
         initialLocation = intent.getStringExtra("location").orEmpty()
 
+        // Outer mahogany leather cover with gold embossed border
         val outerBinding = FrameLayout(this).apply {
             background = GradientDrawable(
                 GradientDrawable.Orientation.LEFT_RIGHT,
-                intArrayOf(0xFF3C261A.toInt(), LEATHER_BG, 0xFF2A1A11.toInt())
+                intArrayOf(0xFF42281A.toInt(), 0xFF291810.toInt(), 0xFF362015.toInt())
             )
-            setPadding(dp(10), dp(12), dp(10), dp(12))
+            setPadding(dp(14), dp(14), dp(14), dp(14))
         }
 
-        // Stacked paper edge border
+        val leatherCoverFrame = FrameLayout(this).apply {
+            background = GradientDrawable().apply {
+                orientation = GradientDrawable.Orientation.TL_BR
+                colors = intArrayOf(0xFF4A2C1D.toInt(), 0xFF2B1810.toInt(), 0xFF3D2316.toInt())
+                cornerRadius = dp(14).toFloat()
+                setStroke(dp(2), 0xFFB8925A.toInt()) // Gold-leaf embossed cover trim
+            }
+            setPadding(dp(8), dp(8), dp(12), dp(10))
+        }
+
+        // Stacked paper block (visible paper stack thickness on right and bottom edges)
         val paperStack = FrameLayout(this).apply {
             background = GradientDrawable().apply {
                 orientation = GradientDrawable.Orientation.LEFT_RIGHT
-                colors = intArrayOf(0xFF937B60.toInt(), PAPER_EDGE, 0xFFC0AC90.toInt(), PAPER_EDGE)
-                cornerRadius = dp(10).toFloat()
-                setStroke(dp(1), 0xFF4E3020.toInt())
+                colors = intArrayOf(0xFF9C8468.toInt(), PAPER_EDGE, 0xFFCDB99D.toInt(), 0xFFE6DBC8.toInt())
+                cornerRadius = dp(9).toFloat()
+                setStroke(dp(2), 0xFF6B4E35.toInt())
             }
-            setPadding(dp(6), dp(4), dp(6), dp(5))
+            setPadding(dp(4), dp(3), dp(9), dp(7))
         }
 
-        // Actual turning book page sheet
+        // Actual turning book page sheet with uniform cream paper
         pageSheet = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             background = GradientDrawable().apply {
-                orientation = GradientDrawable.Orientation.LEFT_RIGHT
-                colors = intArrayOf(0xFFBCAB90.toInt(), PAPER_CREAM, PAPER_CREAM, PAPER_CREAM)
-                cornerRadius = dp(8).toFloat()
-                setStroke(dp(1), PAPER_EDGE)
+                setColor(PAPER_CREAM)
+                cornerRadius = dp(6).toFloat()
+                setStroke(dp(1), 0xFFC8B89E.toInt())
             }
-            elevation = dp(8).toFloat()
+            elevation = dp(10).toFloat()
             cameraDistance = 16000f * resources.displayMetrics.density
         }
 
-        // Running book header inside top paper margin
+        // Running book header inside top paper margin with decorative rule
         val runningHeader = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(22), dp(12), dp(22), dp(4))
+            setPadding(dp(20), dp(12), dp(20), dp(6))
         }
         runningHeader.addView(TextView(this).apply {
-            text = bookAuthor.ifBlank { bookTitle }
-            textSize = 10.5f
+            text = bookAuthor.ifBlank { bookTitle }.uppercase()
+            textSize = 10f
+            letterSpacing = 0.08f
             typeface = Typeface.create(Typeface.SERIF, Typeface.ITALIC)
             setTextColor(MUTED_SERIF)
             maxLines = 1
@@ -151,7 +168,7 @@ class BookReaderActivity : AppCompatActivity() {
         runningHeader.addView(TextView(this).apply {
             text = bookTitle
             textSize = 10.5f
-            typeface = Typeface.SERIF
+            typeface = Typeface.create(Typeface.SERIF, Typeface.BOLD)
             setTextColor(MUTED_SERIF)
             gravity = Gravity.END
             maxLines = 1
@@ -159,10 +176,14 @@ class BookReaderActivity : AppCompatActivity() {
             layoutParams = LinearLayout.LayoutParams(0, -2, 1f)
         })
         pageSheet.addView(runningHeader, LinearLayout.LayoutParams(-1, -2))
+        // Subtle ink rule under running header
+        pageSheet.addView(View(this).apply {
+            setBackgroundColor(0x337B6A55)
+        }, LinearLayout.LayoutParams(-1, dp(1)).apply { setMargins(dp(20), 0, dp(20), dp(4)) })
 
         // Main 1-page viewport
         stage = FrameLayout(this)
-        stage.setPadding(dp(16), 0, dp(10), 0)
+        stage.setPadding(dp(12), dp(2), dp(12), dp(2))
         stage.addOnLayoutChangeListener { _, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom ->
             if (right - left != oldRight - oldLeft || bottom - top != oldBottom - oldTop) {
                 webView?.post { applyEpubPagination() }
@@ -170,11 +191,16 @@ class BookReaderActivity : AppCompatActivity() {
         }
         pageSheet.addView(stage, LinearLayout.LayoutParams(-1, 0, 1f))
 
+        // Subtle ink rule above running footer
+        pageSheet.addView(View(this).apply {
+            setBackgroundColor(0x337B6A55)
+        }, LinearLayout.LayoutParams(-1, dp(1)).apply { setMargins(dp(20), dp(4), dp(20), 0) })
+
         // Printed book folio footer inside bottom paper margin
         val runningFooter = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(22), dp(4), dp(22), dp(12))
+            setPadding(dp(20), dp(6), dp(20), dp(12))
         }
         folioLeftLabel = TextView(this).apply {
             text = ""
@@ -195,16 +221,68 @@ class BookReaderActivity : AppCompatActivity() {
         runningFooter.addView(folioRightLabel)
         pageSheet.addView(runningFooter, LinearLayout.LayoutParams(-1, -2))
 
+        // Classic iBooks-style curling page fold & shadow overlay
+        curlOverlay = View(this).apply {
+            visibility = View.GONE
+            elevation = dp(16).toFloat()
+            background = GradientDrawable(
+                GradientDrawable.Orientation.LEFT_RIGHT,
+                intArrayOf(
+                    0x00000000,
+                    0x441F130B,
+                    0xFFEFE5D0.toInt(),
+                    0xFFFDF9F0.toInt(),
+                    0xFFE3D3B8.toInt(),
+                    0x381A1008,
+                    0x00000000
+                )
+            )
+        }
+
         paperStack.addView(pageSheet, FrameLayout.LayoutParams(-1, -1))
-        outerBinding.addView(paperStack, FrameLayout.LayoutParams(-1, -1))
+        paperStack.addView(curlOverlay, FrameLayout.LayoutParams(-1, -1))
+        leatherCoverFrame.addView(paperStack, FrameLayout.LayoutParams(-1, -1))
+        outerBinding.addView(leatherCoverFrame, FrameLayout.LayoutParams(-1, -1))
 
         ViewCompat.setOnApplyWindowInsetsListener(outerBinding) { view, insets ->
             val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
-            view.setPadding(bars.left + dp(10), bars.top + dp(12), bars.right + dp(10), bars.bottom + dp(12))
+            view.setPadding(bars.left + dp(12), bars.top + dp(10), bars.right + dp(12), bars.bottom + dp(10))
             insets
         }
         setContentView(outerBinding)
         loadBook()
+    }
+
+    override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+        if (pageGestureDetector.onTouchEvent(ev)) {
+            return true
+        }
+        when (ev.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                touchDownX = ev.rawX
+                touchDownY = ev.rawY
+                touchDownTime = System.currentTimeMillis()
+            }
+            MotionEvent.ACTION_UP -> {
+                val dx = ev.rawX - touchDownX
+                val dy = ev.rawY - touchDownY
+                val dt = System.currentTimeMillis() - touchDownTime
+                val w = resources.displayMetrics.widthPixels.takeIf { it > 0 } ?: 1080
+                if (kotlin.math.abs(dx) > dp(36) && kotlin.math.abs(dx) > kotlin.math.abs(dy) * 1.2f && dt < 700) {
+                    if (dx < 0) nextPage() else prevPage()
+                    return true
+                } else if (kotlin.math.abs(dx) < dp(14) && kotlin.math.abs(dy) < dp(14) && dt < 350) {
+                    if (ev.rawX < w * 0.35f) {
+                        prevPage()
+                        return true
+                    } else if (ev.rawX > w * 0.65f) {
+                        nextPage()
+                        return true
+                    }
+                }
+            }
+        }
+        return super.dispatchTouchEvent(ev)
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
@@ -229,20 +307,38 @@ class BookReaderActivity : AppCompatActivity() {
         }
         isAnimatingTurn = true
         val width = pageSheet.width.takeIf { it > 0 }?.toFloat() ?: 1080f
-        pageSheet.pivotX = if (forward) 0f else width
+
+        // Classic iBooks curling fold sweeping across the page from edge to spine
+        curlOverlay.visibility = View.VISIBLE
+        curlOverlay.alpha = 0f
+        curlOverlay.scaleX = 0.55f
+        curlOverlay.rotation = if (forward) -4f else 4f
+        curlOverlay.translationX = if (forward) width * 0.65f else -width * 0.65f
+
+        pageSheet.pivotX = 0f
         pageSheet.pivotY = pageSheet.height / 2f
 
-        val edgeAngle = if (forward) -88f else 88f
+        curlOverlay.animate()
+            .translationX(if (forward) -width * 0.7f else width * 0.7f)
+            .alpha(1f)
+            .setDuration(420)
+            .setInterpolator(DecelerateInterpolator())
+            .withEndAction {
+                curlOverlay.visibility = View.GONE
+            }
+            .start()
+
         pageSheet.animate()
-            .rotationY(edgeAngle)
-            .setDuration(200)
+            .rotationY(if (forward) -22f else 18f)
+            .scaleX(0.985f)
+            .setDuration(180)
             .setInterpolator(AccelerateInterpolator())
             .withEndAction {
                 onMidTurn()
-                pageSheet.pivotX = if (forward) width else 0f
-                pageSheet.rotationY = -edgeAngle
+                pageSheet.rotationY = if (forward) 14f else -14f
                 pageSheet.animate()
                     .rotationY(0f)
+                    .scaleX(1f)
                     .setDuration(240)
                     .setInterpolator(DecelerateInterpolator())
                     .withEndAction {
@@ -354,8 +450,6 @@ class BookReaderActivity : AppCompatActivity() {
             scaleType = ImageView.ScaleType.FIT_CENTER
             setBackgroundColor(PAPER_CREAM)
         }
-        val detector = buildPageGestureDetector()
-        img.setOnTouchListener { _, ev -> detector.onTouchEvent(ev); true }
 
         pdfImageView = img
         stage.removeAllViews()
@@ -445,9 +539,6 @@ class BookReaderActivity : AppCompatActivity() {
                 }
             }
         }
-
-        val detector = buildPageGestureDetector()
-        wv.setOnTouchListener { _, ev -> detector.onTouchEvent(ev); true }
 
         webView = wv
         stage.removeAllViews()
@@ -560,7 +651,7 @@ class BookReaderActivity : AppCompatActivity() {
                     'html, body { margin: 0 !important; padding: 0 !important; background: #f7f1e3 !important; color: #231c14 !important; ' +
                     'height: ' + h + 'px !important; overflow: hidden !important; font-family: Georgia, "Noto Serif", serif !important; ' +
                     'font-size: ${fontSizePercent}% !important; line-height: 1.72 !important; text-align: justify !important; } ' +
-                    'body { background: white !important; mix-blend-mode: multiply; column-width: ' + lineWidth + 'px !important; column-gap: ' + (margin * 2) + 'px !important; column-fill: auto !important; ' +
+                    'body { background: #f7f1e3 !important; column-width: ' + lineWidth + 'px !important; column-gap: ' + (margin * 2) + 'px !important; column-fill: auto !important; ' +
                     'box-sizing: border-box !important; padding: 12px ' + margin + 'px !important; overflow-wrap: anywhere; } ' +
                     'p { text-indent: 1.35em !important; margin-top: 0 !important; margin-bottom: 0.4em !important; } ' +
                     'h1, h2, h3, h4 { color: #1b140e !important; text-align: center !important; } ' +
