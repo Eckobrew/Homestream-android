@@ -1,21 +1,30 @@
 package com.homestream.app
 
 import android.annotation.SuppressLint
+import android.animation.Animator
+import android.animation.AnimatorListenerAdapter
+import android.animation.ValueAnimator
+import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.LightingColorFilter
+import android.graphics.LinearGradient
+import android.graphics.Matrix
+import android.graphics.Paint
+import android.graphics.Path
+import android.graphics.Shader
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.graphics.pdf.PdfRenderer
 import android.os.Bundle
 import android.os.ParcelFileDescriptor
 import android.util.TypedValue
-import android.view.GestureDetector
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.MotionEvent
+import android.view.VelocityTracker
 import android.view.View
-import android.view.animation.AccelerateInterpolator
 import android.view.animation.DecelerateInterpolator
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
@@ -60,7 +69,7 @@ class BookReaderActivity : AppCompatActivity() {
 
     private lateinit var pageSheet: LinearLayout
     private lateinit var stage: FrameLayout
-    private lateinit var curlOverlay: View
+    private lateinit var curlView: InteractivePageCurlView
     private lateinit var folioLeftLabel: TextView
     private lateinit var folioRightLabel: TextView
     private var isAnimatingTurn = false
@@ -87,10 +96,12 @@ class BookReaderActivity : AppCompatActivity() {
     private val PAPER_EDGE = 0xFFDFD3BE.toInt()
     private val INK_BROWN = 0xFF231C14.toInt()
     private val MUTED_SERIF = 0xFF7B6A55.toInt()
-    private lateinit var pageGestureDetector: GestureDetector
     private var touchDownX = 0f
     private var touchDownY = 0f
     private var touchDownTime = 0L
+    private var isDraggingCurl = false
+    private var dragForward = true
+    private var velocityTracker: VelocityTracker? = null
 
     private fun dp(v: Int): Int =
         TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v.toFloat(), resources.displayMetrics).toInt()
@@ -99,7 +110,6 @@ class BookReaderActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         settings = ServerSettings(this)
         api = HomeStreamApi(settings)
-        pageGestureDetector = buildPageGestureDetector()
 
         bookId = intent.getStringExtra("bookId").orEmpty()
         bookTitle = intent.getStringExtra("title").orEmpty().ifBlank { "Book" }
@@ -221,26 +231,14 @@ class BookReaderActivity : AppCompatActivity() {
         runningFooter.addView(folioRightLabel)
         pageSheet.addView(runningFooter, LinearLayout.LayoutParams(-1, -2))
 
-        // Classic iBooks-style curling page fold & shadow overlay
-        curlOverlay = View(this).apply {
+        // Google Play Books / iBooks interactive finger-tracked page curl canvas
+        curlView = InteractivePageCurlView(this).apply {
             visibility = View.GONE
-            elevation = dp(16).toFloat()
-            background = GradientDrawable(
-                GradientDrawable.Orientation.LEFT_RIGHT,
-                intArrayOf(
-                    0x00000000,
-                    0x441F130B,
-                    0xFFEFE5D0.toInt(),
-                    0xFFFDF9F0.toInt(),
-                    0xFFE3D3B8.toInt(),
-                    0x381A1008,
-                    0x00000000
-                )
-            )
+            elevation = dp(18).toFloat()
         }
 
         paperStack.addView(pageSheet, FrameLayout.LayoutParams(-1, -1))
-        paperStack.addView(curlOverlay, FrameLayout.LayoutParams(-1, -1))
+        paperStack.addView(curlView, FrameLayout.LayoutParams(-1, -1))
         leatherCoverFrame.addView(paperStack, FrameLayout.LayoutParams(-1, -1))
         outerBinding.addView(leatherCoverFrame, FrameLayout.LayoutParams(-1, -1))
 
@@ -253,25 +251,147 @@ class BookReaderActivity : AppCompatActivity() {
         loadBook()
     }
 
-    override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
-        if (pageGestureDetector.onTouchEvent(ev)) {
-            return true
+    private fun canTurnNext(): Boolean =
+        if (bookFormat == "pdf") pdfPageIndex + 1 < pdfPageCount
+        else epubPageInChapter + 1 < epubPagesInChapter || epubChapterIndex + 1 < epubSpine.size
+
+    private fun canTurnPrev(): Boolean =
+        if (bookFormat == "pdf") pdfPageIndex > 0
+        else epubPageInChapter > 0 || epubChapterIndex > 0
+
+    private fun advancePageImmediate(forward: Boolean) {
+        if (bookFormat == "pdf") {
+            if (forward && pdfPageIndex + 1 < pdfPageCount) {
+                pdfPageIndex++
+                renderPdfSinglePage()
+            } else if (!forward && pdfPageIndex > 0) {
+                pdfPageIndex--
+                renderPdfSinglePage()
+            }
+        } else {
+            if (forward) {
+                if (epubPageInChapter + 1 < epubPagesInChapter) {
+                    epubPageInChapter++
+                    scrollEpubToPage()
+                } else if (epubChapterIndex + 1 < epubSpine.size) {
+                    epubChapterIndex++
+                    epubPageInChapter = 0
+                    loadEpubChapter()
+                }
+            } else {
+                if (epubPageInChapter > 0) {
+                    epubPageInChapter--
+                    scrollEpubToPage()
+                } else if (epubChapterIndex > 0) {
+                    epubChapterIndex--
+                    epubPageInChapter = 9999
+                    loadEpubChapter()
+                }
+            }
         }
+    }
+
+    private fun captureSheetBitmap(): Bitmap? {
+        val w = pageSheet.width
+        val h = pageSheet.height
+        if (w <= 0 || h <= 0) return null
+        return runCatching {
+            val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+            val canvas = Canvas(bmp)
+            pageSheet.draw(canvas)
+            bmp
+        }.getOrNull()
+    }
+
+    private fun screenXToProgress(rawX: Float, forward: Boolean): Float {
+        val loc = IntArray(2)
+        pageSheet.getLocationOnScreen(loc)
+        val w = pageSheet.width.coerceAtLeast(1).toFloat()
+        val localX = (rawX - loc[0]).coerceIn(0f, w)
+        return if (forward) ((w - localX) / w).coerceIn(0.01f, 0.99f)
+        else (localX / w).coerceIn(0.01f, 0.99f)
+    }
+
+    override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+        if (isAnimatingTurn) return true
+
         when (ev.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 touchDownX = ev.rawX
                 touchDownY = ev.rawY
                 touchDownTime = System.currentTimeMillis()
+                isDraggingCurl = false
+                velocityTracker?.recycle()
+                velocityTracker = VelocityTracker.obtain().apply { addMovement(ev) }
             }
-            MotionEvent.ACTION_UP -> {
+            MotionEvent.ACTION_MOVE -> {
+                velocityTracker?.addMovement(ev)
+                val dx = ev.rawX - touchDownX
+                val dy = ev.rawY - touchDownY
+                if (!isDraggingCurl) {
+                    if (kotlin.math.abs(dx) > dp(10) && kotlin.math.abs(dx) > kotlin.math.abs(dy)) {
+                        val wantForward = dx < 0
+                        if ((wantForward && canTurnNext()) || (!wantForward && canTurnPrev())) {
+                            val snapshot = captureSheetBitmap()
+                            if (snapshot != null) {
+                                isDraggingCurl = true
+                                dragForward = wantForward
+                                if (dragForward) {
+                                    // Advance underlying page now so curling back top page reveals the next page underneath!
+                                    advancePageImmediate(true)
+                                }
+                                curlView.startInteractiveCurl(snapshot, dragForward, screenXToProgress(ev.rawX, dragForward))
+                            }
+                        }
+                    }
+                } else {
+                    curlView.updateCurlProgress(screenXToProgress(ev.rawX, dragForward))
+                    return true
+                }
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                velocityTracker?.addMovement(ev)
+                velocityTracker?.computeCurrentVelocity(1000)
+                val vx = velocityTracker?.xVelocity ?: 0f
+                velocityTracker?.recycle()
+                velocityTracker = null
+
+                if (isDraggingCurl) {
+                    isDraggingCurl = false
+                    val progress = curlView.curlProgress
+                    val commit = if (ev.actionMasked == MotionEvent.ACTION_CANCEL) {
+                        false
+                    } else if (dragForward) {
+                        progress > 0.22f || vx < -350f
+                    } else {
+                        progress > 0.22f || vx > 350f
+                    }
+                    isAnimatingTurn = true
+                    if (dragForward) {
+                        curlView.SettleCurl(targetProgress = if (commit) 1f else 0f) {
+                            if (!commit) {
+                                // User cancelled turning forward -> restore previous page
+                                advancePageImmediate(false)
+                            }
+                            isAnimatingTurn = false
+                        }
+                    } else {
+                        if (commit) {
+                            // Load previous page underneath as the curled sheet settles flat
+                            advancePageImmediate(false)
+                        }
+                        curlView.SettleCurl(targetProgress = if (commit) 1f else 0f) {
+                            isAnimatingTurn = false
+                        }
+                    }
+                    return true
+                }
+
                 val dx = ev.rawX - touchDownX
                 val dy = ev.rawY - touchDownY
                 val dt = System.currentTimeMillis() - touchDownTime
                 val w = resources.displayMetrics.widthPixels.takeIf { it > 0 } ?: 1080
-                if (kotlin.math.abs(dx) > dp(36) && kotlin.math.abs(dx) > kotlin.math.abs(dy) * 1.2f && dt < 700) {
-                    if (dx < 0) nextPage() else prevPage()
-                    return true
-                } else if (kotlin.math.abs(dx) < dp(14) && kotlin.math.abs(dy) < dp(14) && dt < 350) {
+                if (kotlin.math.abs(dx) < dp(14) && kotlin.math.abs(dy) < dp(14) && dt < 380) {
                     if (ev.rawX < w * 0.35f) {
                         prevPage()
                         return true
@@ -301,81 +421,21 @@ class BookReaderActivity : AppCompatActivity() {
 
     private fun animatePageTurn(forward: Boolean, onMidTurn: () -> Unit) {
         if (isAnimatingTurn) return
-        if (!android.animation.ValueAnimator.areAnimatorsEnabled()) {
+        if (!ValueAnimator.areAnimatorsEnabled()) {
+            onMidTurn()
+            return
+        }
+        val snapshot = captureSheetBitmap()
+        if (snapshot == null) {
             onMidTurn()
             return
         }
         isAnimatingTurn = true
-        val width = pageSheet.width.takeIf { it > 0 }?.toFloat() ?: 1080f
-
-        // Classic iBooks curling fold sweeping across the page from edge to spine
-        curlOverlay.visibility = View.VISIBLE
-        curlOverlay.alpha = 0f
-        curlOverlay.scaleX = 0.55f
-        curlOverlay.rotation = if (forward) -4f else 4f
-        curlOverlay.translationX = if (forward) width * 0.65f else -width * 0.65f
-
-        pageSheet.pivotX = 0f
-        pageSheet.pivotY = pageSheet.height / 2f
-
-        curlOverlay.animate()
-            .translationX(if (forward) -width * 0.7f else width * 0.7f)
-            .alpha(1f)
-            .setDuration(420)
-            .setInterpolator(DecelerateInterpolator())
-            .withEndAction {
-                curlOverlay.visibility = View.GONE
-            }
-            .start()
-
-        pageSheet.animate()
-            .rotationY(if (forward) -22f else 18f)
-            .scaleX(0.985f)
-            .setDuration(180)
-            .setInterpolator(AccelerateInterpolator())
-            .withEndAction {
-                onMidTurn()
-                pageSheet.rotationY = if (forward) 14f else -14f
-                pageSheet.animate()
-                    .rotationY(0f)
-                    .scaleX(1f)
-                    .setDuration(240)
-                    .setInterpolator(DecelerateInterpolator())
-                    .withEndAction {
-                        isAnimatingTurn = false
-                    }
-                    .start()
-            }
-            .start()
-    }
-
-    private fun buildPageGestureDetector(): GestureDetector {
-        return GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
-            override fun onDown(e: MotionEvent): Boolean = true
-
-            override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
-                val w = stage.width.takeIf { it > 0 } ?: resources.displayMetrics.widthPixels
-                if (e.x < w * 0.30f) {
-                    prevPage()
-                    return true
-                } else if (e.x > w * 0.70f) {
-                    nextPage()
-                    return true
-                }
-                return false
-            }
-
-            override fun onFling(e1: MotionEvent?, e2: MotionEvent, vx: Float, vy: Float): Boolean {
-                if (e1 == null) return false
-                val dx = e2.x - e1.x
-                val dy = e2.y - e1.y
-                if (kotlin.math.abs(dx) > kotlin.math.abs(dy) && kotlin.math.abs(dx) > dp(42) && kotlin.math.abs(vx) > 120) {
-                    if (dx < 0) nextPage() else prevPage()
-                    return true
-                }
-                return false
-            }
-        })
+        onMidTurn()
+        curlView.startInteractiveCurl(snapshot, forward, if (forward) 0.02f else 0.02f)
+        curlView.SettleCurl(targetProgress = 1f, durationMs = 420L) {
+            isAnimatingTurn = false
+        }
     }
 
     private fun loadBook() {
@@ -766,8 +826,193 @@ class BookReaderActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        velocityTracker?.recycle()
+        velocityTracker = null
+        curlView.clearBitmap()
         runCatching { webView?.destroy() }
         runCatching { pdfRenderer?.close() }
         runCatching { pdfDescriptor?.close() }
+    }
+}
+
+/**
+ * Interactive Google Play Books / iBooks page-curl overlay view that tracks the user's
+ * finger position in real time and renders the peeled page, the mirrored back-of-page curl,
+ * and cylindrical crease / cast shadows over the revealed page underneath.
+ */
+class InteractivePageCurlView(context: Context) : View(context) {
+    private var snapshot: Bitmap? = null
+    private var isForward: Boolean = true
+    var curlProgress: Float = 0f
+        private set
+    private var animator: ValueAnimator? = null
+
+    private val bitmapPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+    private val backTintPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = 0xD8EFE4CE.toInt()
+    }
+    private val shadowPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val flipMatrix = Matrix()
+    private val clipPath = Path()
+
+    fun startInteractiveCurl(bmp: Bitmap, forward: Boolean, initialProgress: Float) {
+        animator?.cancel()
+        snapshot?.recycle()
+        snapshot = bmp
+        isForward = forward
+        curlProgress = initialProgress.coerceIn(0.01f, 0.99f)
+        visibility = VISIBLE
+        invalidate()
+    }
+
+    fun updateCurlProgress(progress: Float) {
+        curlProgress = progress.coerceIn(0.01f, 0.99f)
+        invalidate()
+    }
+
+    fun SettleCurl(targetProgress: Float, durationMs: Long = 280L, onFinished: () -> Unit) {
+        animator?.cancel()
+        val start = curlProgress
+        val dist = kotlin.math.abs(targetProgress - start)
+        val dur = (durationMs * dist.coerceIn(0.25f, 1f)).toLong()
+        animator = ValueAnimator.ofFloat(start, targetProgress).apply {
+            duration = dur
+            interpolator = DecelerateInterpolator()
+            addUpdateListener { anim ->
+                curlProgress = anim.animatedValue as Float
+                invalidate()
+            }
+            addListener(object : AnimatorListenerAdapter() {
+                override fun onAnimationEnd(animation: Animator) {
+                    visibility = GONE
+                    clearBitmap()
+                    onFinished()
+                }
+            })
+            start()
+        }
+    }
+
+    fun clearBitmap() {
+        animator?.cancel()
+        animator = null
+        snapshot?.recycle()
+        snapshot = null
+    }
+
+    override fun onDraw(canvas: Canvas) {
+        super.onDraw(canvas)
+        val bmp = snapshot ?: return
+        if (bmp.isRecycled) return
+        val w = width.toFloat()
+        val h = height.toFloat()
+        if (w <= 0f || h <= 0f) return
+
+        // For forward turn: fold moves from right (w) to left (0) as progress goes 0 -> 1.
+        // For backward turn: we are pulling the previous page from left (0) to right (w) as progress goes 0 -> 1.
+        val foldX = if (isForward) {
+            (w * (1f - curlProgress)).coerceIn(0f, w)
+        } else {
+            (w * (1f - curlProgress)).coerceIn(0f, w)
+        }
+
+        if (isForward) {
+            // 1. Draw the unpeeled left portion [0 .. foldX] of the old page on top of the new page
+            canvas.save()
+            canvas.clipRect(0f, 0f, foldX, h)
+            canvas.drawBitmap(bmp, 0f, 0f, bitmapPaint)
+            canvas.restore()
+
+            // 2. Cast shadow onto the revealed new page to the right of foldX
+            val shadowW = (w * 0.14f).coerceAtMost(w - foldX)
+            if (shadowW > 1f) {
+                shadowPaint.shader = LinearGradient(
+                    foldX, 0f, foldX + shadowW, 0f,
+                    intArrayOf(0x66160D06, 0x22160D06, 0x00000000),
+                    floatArrayOf(0f, 0.45f, 1f),
+                    Shader.TileMode.CLAMP
+                )
+                canvas.drawRect(foldX, 0f, foldX + shadowW, h, shadowPaint)
+            }
+
+            // 3. Draw the curled back-of-page flap to the left of foldX
+            val flapW = ((w - foldX) * 0.48f).coerceAtMost(foldX)
+            if (flapW > 2f) {
+                val flapLeft = foldX - flapW
+                canvas.save()
+                clipPath.reset()
+                clipPath.addRect(flapLeft, 0f, foldX, h, Path.Direction.CW)
+                canvas.clipPath(clipPath)
+
+                // Mirror the bitmap horizontally around foldX to show text through the back of the paper
+                flipMatrix.reset()
+                flipMatrix.setScale(-1f, 1f)
+                flipMatrix.postTranslate(2f * foldX - (w - foldX - flapW), 0f)
+                bitmapPaint.alpha = 70
+                canvas.drawBitmap(bmp, flipMatrix, bitmapPaint)
+                bitmapPaint.alpha = 255
+
+                // Warm cream paper back-side tint
+                canvas.drawRect(flapLeft, 0f, foldX, h, backTintPaint)
+
+                // 3D cylindrical curl highlight & crease shading across the flap
+                shadowPaint.shader = LinearGradient(
+                    flapLeft, 0f, foldX, 0f,
+                    intArrayOf(0x3823150B, 0x00FFFFFF, 0x66FFFFFF, 0x2823150B),
+                    floatArrayOf(0f, 0.25f, 0.78f, 1f),
+                    Shader.TileMode.CLAMP
+                )
+                canvas.drawRect(flapLeft, 0f, foldX, h, shadowPaint)
+                canvas.restore()
+
+                // 4. Soft drop shadow to the left of the curling flap back edge
+                val backShadowW = (flapW * 0.35f).coerceAtMost(flapLeft)
+                if (backShadowW > 1f) {
+                    shadowPaint.shader = LinearGradient(
+                        flapLeft - backShadowW, 0f, flapLeft, 0f,
+                        intArrayOf(0x00000000, 0x44160D06),
+                        null,
+                        Shader.TileMode.CLAMP
+                    )
+                    canvas.drawRect(flapLeft - backShadowW, 0f, flapLeft, h, shadowPaint)
+                }
+            }
+        } else {
+            // Backward turn: pulling the page from left to right across the current page
+            val pullX = (w * curlProgress).coerceIn(0f, w)
+            val flapW = (pullX * 0.45f).coerceAtMost(w - pullX)
+
+            // Draw the old page on the right side [pullX .. w]
+            canvas.save()
+            canvas.clipRect(pullX, 0f, w, h)
+            canvas.drawBitmap(bmp, 0f, 0f, bitmapPaint)
+            canvas.restore()
+
+            if (flapW > 2f) {
+                val flapRight = pullX + flapW
+                canvas.save()
+                canvas.clipRect(pullX, 0f, flapRight, h)
+                canvas.drawRect(pullX, 0f, flapRight, h, backTintPaint)
+                shadowPaint.shader = LinearGradient(
+                    pullX, 0f, flapRight, 0f,
+                    intArrayOf(0x2823150B, 0x66FFFFFF, 0x00FFFFFF, 0x3823150B),
+                    floatArrayOf(0f, 0.22f, 0.75f, 1f),
+                    Shader.TileMode.CLAMP
+                )
+                canvas.drawRect(pullX, 0f, flapRight, h, shadowPaint)
+                canvas.restore()
+
+                val rightShadowW = (flapW * 0.45f).coerceAtMost(w - flapRight)
+                if (rightShadowW > 1f) {
+                    shadowPaint.shader = LinearGradient(
+                        flapRight, 0f, flapRight + rightShadowW, 0f,
+                        intArrayOf(0x55160D06, 0x00000000),
+                        null,
+                        Shader.TileMode.CLAMP
+                    )
+                    canvas.drawRect(flapRight, 0f, flapRight + rightShadowW, h, shadowPaint)
+                }
+            }
+        }
     }
 }
