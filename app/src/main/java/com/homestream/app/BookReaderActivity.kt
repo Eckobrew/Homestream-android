@@ -648,18 +648,20 @@ class BookReaderActivity : AppCompatActivity() {
                     d.head.appendChild(style);
                 }
                 style.textContent =
-                    'html, body { margin: 0 !important; padding: 0 !important; background: #f7f1e3 !important; color: #231c14 !important; ' +
-                    'height: ' + h + 'px !important; overflow: hidden !important; font-family: Georgia, "Noto Serif", serif !important; ' +
-                    'font-size: ${fontSizePercent}% !important; line-height: 1.72 !important; text-align: justify !important; } ' +
-                    'body { background: #f7f1e3 !important; column-width: ' + lineWidth + 'px !important; column-gap: ' + (margin * 2) + 'px !important; column-fill: auto !important; ' +
-                    'box-sizing: border-box !important; padding: 12px ' + margin + 'px !important; overflow-wrap: anywhere; } ' +
+                    'html { margin: 0 !important; padding: 0 !important; width: ' + w + 'px !important; height: ' + h + 'px !important; overflow: hidden !important; background: #f7f1e3 !important; } ' +
+                    'body { margin: 0 !important; padding: 12px ' + margin + 'px !important; width: ' + w + 'px !important; height: ' + h + 'px !important; ' +
+                    'background: #f7f1e3 !important; color: #231c14 !important; font-family: Georgia, "Noto Serif", serif !important; ' +
+                    'font-size: ${fontSizePercent}% !important; line-height: 1.72 !important; text-align: justify !important; ' +
+                    'column-width: ' + lineWidth + 'px !important; column-gap: ' + (margin * 2) + 'px !important; column-fill: auto !important; ' +
+                    'box-sizing: border-box !important; overflow-wrap: anywhere; transition: none !important; will-change: transform; } ' +
                     'p { text-indent: 1.35em !important; margin-top: 0 !important; margin-bottom: 0.4em !important; } ' +
                     'h1, h2, h3, h4 { color: #1b140e !important; text-align: center !important; } ' +
                     'img, svg, video { max-width: 100% !important; max-height: ' + Math.max(1, h - 32) + 'px !important; height: auto !important; } ' +
                     'a { color: #7c2d12 !important; text-decoration: none !important; }';
-                var total = Math.max(1, Math.ceil(d.body.scrollWidth / w));
+                d.body.style.transform = 'translateX(0px)';
+                var total = Math.max(1, Math.ceil((d.body.scrollWidth - 4) / w));
                 var page = Math.min(total - 1, Math.max(0, $epubPageInChapter));
-                window.scrollTo(page * w, 0);
+                d.body.style.transform = 'translateX(-' + (page * w) + 'px)';
                 return page + '/' + total;
             })();
         """.trimIndent()
@@ -676,7 +678,7 @@ class BookReaderActivity : AppCompatActivity() {
     private fun scrollEpubToPage() {
         val wv = webView ?: return
         wv.evaluateJavascript(
-            "(function(){ var w = document.documentElement.clientWidth || 1; window.scrollTo(${epubPageInChapter} * w, 0); })();",
+            "(function(){ var w = document.documentElement.clientWidth || 1; document.body.style.transform = 'translateX(-' + (${epubPageInChapter} * w) + 'px)'; })();",
             null
         )
         updateEpubStatus()
