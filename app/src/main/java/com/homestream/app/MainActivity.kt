@@ -871,6 +871,22 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+        val tvSearchBtn = android.widget.ImageButton(this).apply {
+            contentDescription = "Search"
+            setImageResource(R.drawable.nav_search)
+            imageTintList = ColorStateList.valueOf(Color.WHITE)
+            setDefaultFocusHighlightEnabled(false)
+            background = android.graphics.drawable.StateListDrawable().apply {
+                addState(intArrayOf(android.R.attr.state_focused), rounded(0xFF383838.toInt(), Color.WHITE))
+                addState(intArrayOf(), rounded(0x99161616.toInt(), 0x55FFFFFF))
+            }
+            setPadding(dp(10), dp(10), dp(10), dp(10))
+            setOnClickListener { openSearch() }
+        }
+        stage.addView(tvSearchBtn, FrameLayout.LayoutParams(dp(44), dp(44), Gravity.TOP or Gravity.END).apply {
+            setMargins(dp(16), dp(16), dp(24), dp(16))
+        })
+
         mainContainer.addView(stage, LinearLayout.LayoutParams(-1, 0, 1f))
     }
 
