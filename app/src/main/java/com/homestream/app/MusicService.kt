@@ -47,6 +47,8 @@ class MusicService : MediaSessionService() {
                     playbackError = "Playback unavailable. Check your connection and try again."
                 }
                 override fun onPlaybackStateChanged(state: Int) { if (state == Player.STATE_READY) playbackError = null }
+                override fun onIsPlayingChanged(isPlaying: Boolean) { reportMusicSession(this@apply) }
+                override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) { reportMusicSession(this@apply) }
             })
         }
         activePlayer = player
@@ -54,6 +56,12 @@ class MusicService : MediaSessionService() {
             Intent(this, MusicPlayerActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
             android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT)).build()
         session?.let { addSession(it) }
+        scope.launch {
+            while (isActive) {
+                delay(5_000)
+                if (player.isPlaying) reportMusicSession(player)
+            }
+        }
         scope.launch {
             while (isActive) {
                 delay(30_000)
@@ -110,7 +118,30 @@ class MusicService : MediaSessionService() {
         return START_NOT_STICKY
     }
 
+    private fun reportMusicSession(player: ExoPlayer) {
+        val current = player.currentMediaItem ?: return
+        val meta = current.mediaMetadata
+        val title = meta.title?.toString().orEmpty()
+        if (title.isBlank()) return
+        val subtitle = listOfNotNull(meta.artist?.toString()?.takeIf { it.isNotBlank() }, meta.albumTitle?.toString()?.takeIf { it.isNotBlank() }).joinToString(" · ")
+        PlaybackSessions.reportHeartbeatAsync(
+            context = this,
+            mediaId = current.mediaId,
+            mediaType = "music",
+            title = title,
+            subtitle = subtitle,
+            artworkUrl = meta.artworkUri?.toString().orEmpty(),
+            isPlaying = player.isPlaying,
+            positionMs = player.currentPosition,
+            durationMs = player.duration.coerceAtLeast(0L),
+            canSeek = player.duration > 0L,
+            canSkipNext = player.hasNextMediaItem(),
+            canSkipPrev = player.hasPreviousMediaItem(),
+        )
+    }
+
     override fun onDestroy() {
+        PlaybackSessions.reportHeartbeatAsync(this, mediaType = "idle", isStopped = true)
         scope.cancel()
         session?.run { player.release(); release() }
         session = null; activePlayer = null; playbackError = null

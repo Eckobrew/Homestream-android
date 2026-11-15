@@ -42,5 +42,7 @@
             android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden" />
         <activity android:name=".CastControllerActivity" android:exported="false"
             android:screenOrientation="portrait" />
+        <activity android:name=".TvRemoteActivity" android:exported="false"
+            android:screenOrientation="portrait" />
     </application>
 </manifest>

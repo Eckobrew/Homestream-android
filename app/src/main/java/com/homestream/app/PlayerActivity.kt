@@ -380,6 +380,7 @@ class PlayerActivity : AppCompatActivity() {
     }
     override fun onStart() {
         super.onStart()
+        PlaybackSessions.registerVideoHandler(videoRemoteHandler)
         if (castControllerOpened) { finish(); return }
         playbackPolicy = ServerSettings(this).policyRevision
         playbackStarted = true
@@ -412,7 +413,10 @@ class PlayerActivity : AppCompatActivity() {
                         showMessage("Connect to HomeStream to confirm your profile")
                     }
                 }
-                if (prepared || remote != null) report(false)
+                if (prepared || remote != null) {
+                    report(false)
+                    if (remote == null) reportVideoSession()
+                }
             }
         }
     }
@@ -1321,7 +1325,66 @@ class PlayerActivity : AppCompatActivity() {
             enterPictureInPictureMode(android.app.PictureInPictureParams.Builder().build())
         }
     }
+    private val videoRemoteHandler: (String, Long?, Long?) -> Boolean = { type, positionMs, deltaMs ->
+        val exo = player
+        if (exo == null) false
+        else when (type) {
+            "play" -> { exo.play(); reportVideoSession(); true }
+            "pause" -> { exo.pause(); reportVideoSession(); true }
+            "togglePlayPause" -> { if (exo.isPlaying) exo.pause() else exo.play(); reportVideoSession(); true }
+            "stop" -> { finish(); true }
+            "seekTo" -> if (positionMs != null) { exo.seekTo(positionMs); reportVideoSession(); true } else false
+            "seekBy" -> if (deltaMs != null) {
+                val target = (exo.currentPosition + deltaMs).coerceAtLeast(0L)
+                exo.seekTo(if (exo.duration > 0) target.coerceAtMost(exo.duration) else target)
+                reportVideoSession()
+                true
+            } else false
+            "next" -> {
+                val next = episodes.next(currentPlaybackId)
+                if (next != null) { selectEpisode(next); true } else false
+            }
+            "previous" -> {
+                if (exo.currentPosition > 5000L) {
+                    exo.seekTo(0L); reportVideoSession(); true
+                } else {
+                    val prev = episodes.previous(currentPlaybackId)
+                    if (prev != null) { selectEpisode(prev); true } else { exo.seekTo(0L); true }
+                }
+            }
+            else -> false
+        }
+    }
+
+    private fun reportVideoSession() {
+        val exo = player ?: return
+        val currentEp = episodes.items.firstOrNull { it.playbackId == currentPlaybackId }
+        val epLabel = currentEp?.let { ep ->
+            val s = ep.json.optInt("seasonNumber", 1)
+            val e = ep.json.optInt("episodeNumber", 1)
+            "S$s E$e${if (ep.title.isNotBlank()) " · ${ep.title}" else ""}"
+        }.orEmpty()
+        val seriesTitle = media.json.optString("seriesName").ifBlank { media.title }
+        val art = media.backdrop.ifBlank { media.poster }
+        PlaybackSessions.reportHeartbeatAsync(
+            context = this,
+            mediaId = currentPlaybackId.ifBlank { media.id },
+            mediaType = "video",
+            title = seriesTitle,
+            subtitle = epLabel.ifBlank { media.metadata },
+            artworkUrl = if (art.isNotBlank()) api.absolute(art) else "",
+            isPlaying = exo.isPlaying,
+            positionMs = exo.currentPosition,
+            durationMs = exo.duration.coerceAtLeast(knownDurationMs).coerceAtLeast(0L),
+            canSeek = (exo.duration > 0L || knownDurationMs > 0L),
+            canSkipNext = episodes.next(currentPlaybackId) != null,
+            canSkipPrev = episodes.previous(currentPlaybackId) != null,
+        )
+    }
+
     override fun onStop() {
+        PlaybackSessions.clearVideoHandler(videoRemoteHandler)
+        PlaybackSessions.reportHeartbeatAsync(this, mediaType = "idle", isStopped = true)
         // Keep episode autoplay and receiver decode fallback alive behind the
         // SDK controller. Session progress itself is owned by the Application.
         if (castControllerOpened && remote != null && !isFinishing) {

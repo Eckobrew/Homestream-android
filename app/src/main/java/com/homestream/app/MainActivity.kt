@@ -62,6 +62,16 @@ class MainActivity : AppCompatActivity() {
     private var generation = 0
     private var policyMonitor: Job? = null
     private var policyCheck: Job? = null
+    private var sessionsJob: Job? = null
+    private var nowPlayingBar: LinearLayout? = null
+    private var nowPlayingArt: ImageView? = null
+    private var nowPlayingTitle: TextView? = null
+    private var nowPlayingSubtitle: TextView? = null
+    private var nowPlayingPlayBtn: ImageButton? = null
+    private var nowPlayingNextBtn: ImageButton? = null
+    private var nowPlayingRemoteBtn: ImageButton? = null
+    private var latestSnapshot = SessionsSnapshot(false, emptyList(), emptyList())
+    private var activeBarSession: NetworkSession? = null
     private var policyReady = false
     private var playbackWasLaunched = false
     private var lastDetails: Media? = null
@@ -239,6 +249,8 @@ class MainActivity : AppCompatActivity() {
         if (isTelevision()) (application as HomeStreamApplication).playbackReports.launch {
             runCatching { WatchNext.sync(applicationContext) }
                 .onFailure { android.util.Log.w("HomeStreamWatchNext", "Launcher sync unavailable: ${it.javaClass.simpleName}") }
+        } else {
+            startNowPlayingMonitor()
         }
         castContext(this)?.sessionManager?.addSessionManagerListener(castSessionListener, CastSession::class.java)
         if (screen == "home" && heroItems.size > 1) setupDynamicHero(heroItems)
@@ -248,6 +260,7 @@ class MainActivity : AppCompatActivity() {
     override fun onStop() {
         hubJob?.cancel(); hubSearch?.cancel()
         policyMonitor?.cancel(); policyCheck?.cancel()
+        sessionsJob?.cancel()
         trailerView?.onPause()
         heroRotationJob?.cancel()
         super.onStop()
@@ -414,6 +427,16 @@ class MainActivity : AppCompatActivity() {
         mainContainer.addView(browseViewport(),
             LinearLayout.LayoutParams(-1, 0, 1f))
 
+        // Unified Now-Playing bar (local music or same-profile LAN playback + TV remote access),
+        // docked above the floating navigation pill so it never blocks the pill.
+        val miniBar = createNowPlayingBar()
+        nowPlayingBar = miniBar
+        mainContainer.addView(miniBar, LinearLayout.LayoutParams(-1, -2).apply {
+            marginStart = dp(12)
+            marginEnd = dp(12)
+            bottomMargin = dp(82)
+        })
+
         // Cast mini controller if cast is active - docked above floating navigation pill
         if (castContext(this) != null) {
             val miniController = castMiniControllerView(mainContainer)
@@ -429,6 +452,202 @@ class MainActivity : AppCompatActivity() {
             marginEnd = dp(12)
             bottomMargin = dp(14)
         })
+    }
+
+    private fun createNowPlayingBar(): LinearLayout {
+        val bar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            visibility = View.GONE
+            background = GradientDrawable().apply {
+                setColor(0xF21A1A1A.toInt())
+                cornerRadius = dp(18).toFloat()
+                setStroke(dp(1), 0x33FFFFFF)
+            }
+            elevation = dp(8).toFloat()
+            setPadding(dp(10), dp(8), dp(8), dp(8))
+            setOnClickListener {
+                val remoteSession = activeBarSession
+                if (MusicService.activePlayer?.currentMediaItem != null) {
+                    musicControls()
+                } else if (remoteSession != null && remoteSession.isTv) {
+                    startActivity(Intent(this@MainActivity, TvRemoteActivity::class.java).putExtra("deviceId", remoteSession.deviceId))
+                } else if (latestSnapshot.tvDevices.isNotEmpty()) {
+                    startActivity(Intent(this@MainActivity, TvRemoteActivity::class.java))
+                }
+            }
+        }
+
+        val art = ImageView(this).apply {
+            scaleType = ImageView.ScaleType.CENTER_CROP
+            background = GradientDrawable().apply {
+                setColor(0xFF282828.toInt())
+                cornerRadius = dp(10).toFloat()
+            }
+            clipToOutline = true
+        }
+        nowPlayingArt = art
+        bar.addView(art, LinearLayout.LayoutParams(dp(42), dp(42)))
+
+        val textCol = column().apply { setPadding(dp(10), 0, dp(6), 0) }
+        val title = label("", 13f, true).apply {
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
+        }
+        val sub = label("", 11f).apply {
+            setTextColor(MUTED)
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
+        }
+        nowPlayingTitle = title
+        nowPlayingSubtitle = sub
+        textCol.addView(title)
+        textCol.addView(sub)
+        bar.addView(textCol, LinearLayout.LayoutParams(0, -2, 1f))
+
+        val remoteBtn = ImageButton(this).apply {
+            contentDescription = "TV Remote"
+            setImageResource(R.drawable.nav_series)
+            imageTintList = android.content.res.ColorStateList.valueOf(Color.WHITE)
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(0xFF2B2B2B.toInt())
+            }
+            visibility = View.GONE
+            setOnClickListener {
+                val targetId = activeBarSession?.takeIf { it.isTv }?.deviceId
+                    ?: latestSnapshot.tvDevices.firstOrNull()?.deviceId
+                startActivity(Intent(this@MainActivity, TvRemoteActivity::class.java).apply {
+                    if (!targetId.isNullOrBlank()) putExtra("deviceId", targetId)
+                })
+            }
+        }
+        nowPlayingRemoteBtn = remoteBtn
+        bar.addView(remoteBtn, LinearLayout.LayoutParams(dp(36), dp(36)).apply { marginEnd = dp(6) })
+
+        val playBtn = ImageButton(this).apply {
+            contentDescription = "Play or pause"
+            setImageResource(R.drawable.ic_play_arrow)
+            imageTintList = android.content.res.ColorStateList.valueOf(Color.WHITE)
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(RED)
+            }
+            setOnClickListener {
+                val localPlayer = MusicService.activePlayer
+                if (localPlayer?.currentMediaItem != null) {
+                    if (localPlayer.isPlaying) localPlayer.pause() else localPlayer.play()
+                    updateNowPlayingBar()
+                } else {
+                    val session = activeBarSession ?: return@setOnClickListener
+                    if (session.isTv) {
+                        lifecycleScope.launch {
+                            PlaybackSessions.sendCommand(this@MainActivity, session.deviceId, "togglePlayPause")
+                        }
+                    }
+                }
+            }
+        }
+        nowPlayingPlayBtn = playBtn
+        bar.addView(playBtn, LinearLayout.LayoutParams(dp(36), dp(36)).apply { marginEnd = dp(4) })
+
+        val nextBtn = ImageButton(this).apply {
+            contentDescription = "Next"
+            setImageResource(R.drawable.ic_skip_next)
+            imageTintList = android.content.res.ColorStateList.valueOf(Color.WHITE)
+            background = null
+            setOnClickListener {
+                val localPlayer = MusicService.activePlayer
+                if (localPlayer?.currentMediaItem != null) {
+                    if (localPlayer.hasNextMediaItem()) localPlayer.seekToNextMediaItem()
+                    updateNowPlayingBar()
+                } else {
+                    val session = activeBarSession ?: return@setOnClickListener
+                    if (session.isTv) {
+                        lifecycleScope.launch {
+                            if (session.mediaType == "video" && !session.canSkipNext) {
+                                PlaybackSessions.sendCommand(this@MainActivity, session.deviceId, "seekBy", deltaMs = 30_000L)
+                            } else {
+                                PlaybackSessions.sendCommand(this@MainActivity, session.deviceId, "next")
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        nowPlayingNextBtn = nextBtn
+        bar.addView(nextBtn, LinearLayout.LayoutParams(dp(34), dp(34)))
+
+        return bar
+    }
+
+    private fun startNowPlayingMonitor() {
+        sessionsJob?.cancel()
+        sessionsJob = lifecycleScope.launch {
+            while (isActive) {
+                if (settings.token.isNotBlank() && policyReady) {
+                    latestSnapshot = PlaybackSessions.fetchSessions(this@MainActivity)
+                } else {
+                    latestSnapshot = SessionsSnapshot(false, emptyList(), emptyList())
+                }
+                updateNowPlayingBar()
+                delay(3_000)
+            }
+        }
+    }
+
+    private fun updateNowPlayingBar() {
+        val bar = nowPlayingBar ?: return
+        val localPlayer = MusicService.activePlayer
+        val localItem = localPlayer?.currentMediaItem
+        val networkSession = if (latestSnapshot.localNetwork) latestSnapshot.sessions.firstOrNull() else null
+        val hasReachableTv = latestSnapshot.localNetwork && latestSnapshot.tvDevices.isNotEmpty()
+
+        val castVisible = (bar.parent as? View)?.findViewById<View>(R.id.cast_mini)?.visibility == View.VISIBLE
+        (bar.layoutParams as? LinearLayout.LayoutParams)?.let { lp ->
+            val desiredMargin = dp(if (castVisible) 8 else 82)
+            if (lp.bottomMargin != desiredMargin) {
+                lp.bottomMargin = desiredMargin
+                bar.layoutParams = lp
+            }
+        }
+
+        if (localItem != null && localPlayer.mediaItemCount > 0) {
+            activeBarSession = null
+            val meta = localItem.mediaMetadata
+            nowPlayingTitle?.text = meta.title?.toString()?.ifBlank { "Playing Music" } ?: "Playing Music"
+            nowPlayingSubtitle?.text = meta.artist?.toString().orEmpty().ifBlank { meta.albumTitle?.toString().orEmpty() }
+            val artUri = meta.artworkUri?.toString().orEmpty()
+            if (artUri.isNotBlank()) nowPlayingArt?.load(artUri) else nowPlayingArt?.setImageDrawable(null)
+            nowPlayingPlayBtn?.visibility = View.VISIBLE
+            nowPlayingPlayBtn?.setImageResource(if (localPlayer.isPlaying) R.drawable.ic_pause else R.drawable.ic_play_arrow)
+            nowPlayingNextBtn?.visibility = if (localPlayer.hasNextMediaItem()) View.VISIBLE else View.GONE
+            nowPlayingRemoteBtn?.visibility = if (hasReachableTv) View.VISIBLE else View.GONE
+            bar.visibility = View.VISIBLE
+            return
+        }
+
+        if (networkSession != null) {
+            activeBarSession = networkSession
+            nowPlayingTitle?.text = networkSession.title
+            val subParts = listOf(networkSession.deviceName, networkSession.subtitle).filter { it.isNotBlank() }
+            nowPlayingSubtitle?.text = subParts.joinToString(" · ")
+            if (networkSession.artworkUrl.isNotBlank()) {
+                nowPlayingArt?.load(api.absolute(networkSession.artworkUrl))
+            } else {
+                nowPlayingArt?.setImageDrawable(null)
+            }
+            val controllable = networkSession.isTv
+            nowPlayingPlayBtn?.visibility = if (controllable) View.VISIBLE else View.GONE
+            nowPlayingPlayBtn?.setImageResource(if (networkSession.isPlaying) R.drawable.ic_pause else R.drawable.ic_play_arrow)
+            nowPlayingNextBtn?.visibility = if (controllable && (networkSession.canSkipNext || networkSession.mediaType == "video")) View.VISIBLE else View.GONE
+            nowPlayingRemoteBtn?.visibility = if (hasReachableTv || networkSession.isTv) View.VISIBLE else View.GONE
+            bar.visibility = View.VISIBLE
+            return
+        }
+
+        activeBarSession = null
+        bar.visibility = View.GONE
     }
 
     private data class BottomNavItem(
