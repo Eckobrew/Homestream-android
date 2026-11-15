@@ -1430,15 +1430,30 @@ class MainActivity : AppCompatActivity() {
             val btnRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
 
             val canPlay = item.isAvailableForPlayback
+            val comingSoon = if (!canPlay) comingSoonLabel(item) else null
             val playBtn = Button(this).apply {
-                text = if (canPlay) (if (item.resumeMs > 0) "▶  Resume" else "▶  Play") else "▶  Stream"
+                text = when {
+                    comingSoon != null -> comingSoon
+                    canPlay -> if (item.resumeMs > 0) "▶  Resume" else "▶  Play"
+                    item.resumeMs > 0 -> "▶  Resume Stream"
+                    else -> "▶  Stream"
+                }
                 textSize = 13.5f; typeface = android.graphics.Typeface.DEFAULT_BOLD
-                setTextColor(if (canPlay) Color.BLACK else Color.WHITE); isAllCaps = false
-                background = rounded(if (canPlay) Color.WHITE else RED, radius = dp(8).toFloat())
+                setTextColor(when {
+                    comingSoon != null -> MUTED
+                    canPlay -> Color.BLACK
+                    else -> Color.WHITE
+                }); isAllCaps = false
+                background = rounded(when {
+                    comingSoon != null -> 0xFF262626.toInt()
+                    canPlay -> Color.WHITE
+                    else -> RED
+                }, radius = dp(8).toFloat())
+                isEnabled = comingSoon == null
                 minHeight = dp(40); minimumHeight = dp(40)
                 setPadding(dp(16), 0, dp(16), 0)
                 setOnClickListener {
-                    if (canPlay) play(item) else streamMedia(item)
+                    if (canPlay) play(item) else if (comingSoon == null) streamMedia(item)
                 }
             }
             btnRow.addView(playBtn, LinearLayout.LayoutParams(-2, dp(40)).apply { marginEnd = dp(10) })
@@ -1660,6 +1675,10 @@ class MainActivity : AppCompatActivity() {
             val headerArea = FrameLayout(this).apply {
                 background = GradientDrawable().apply { setColor(0xFF161616.toInt()) }
                 clipToOutline = true
+                if (isTelevision()) {
+                    isFocusable = false
+                    descendantFocusability = android.view.ViewGroup.FOCUS_BLOCK_DESCENDANTS
+                }
             }
 
             val backdropView = ImageView(this).apply {
@@ -1727,21 +1746,39 @@ class MainActivity : AppCompatActivity() {
             // Primary Play / Stream Button
             val playBtn = Button(this).apply {
                 val canPlay = full.isAvailableForPlayback
+                val comingSoon = if (!canPlay) comingSoonLabel(full) else null
                 val resume = full.resumeMs > 0
-                text = if (canPlay) (if (resume) "▶  Resume" else "▶  Play") else "▶  Stream"
+                text = when {
+                    comingSoon != null -> comingSoon
+                    canPlay -> if (resume) "▶  Resume" else "▶  Play"
+                    resume -> "▶  Resume Stream"
+                    else -> "▶  Stream"
+                }
                 textSize = 14f; typeface = android.graphics.Typeface.DEFAULT_BOLD
-                setTextColor(if (canPlay) Color.BLACK else Color.WHITE); isAllCaps = false
-                background = rounded(if (canPlay) Color.WHITE else RED, radius = dp(8).toFloat())
+                setTextColor(when {
+                    comingSoon != null -> MUTED
+                    canPlay -> Color.BLACK
+                    else -> Color.WHITE
+                }); isAllCaps = false
+                background = rounded(when {
+                    comingSoon != null -> 0xFF262626.toInt()
+                    canPlay -> Color.WHITE
+                    else -> RED
+                }, radius = dp(8).toFloat())
+                isEnabled = comingSoon == null
                 minHeight = dp(46); minimumHeight = dp(46)
                 setOnClickListener {
                     if (canPlay) {
                         play(full)
-                    } else {
+                    } else if (comingSoon == null) {
                         streamMedia(full)
                     }
                 }
             }
             metaSection.addView(playBtn, LinearLayout.LayoutParams(-1, dp(46)).apply { bottomMargin = dp(8) })
+            if (isTelevision()) {
+                playBtn.post { playBtn.requestFocus() }
+            }
 
             // Secondary Buttons (+ My List, Download)
             val btnRow = LinearLayout(this).apply {
@@ -2420,6 +2457,17 @@ class MainActivity : AppCompatActivity() {
                 toast(e.message ?: "Download failed")
             }
         }
+    }
+
+    private fun comingSoonLabel(item: Media): String? {
+        val raw = item.json.optString("releaseDate").trim().take(10)
+        if (raw.length < 10) return null
+        val parsed = runCatching {
+            java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).apply { isLenient = false }.parse(raw)
+        }.getOrNull() ?: return null
+        if (parsed.time <= System.currentTimeMillis()) return null
+        val formatted = java.text.SimpleDateFormat("MMM d, yyyy", java.util.Locale.US).format(parsed)
+        return "Coming Soon · $formatted"
     }
 
     private fun streamMedia(item: Media, parent: Media? = null) {

@@ -1261,7 +1261,7 @@ class PlayerActivity : AppCompatActivity() {
         startLocal()
     }
     private fun reportStarted() {
-        if (reportedStartedId == currentPlaybackId || ((media.isDownload || isStreamingDownload) && media.source != "youtube")) return
+        if (reportedStartedId == currentPlaybackId || (media.isDownload && media.source != "youtube")) return
         reportedStartedId = currentPlaybackId
         report(false, started = true)
     }
@@ -1289,7 +1289,7 @@ class PlayerActivity : AppCompatActivity() {
             }
             return
         }
-        if (media.isDownload || isStreamingDownload || remote != null) return
+        if (media.isDownload || remote != null) return
         val client = remote
         val activeId = if (currentPlaybackId.isNotBlank()) currentPlaybackId else media.playbackId
         if (client != null && client.mediaInfo?.customData?.optString("itemId") != activeId) return
