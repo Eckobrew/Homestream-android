@@ -4438,6 +4438,7 @@ class MainActivity : AppCompatActivity() {
                     "system" -> {
                         val caps = runCatching { api.call("capabilities") }.getOrNull()
                         val integrations = runCatching { api.call("integrations") }.getOrNull()
+                        val accountsRes = runCatching { api.call("accounts") }.getOrNull()
                         val profilesRes = runCatching { api.call("profiles") }.getOrNull()
                         val sessionsRes = runCatching { api.call("sessions") }.getOrNull()
                         if (screen != "admin-panel" || adminPanelTab != "system") return@launch
@@ -4456,7 +4457,66 @@ class MainActivity : AppCompatActivity() {
                         })
                         host.addView(pathCard, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(12) })
 
-                        val profiles = profilesRes?.objects("profiles").orEmpty()
+                        val accounts = accountsRes?.objects("accounts").orEmpty()
+                        val acctHeader = LinearLayout(this@MainActivity).apply {
+                            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+                            setPadding(0, 0, 0, dp(6))
+                        }
+                        acctHeader.addView(label("Accounts (${accounts.size})", 15f, true).apply {
+                            layoutParams = LinearLayout.LayoutParams(0, -2, 1f)
+                        })
+                        acctHeader.addView(action("+ Add Account") {
+                            val form = column().apply { setPadding(dp(20), dp(12), dp(20), dp(12)) }
+                            val uField = EditText(this@MainActivity).apply { hint = "Username"; setTextColor(Color.WHITE); setHintTextColor(MUTED); form.addView(this) }
+                            val pField = EditText(this@MainActivity).apply { hint = "Password (min 4)"; inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD; setTextColor(Color.WHITE); setHintTextColor(MUTED); form.addView(this) }
+                            val adminCheck = android.widget.CheckBox(this@MainActivity).apply { text = "Administrator"; setTextColor(Color.WHITE); form.addView(this) }
+                            AlertDialog.Builder(this@MainActivity).setTitle("Create Account").setView(form)
+                                .setNegativeButton("Cancel", null)
+                                .setPositiveButton("Create") { _, _ ->
+                                    lifecycleScope.launch {
+                                        try {
+                                            api.call("accounts", body = JSONObject().put("action", "create").put("username", uField.text.toString().trim()).put("password", pField.text.toString()).put("isAdmin", adminCheck.isChecked))
+                                            toast("Account created")
+                                            adminPanel("system")
+                                        } catch (e: Exception) { toast(e.message ?: "Failed to create account") }
+                                    }
+                                }.show()
+                        }.apply { textSize = 11.5f; setPadding(dp(10), dp(6), dp(10), dp(6)) })
+                        host.addView(acctHeader)
+                        accounts.forEach { a ->
+                            val row = column().apply {
+                                background = rounded(0xFF161616.toInt(), radius = dp(8).toFloat())
+                                setPadding(dp(12), dp(10), dp(12), dp(10))
+                                setOnClickListener {
+                                    val opts = arrayOf("Set Password", if (a.optBoolean("isAdmin")) "Demote Admin" else "Make Admin", "Delete Account")
+                                    AlertDialog.Builder(this@MainActivity).setTitle(a.optString("displayName")).setItems(opts) { _, which ->
+                                        if (which == 0) {
+                                            val pw = EditText(this@MainActivity).apply { hint = "New password (min 4)"; inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD; setTextColor(Color.WHITE); setHintTextColor(MUTED) }
+                                            AlertDialog.Builder(this@MainActivity).setTitle("Set Password").setView(pw).setNegativeButton("Cancel", null)
+                                                .setPositiveButton("Save") { _, _ ->
+                                                    lifecycleScope.launch {
+                                                        try { api.call("accounts", body = JSONObject().put("action", "set-password").put("accountId", a.optString("id")).put("password", pw.text.toString())); toast("Password updated") }
+                                                        catch (e: Exception) { toast(e.message ?: "Failed") }
+                                                    }
+                                                }.show()
+                                        } else {
+                                            lifecycleScope.launch {
+                                                try {
+                                                    val body = if (which == 1) JSONObject().put("action", "set-admin").put("accountId", a.optString("id")).put("isAdmin", !a.optBoolean("isAdmin"))
+                                                    else JSONObject().put("action", "delete").put("accountId", a.optString("id"))
+                                                    api.call("accounts", body = body)
+                                                    adminPanel("system")
+                                                } catch (e: Exception) { toast(e.message ?: "Failed") }
+                                            }
+                                        }
+                                    }.show()
+                                }
+                            }
+                            row.addView(label("${a.optString("displayName")} (@${a.optString("username")})${if (a.optBoolean("isAdmin")) " • Admin" else ""}", 13f, true))
+                            host.addView(row, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(6) })
+                        }
+
+                        val profiles = accountsRes?.objects("profiles").takeIf { !it.isNullOrEmpty() } ?: profilesRes?.objects("profiles").orEmpty()
                         host.addView(label("Profiles (${profiles.size})", 15f, true).apply { setPadding(0, 0, 0, dp(6)) })
                         profiles.forEach { p ->
                             val badges = buildList {
