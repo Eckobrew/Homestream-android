@@ -84,12 +84,15 @@ class PlayerActivity : AppCompatActivity() {
     private var negotiation: Job? = null
     private var retryJob: Job? = null
     private var extrasTickerJob: Job? = null
+    private var trickplayJob: Job? = null
     private var playbackStarted = false
     private data class SkipSeg(val type: String, val startSec: Double, val endSec: Double)
     private data class TrickplayCue(val startSec: Double, val endSec: Double, val x: Int, val y: Int, val w: Int, val h: Int)
     private var skipSegments: List<SkipSeg> = emptyList()
     private var nativeVersions: List<Pair<String, String>> = emptyList()
     private var selectedVersionId: String? = null
+    private var nativeAudioTracks: List<Pair<Int, String>> = emptyList()
+    private var selectedAudioIndex: Int? = null
     private var trickplayCues: List<TrickplayCue> = emptyList()
     private var trickplaySprite: android.graphics.Bitmap? = null
     private var skipBtn: TextView? = null
@@ -789,6 +792,7 @@ class PlayerActivity : AppCompatActivity() {
                         }.getOrDefault("h264"),
                         "audioCodecs" to audioCodecs
                     ) + (selectedVersionId?.let { mapOf("versionId" to it) } ?: emptyMap())
+                      + (selectedAudioIndex?.let { mapOf("audioIndex" to it.toString()) } ?: emptyMap())
                       + if (isTelevision()) mapOf("receiver" to "native-tv", "videoCapabilities" to televisionVideoProfiles().toString()) else emptyMap()))
                 applyInitialResume(stream)
                 describeStream(stream)
@@ -947,13 +951,18 @@ class PlayerActivity : AppCompatActivity() {
     }
     private suspend fun subtitleItems(targetId: String = ""): List<MediaItem.SubtitleConfiguration> = try {
         val queryId = targetId.ifBlank { if (currentPlaybackId.isNotBlank()) currentPlaybackId else media.playbackId }
-        api.call("subtitles", mapOf("itemId" to queryId)).optJSONArray("subtitles")?.let { tracks ->
+        val query = buildMap {
+            put("itemId", queryId)
+            selectedVersionId?.let { put("versionId", it) }
+        }
+        api.call("subtitles", query).optJSONArray("subtitles")?.let { tracks ->
             (0 until tracks.length()).map { i ->
                 val track = tracks.getJSONObject(i)
-                // Use Jellyfin's absolute subtitle URL: the player/receiver has no pairing headers.
+                val flags = (if (track.optBoolean("isDefault")) C.SELECTION_FLAG_DEFAULT else 0) or
+                    (if (track.optBoolean("isForced")) C.SELECTION_FLAG_FORCED else 0)
                 MediaItem.SubtitleConfiguration.Builder(Uri.parse(api.absolute(track.getString("src"))))
                     .setMimeType(MimeTypes.TEXT_VTT).setLanguage(track.optString("language"))
-                    .setLabel(track.optString("title")).build()
+                    .setSelectionFlags(flags).setLabel(track.optString("title")).build()
             }
         }.orEmpty()
     } catch (e: Exception) {
@@ -1096,6 +1105,7 @@ class PlayerActivity : AppCompatActivity() {
             params["videoCapabilities"] = castVideoCapabilities!!
         }
         selectedVersionId?.takeIf { it.isNotBlank() }?.let { params["versionId"] = it }
+        selectedAudioIndex?.let { params["audioIndex"] = it.toString() }
         if (tmdb > 0) params["tmdbId"] = tmdb.toString()
         params["type"] = if (isTv) "tv" else "movie"
         if (isTv) {
@@ -1209,6 +1219,7 @@ class PlayerActivity : AppCompatActivity() {
         }
         negotiation?.cancel(); castLoading = false
         selectedVersionId = null
+        selectedAudioIndex = null
         media = item; currentPlaybackId = item.playbackId; position = 0; wantsPlay = true
         updateEpisodeControls()
         val session = castCtx?.sessionManager?.currentCastSession
@@ -1272,16 +1283,25 @@ class PlayerActivity : AppCompatActivity() {
         val vers = mutableListOf<Pair<String, String>>()
         stream.optJSONArray("versions")?.let { arr ->
             for (i in 0 until arr.length()) {
-                val o = arr.optJSONObject(i) ?: continue
-                vers.add(o.optString("id") to o.optString("label", "Version ${i + 1}"))
+                arr.optJSONObject(i)?.let { version ->
+                    vers.add(version.optString("id") to version.optString("label", "Version ${i + 1}"))
+                }
             }
         }
         nativeVersions = vers
+        val audio = stream.optJSONArray("audioTracks")
+        nativeAudioTracks = (0 until (audio?.length() ?: 0)).mapNotNull { index ->
+            val track = audio?.optJSONObject(index) ?: return@mapNotNull null
+            val streamIndex = track.optInt("index", -1)
+            if (streamIndex < 0) null else streamIndex to track.optString("title", "Audio ${index + 1}")
+        }
 
         val tpUrl = stream.optString("trickplayUrl")
+        trickplayJob?.cancel()
         trickplayCues = emptyList(); trickplaySprite = null
+        trickplayPreview?.visibility = View.GONE
         if (tpUrl.isNotBlank()) {
-            lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            trickplayJob = lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) {
                 runCatching {
                     val req = okhttp3.Request.Builder().url(api.absolute(tpUrl)).build()
                     val vttText = api.mediaClient().newCall(req).execute().use { it.body?.string().orEmpty() }
@@ -1328,7 +1348,9 @@ class PlayerActivity : AppCompatActivity() {
 
     private fun showPlayerSettings() {
         val options = mutableListOf("Playback speed", "Audio", "Subtitle appearance", "SyncPlay (Watch Together)")
-        if (nativeVersions.size > 1) options.add("Video version")
+        if (nativeVersions.size > 1) {
+            options.add("Video version")
+        }
         showPlayerChoices(playerView, options) { choice ->
             when (options.getOrNull(choice)) {
                 "Playback speed" -> {
@@ -1339,7 +1361,15 @@ class PlayerActivity : AppCompatActivity() {
                         exo.setPlaybackSpeed(speeds[index])
                     }
                 }
-                "Audio" -> player?.let { exo ->
+                "Audio" -> if (nativeAudioTracks.size > 1) {
+                    val selected = nativeAudioTracks.indexOfFirst { it.first == selectedAudioIndex } + 1
+                    val labels = listOf("Auto") + nativeAudioTracks.map { it.second }
+                    showPlayerChoices(playerView, labels, selected) { choice ->
+                        position = player?.currentPosition?.coerceAtLeast(0L) ?: position
+                        selectedAudioIndex = nativeAudioTracks.getOrNull(choice - 1)?.first
+                        startLocal()
+                    }
+                } else player?.let { exo ->
                     val tracks = exo.currentTracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }
                         .flatMap { group -> (0 until group.length).filter { group.isTrackSupported(it) }.map { group to it } }
                     val names = androidx.media3.ui.DefaultTrackNameProvider(resources)
@@ -1364,6 +1394,7 @@ class PlayerActivity : AppCompatActivity() {
                     showPlayerChoices(playerView, labels, sel) { idx ->
                         position = player?.currentPosition?.coerceAtLeast(0L) ?: position
                         selectedVersionId = nativeVersions[idx].first
+                        selectedAudioIndex = null
                         startLocal()
                     }
                 }
@@ -1379,15 +1410,25 @@ class PlayerActivity : AppCompatActivity() {
                             lifecycleScope.launch {
                                 runCatching {
                                     if (syncRoomCode != null && code.isBlank()) {
-                                        val posTicks = ((player?.currentPosition ?: 0L) * 10_000L)
-                                        api.call("syncplay", body = JSONObject().put("action", "sync").put("code", syncRoomCode).put("isPaused", player?.isPlaying != true).put("positionTicks", posTicks))
+                                        val payload = JSONObject()
+                                            .put("action", "sync")
+                                            .put("code", syncRoomCode)
+                                            .put("isPaused", player?.isPlaying != true)
+                                            .put("positionTicks", msToTicks(player?.currentPosition ?: 0L))
+                                        api.call("syncplay", body = payload)
                                         Toast.makeText(this@PlayerActivity, "Synced room $syncRoomCode", Toast.LENGTH_SHORT).show()
                                     } else if (code.isNotBlank()) {
                                         val r = api.call("syncplay", body = JSONObject().put("action", "join").put("code", code))
                                         syncRoomCode = r.optJSONObject("room")?.optString("code")
                                         Toast.makeText(this@PlayerActivity, "Joined SyncPlay room $syncRoomCode", Toast.LENGTH_SHORT).show()
                                     } else {
-                                        val r = api.call("syncplay", body = JSONObject().put("action", "create").put("itemId", currentPlaybackId).put("title", media.title))
+                                        val payload = JSONObject()
+                                            .put("action", "create")
+                                            .put("itemId", currentPlaybackId)
+                                            .put("title", media.title)
+                                            .put("isPaused", player?.isPlaying != true)
+                                            .put("positionTicks", msToTicks(player?.currentPosition ?: 0L))
+                                        val r = api.call("syncplay", body = payload)
                                         syncRoomCode = r.optJSONObject("room")?.optString("code")
                                         Toast.makeText(this@PlayerActivity, "Created SyncPlay room $syncRoomCode", Toast.LENGTH_SHORT).show()
                                     }

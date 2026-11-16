@@ -182,14 +182,15 @@ class HomeStreamApi(private val settings: ConnectionSettings) {
                     }
                 }.build().toString()
         }
-        if (target.scheme == base.scheme && target.host == base.host && target.port == base.port &&
-            target.encodedPath.endsWith("/api/native/stream")) {
-            return target.newBuilder().encodedPath(target.encodedPath.removeSuffix("/api/native/stream") + "/api/mobile/v1/native/stream").build().toString()
+        if (sameOrigin) {
+            val path = target.encodedPath
+            val route = path.substringAfterLast("/api/", "").removePrefix("v1/")
+            if (route in setOf("native/stream", "stream/download", "stream/torrent")) {
+                val prefix = path.substringBeforeLast("/api/")
+                return target.newBuilder().encodedPath("$prefix/api/mobile/v1/$route").build().toString()
+            }
         }
-        return if (target.scheme == base.scheme && target.host == base.host && target.port == base.port &&
-            target.encodedPath.endsWith("/api/stream/download")) {
-            target.newBuilder().encodedPath(target.encodedPath.removeSuffix("/api/stream/download") + "/api/mobile/v1/stream/download").build().toString()
-        } else target.toString()
+        return target.toString()
     }
 
     /** Network interceptors run again for redirects and every HLS/subtitle request. */

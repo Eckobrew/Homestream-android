@@ -2654,10 +2654,10 @@ class MainActivity : AppCompatActivity() {
         form.addView(usersBox, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
 
         val usernameInput = EditText(this).apply {
-            hint = "Jellyfin username"; isSingleLine = true
+            hint = "Username"; isSingleLine = true
         }
         val passwordInput = EditText(this).apply {
-            hint = "Jellyfin password"; inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD; isSingleLine = true
+            hint = "Password"; inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD; isSingleLine = true
         }
         form.addView(label("Username", 13.5f, true)); form.addView(usernameInput)
         form.addView(label("Password", 13.5f, true)); form.addView(passwordInput)
@@ -2728,7 +2728,7 @@ class MainActivity : AppCompatActivity() {
         if (extUrlInput.text.isNotBlank()) fetchJellyfinUsers(extUrlInput.text.toString())
 
         val jDialog = AlertDialog.Builder(this)
-            .setTitle("Jellyfin Sign In")
+            .setTitle("HomeStream Sign In")
             .setView(ScrollView(this).apply { addView(form) })
             .setPositiveButton("Sign In", null)
             .setNegativeButton("Cancel", null)
@@ -2825,7 +2825,7 @@ class MainActivity : AppCompatActivity() {
 
         // 2. Remote / External Server Option (Jellyfin Auth)
         val jellyfinRemoteBtn = Button(this).apply {
-            text = "🌐 Connect External Server (Jellyfin Sign In)"; textSize = 12.5f
+            text = "🌐 Connect External Server"; textSize = 12.5f
             setTextColor(Color.WHITE); isAllCaps = false
             background = rounded(0x28FFFFFF.toInt(), radius = dp(8).toFloat())
             minHeight = dp(40); minimumHeight = dp(40)
@@ -4364,16 +4364,16 @@ class MainActivity : AppCompatActivity() {
                         }
                     }
                     "media" -> {
-                        val nativeData = runCatching { api.call("native/library") }.getOrNull()
+                        val nativeData = api.call("native/library")
                         if (screen != "admin-panel" || adminPanelTab != "media") return@launch
                         host.removeAllViews()
 
-                        val nativeSettings = nativeData?.optJSONObject("settings")
+                        val nativeSettings = nativeData.optJSONObject("settings")
                         val engine = nativeSettings?.optString("mediaEngine", "jellyfin") ?: "jellyfin"
                         val libs = nativeSettings?.optJSONArray("libraries")
-                        val items = nativeData?.optJSONArray("items")
-                        val stats = nativeData?.optJSONObject("stats")
-                        val streams = nativeData?.optJSONArray("activeStreams")
+                        val items = nativeData.optJSONArray("items")
+                        val stats = nativeData.optJSONObject("stats")
+                        val streams = nativeData.optJSONArray("activeStreams")
 
                         val engineCard = column().apply {
                             background = rounded(0xFF1A1A1A.toInt(), radius = dp(10).toFloat())
@@ -4392,7 +4392,7 @@ class MainActivity : AppCompatActivity() {
                                 runCatching {
                                     api.call("native/library", body = JSONObject().put("action", "scan"))
                                 }.onSuccess {
-                                    toast("Library scan finished")
+                                    toast("Library scan started")
                                     adminPanel("media")
                                 }.onFailure { toast(it.message ?: "Scan failed") }
                             }

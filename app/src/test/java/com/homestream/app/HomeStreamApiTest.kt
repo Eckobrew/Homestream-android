@@ -16,6 +16,19 @@ class HomeStreamApiTest {
         override val token = this@HomeStreamApiTest.token
         override var profile = "profile & one"
     }
+    @Test fun videoUrlsUseMobileRoutesAndPreserveStreamParameters() {
+        val api = HomeStreamApi(settings("https://home.example"))
+        for (route in listOf("native/stream", "stream/download", "stream/torrent")) {
+            for (prefix in listOf("/api/", "/api/v1/", "/api/mobile/v1/", "/homestream/api/")) {
+                val url = api.absolute("$prefix$route?value=one%20two").toHttpUrl()
+                val basePath = if (prefix.startsWith("/homestream")) "/homestream" else ""
+                assertEquals("$basePath/api/mobile/v1/$route", url.encodedPath)
+                assertEquals("one two", url.queryParameter("value"))
+            }
+        }
+        val external = "https://other.example/api/stream/torrent?tmdbId=123"
+        assertEquals(external, api.absolute(external))
+    }
     @Test fun musicUrlsUseNativeRoutesAndCurrentProfile() {
         val api = HomeStreamApi(settings("https://home.example"))
         val url = api.absolute("/api/v1/music/stream?trackId=opaque").toHttpUrl()
