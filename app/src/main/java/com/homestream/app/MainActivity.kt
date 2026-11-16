@@ -1014,17 +1014,23 @@ class MainActivity : AppCompatActivity() {
             if (settings.isAdmin) {
                 val dlMgrBtn = LinearLayout(this).apply {
                     orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
-                    background = rounded(if (screen == "download-manager") RED else 0x22FFFFFF.toInt())
+                    background = rounded(if (screen == "admin-panel" || screen == "download-manager") RED else 0x22FFFFFF.toInt())
                     setPadding(dp(14), dp(12), dp(14), dp(12))
                     isClickable = true
-                    setOnClickListener { closeSidebar(); adminDownloadManager() }
+                    setOnClickListener {
+                        closeSidebar()
+                        if (isTelevision()) adminDownloadManager() else adminPanel("media")
+                    }
                 }
                 dlMgrBtn.addView(ImageView(this).apply {
                     setImageResource(R.drawable.ic_download); imageTintList = ColorStateList.valueOf(Color.WHITE)
                 }, LinearLayout.LayoutParams(dp(22), dp(22)))
                 val dlMgrText = column().apply { setPadding(dp(12), 0, 0, 0); layoutParams = LinearLayout.LayoutParams(0, -2, 1f) }
-                dlMgrText.addView(label("Download Manager", 14f, true))
-                dlMgrText.addView(TextView(this).apply { text = "qBittorrent & system queues"; textSize = 11f; setTextColor(MUTED) })
+                dlMgrText.addView(label(if (isTelevision()) "Download Manager" else "Admin Panel", 14f, true))
+                dlMgrText.addView(TextView(this).apply {
+                    text = if (isTelevision()) "qBittorrent & system queues" else "Modules, media & downloads"
+                    textSize = 11f; setTextColor(MUTED)
+                })
                 dlMgrBtn.addView(dlMgrText)
                 dlMgrBtn.addView(badgePill("ADMIN"))
                 panel.addView(dlMgrBtn, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(20) })
@@ -2546,12 +2552,24 @@ class MainActivity : AppCompatActivity() {
         lifecycleScope.launch {
             try {
                 if (api.call("capabilities").optBoolean("canManageIntegrations")) {
+                    val items = if (isTelevision()) {
+                        arrayOf("Connection", "Download Manager", "Admin integrations")
+                    } else {
+                        arrayOf("Connection", "Admin Panel")
+                    }
                     AlertDialog.Builder(this@MainActivity).setTitle("Server settings")
-                        .setItems(arrayOf("Connection", "Download Manager", "Admin integrations")) { _, choice ->
-                            when (choice) {
-                                1 -> adminDownloadManager()
-                                2 -> adminIntegrations()
-                                else -> connectionSettingsDialog()
+                        .setItems(items) { _, choice ->
+                            if (isTelevision()) {
+                                when (choice) {
+                                    1 -> adminDownloadManager()
+                                    2 -> adminIntegrations()
+                                    else -> connectionSettingsDialog()
+                                }
+                            } else {
+                                when (choice) {
+                                    1 -> adminPanel()
+                                    else -> connectionSettingsDialog()
+                                }
                             }
                         }.show()
                 } else connectionSettingsDialog()
@@ -4098,11 +4116,27 @@ class MainActivity : AppCompatActivity() {
         host.addView(TextView(this).apply { text = "Loading Download Manager…"; textSize = 12f; setTextColor(MUTED) })
         content.addView(host)
 
-        lifecycleScope.launch {
+        work = lifecycleScope.launch {
             try {
-                val data = api.call("downloads/manager")
-                if (screen != "download-manager") return@launch
+                while (kotlinx.coroutines.currentCoroutineContext()[kotlinx.coroutines.Job]?.isActive == true && screen == "download-manager") {
+                    val data = api.call("downloads/manager")
+                    if (screen != "download-manager") return@launch
+                    host.removeAllViews()
+                    renderInteractiveDownloadManager(host, data) { adminDownloadManager() }
+                    kotlinx.coroutines.delay(4000)
+                }
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 host.removeAllViews()
+                host.addView(TextView(this@MainActivity).apply {
+                    text = e.message ?: "Download Manager unavailable"
+                    textSize = 12f; setTextColor(Color.RED)
+                })
+            }
+        }
+    }
+
+    private fun renderInteractiveDownloadManager(host: LinearLayout, data: JSONObject, onRefresh: () -> Unit) {
                 val torrents = data.objects("torrents")
                 val sysItems = data.objects("systemDownloads")
                 val totalDl = torrents.sumOf { it.optLong("downloadSpeed", it.optLong("dlspeed", 0L)) }
@@ -4164,7 +4198,7 @@ class MainActivity : AppCompatActivity() {
                                                     else -> JSONObject().put("action", "delete").put("hash", hash).put("deleteFiles", true)
                                                 }
                                                 api.call("downloads/manager", body = body)
-                                                adminDownloadManager()
+                                                onRefresh()
                                             } catch (e: Exception) { toast(e.message ?: "Action failed") }
                                         }
                                     }.show()
@@ -4220,7 +4254,7 @@ class MainActivity : AppCompatActivity() {
                                                     val body = JSONObject().put("action", "cancel-system").put("id", id)
                                                     if (qId.isNotBlank()) body.put("queueId", qId)
                                                     api.call("downloads/manager", body = body)
-                                                    adminDownloadManager()
+                                                    onRefresh()
                                                 } catch (e: Exception) { toast(e.message ?: "Failed to remove") }
                                             }
                                         }.show()
@@ -4245,13 +4279,222 @@ class MainActivity : AppCompatActivity() {
                         }
                     }
                 }
+    }
+
+    private var adminPanelTab = "modules"
+
+    private fun adminPanel(tab: String = adminPanelTab) {
+        if (isTelevision()) {
+            adminIntegrations()
+            return
+        }
+        if (!settings.isAdmin) {
+            toast("Administrator access required")
+            return
+        }
+        adminPanelTab = tab
+        rememberScreen("admin-panel:$tab") { adminPanel(tab) }
+        work?.cancel(); ++generation
+        currentTab = "admin-panel"; screen = "admin-panel"
+        shell()
+
+        val headerRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+            setPadding(gutter, dp(10), gutter, dp(8))
+        }
+        val titleCol = column().apply { layoutParams = LinearLayout.LayoutParams(0, -2, 1f) }
+        titleCol.addView(label("Server Control Center", 22f, true))
+        titleCol.addView(TextView(this).apply {
+            text = "ADMIN ONLY • MODULES, MEDIA & SYSTEM"
+            textSize = 10.5f; typeface = android.graphics.Typeface.DEFAULT_BOLD; setTextColor(RED)
+        })
+        headerRow.addView(titleCol)
+        headerRow.addView(action("Refresh") { adminPanel(adminPanelTab) }.apply {
+            textSize = 12f; setPadding(dp(12), dp(6), dp(12), dp(6))
+        })
+        content.addView(headerRow)
+
+        val pillRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(gutter, dp(4), gutter, dp(12))
+        }
+        pillRow.addView(categoryPill("Modules", active = adminPanelTab == "modules") { adminPanel("modules") })
+        pillRow.addView(categoryPill("Media Management", active = adminPanelTab == "media") { adminPanel("media") })
+        pillRow.addView(categoryPill("System & Profiles", active = adminPanelTab == "system") { adminPanel("system") })
+        content.addView(HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+            addView(pillRow)
+        })
+
+        val host = column().apply { setPadding(gutter, dp(4), gutter, dp(96)) }
+        host.addView(TextView(this).apply { text = "Loading…"; textSize = 12f; setTextColor(MUTED) })
+        content.addView(host)
+
+        work = lifecycleScope.launch {
+            try {
+                when (adminPanelTab) {
+                    "modules" -> {
+                        val data = api.call("integrations")
+                        if (screen != "admin-panel" || adminPanelTab != "modules") return@launch
+                        host.removeAllViews()
+                        val list = data.objects("integrations")
+                        val configured = list.count { it.optBoolean("configured") }
+                        host.addView(label("$configured of ${list.size} modules connected", 12f).apply {
+                            setTextColor(MUTED); setPadding(0, 0, 0, dp(8))
+                        })
+                        val downloadsPath = data.optString("downloadsPath")
+                        list.forEach { integration ->
+                            val isConfigured = integration.optBoolean("configured")
+                            val card = column().apply {
+                                background = rounded(0xFF1A1A1A.toInt(), radius = dp(10).toFloat())
+                                setPadding(dp(14), dp(12), dp(14), dp(12))
+                                setOnClickListener { editIntegration(integration, downloadsPath) }
+                            }
+                            val topRow = LinearLayout(this@MainActivity).apply {
+                                orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+                            }
+                            topRow.addView(label(integration.optString("name"), 15f, true).apply {
+                                layoutParams = LinearLayout.LayoutParams(0, -2, 1f)
+                            })
+                            topRow.addView(TextView(this@MainActivity).apply {
+                                text = if (isConfigured) "Configured" else "Not connected"
+                                textSize = 11f
+                                setTextColor(if (isConfigured) 0xFF34D399.toInt() else MUTED)
+                            })
+                            card.addView(topRow)
+                            val urlText = integration.optString("url").ifBlank { "No URL configured" }
+                            card.addView(TextView(this@MainActivity).apply {
+                                text = "$urlText • Tap to configure or test"
+                                textSize = 11.5f; setTextColor(MUTED); setPadding(0, dp(4), 0, 0)
+                            })
+                            host.addView(card, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
+                        }
+                    }
+                    "media" -> {
+                        while (kotlinx.coroutines.currentCoroutineContext()[kotlinx.coroutines.Job]?.isActive == true &&
+                            screen == "admin-panel" && adminPanelTab == "media"
+                        ) {
+                            val mgr = runCatching { api.call("downloads/manager") }.getOrNull()
+                            val music = runCatching { api.call("music/import-status") }.getOrNull()
+                            val req = runCatching { api.call("requested") }.getOrNull()
+                            if (screen != "admin-panel" || adminPanelTab != "media") return@launch
+                            host.removeAllViews()
+
+                            val torrents = mgr?.objects("torrents").orEmpty()
+                            val sysQueue = mgr?.objects("systemDownloads").orEmpty()
+                            val reqItems = req?.objects("items").orEmpty()
+
+                            val summaryCard = column().apply {
+                                background = rounded(0xFF1A1A1A.toInt(), radius = dp(10).toFloat())
+                                setPadding(dp(14), dp(12), dp(14), dp(12))
+                            }
+                            summaryCard.addView(label("Library & Queue Summary", 15f, true))
+                            val musicReady = music?.optInt("ready") ?: 0
+                            val musicActive = (music?.optInt("queued") ?: 0) + (music?.optInt("searching") ?: 0) +
+                                (music?.optInt("downloading") ?: 0) + (music?.optInt("importing") ?: 0)
+                            val musicFailed = music?.optInt("failed") ?: 0
+                            summaryCard.addView(TextView(this@MainActivity).apply {
+                                text = "Torrents: ${torrents.size} • System Queues: ${sysQueue.size}\n" +
+                                    "Music Ready: $musicReady • Active: $musicActive • Failed: $musicFailed\n" +
+                                    "Requested Items: ${reqItems.size}"
+                                textSize = 12f; setTextColor(MUTED); setPadding(0, dp(6), 0, dp(10))
+                            })
+                            val subTabs = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.HORIZONTAL }
+                            subTabs.addView(categoryPill("qBittorrent", active = downloadManagerSubTab == "torrents") {
+                                downloadManagerSubTab = "torrents"; adminPanel("media")
+                            })
+                            subTabs.addView(categoryPill("System Queues", active = downloadManagerSubTab == "system") {
+                                downloadManagerSubTab = "system"; adminPanel("media")
+                            })
+                            subTabs.addView(categoryPill("+ Add Magnet", active = false) { showAddTorrentDialog() })
+                            summaryCard.addView(HorizontalScrollView(this@MainActivity).apply {
+                                isHorizontalScrollBarEnabled = false
+                                addView(subTabs)
+                            })
+                            host.addView(summaryCard, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(12) })
+
+                            if (mgr != null) {
+                                renderInteractiveDownloadManager(host, mgr) { adminPanel("media") }
+                            }
+
+                            if (reqItems.isNotEmpty()) {
+                                host.addView(label("Recent Requests (${reqItems.size})", 15f, true).apply { setPadding(0, dp(8), 0, dp(6)) })
+                                reqItems.take(10).forEach { item ->
+                                    val row = column().apply {
+                                        background = rounded(0xFF161616.toInt(), radius = dp(8).toFloat())
+                                        setPadding(dp(12), dp(10), dp(12), dp(10))
+                                    }
+                                    row.addView(label(item.optString("title"), 13f, true))
+                                    row.addView(TextView(this@MainActivity).apply {
+                                        text = "${item.optString("type")} • ${item.optString("status")}"
+                                        textSize = 11f; setTextColor(MUTED); setPadding(0, dp(2), 0, 0)
+                                    })
+                                    host.addView(row, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(6) })
+                                }
+                            }
+                            kotlinx.coroutines.delay(4000)
+                        }
+                    }
+                    "system" -> {
+                        val caps = runCatching { api.call("capabilities") }.getOrNull()
+                        val integrations = runCatching { api.call("integrations") }.getOrNull()
+                        val profilesRes = runCatching { api.call("profiles") }.getOrNull()
+                        val sessionsRes = runCatching { api.call("sessions") }.getOrNull()
+                        if (screen != "admin-panel" || adminPanelTab != "system") return@launch
+                        host.removeAllViews()
+
+                        val pathCard = column().apply {
+                            background = rounded(0xFF1A1A1A.toInt(), radius = dp(10).toFloat())
+                            setPadding(dp(14), dp(12), dp(14), dp(12))
+                        }
+                        pathCard.addView(label("Storage Paths & Capabilities", 15f, true))
+                        pathCard.addView(TextView(this@MainActivity).apply {
+                            text = "Downloads: ${integrations?.optString("downloadsPath").orEmpty().ifBlank { "Not set" }}\n" +
+                                "Books: ${integrations?.optString("booksPath").orEmpty().ifBlank { "/books" }}\n" +
+                                "Manage Integrations: ${caps?.optBoolean("canManageIntegrations") == true}"
+                            textSize = 12f; setTextColor(MUTED); setPadding(0, dp(6), 0, 0)
+                        })
+                        host.addView(pathCard, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(12) })
+
+                        val profiles = profilesRes?.objects("profiles").orEmpty()
+                        host.addView(label("Profiles (${profiles.size})", 15f, true).apply { setPadding(0, 0, 0, dp(6)) })
+                        profiles.forEach { p ->
+                            val badges = buildList {
+                                if (p.optBoolean("isAdministrator")) add("Admin")
+                                if (p.optBoolean("isKids")) add("Kids")
+                            }.joinToString(" • ").ifBlank { "Standard" }
+                            val row = column().apply {
+                                background = rounded(0xFF161616.toInt(), radius = dp(8).toFloat())
+                                setPadding(dp(12), dp(10), dp(12), dp(10))
+                            }
+                            row.addView(label("${p.optString("name")}  ($badges)", 13f, true))
+                            host.addView(row, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(6) })
+                        }
+
+                        val sessions = sessionsRes?.objects("sessions").orEmpty()
+                        host.addView(label("Active Playback Sessions (${sessions.size})", 15f, true).apply { setPadding(0, dp(8), 0, dp(6)) })
+                        if (sessions.isEmpty()) {
+                            host.addView(TextView(this@MainActivity).apply { text = "No active sessions."; textSize = 12f; setTextColor(MUTED) })
+                        } else {
+                            sessions.forEach { s ->
+                                val row = column().apply {
+                                    background = rounded(0xFF161616.toInt(), radius = dp(8).toFloat())
+                                    setPadding(dp(12), dp(10), dp(12), dp(10))
+                                }
+                                row.addView(label("${s.optString("deviceName")} (${s.optString("platform")})", 13f, true))
+                                row.addView(TextView(this@MainActivity).apply {
+                                    text = s.optString("title").ifBlank { s.optString("state", "idle") }
+                                    textSize = 11f; setTextColor(MUTED); setPadding(0, dp(2), 0, 0)
+                                })
+                                host.addView(row, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(6) })
+                            }
+                        }
+                    }
+                }
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
                 host.removeAllViews()
-                host.addView(TextView(this@MainActivity).apply {
-                    text = e.message ?: "Download Manager unavailable"
-                    textSize = 12f; setTextColor(Color.RED)
-                })
+                host.addView(label(e.message ?: "Admin panel unavailable"))
             }
         }
     }
