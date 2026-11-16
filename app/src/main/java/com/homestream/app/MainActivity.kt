@@ -957,9 +957,34 @@ class MainActivity : AppCompatActivity() {
         homeFeedBtn.addView(homeFeedText)
         panel.addView(homeFeedBtn, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
 
-        // Dedicated Hubs Section: Music Hub & YouTube Hub
+        // Dedicated Hubs Section: Movies, TV Shows, Music, YouTube, Books + Admin
+        val videoHubs = listOf(
+            Triple("Movies", "Featured rows & movies feed", "movies" to R.drawable.nav_movies),
+            Triple("TV Shows", "Featured series & TV feed", "series" to R.drawable.nav_series)
+        )
+        videoHubs.forEach { (title, desc, pair) ->
+            val (tabKey, iconRes) = pair
+            val active = (screen == tabKey || currentTab == tabKey)
+            val hubBtn = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+                background = rounded(if (active) RED else 0x22FFFFFF.toInt())
+                setPadding(dp(14), dp(12), dp(14), dp(12))
+                isClickable = true
+                setOnClickListener { closeSidebar(); loadTab(tabKey) }
+            }
+            hubBtn.addView(ImageView(this).apply {
+                setImageResource(iconRes); imageTintList = ColorStateList.valueOf(Color.WHITE)
+            }, LinearLayout.LayoutParams(dp(22), dp(22)))
+            val hubText = column().apply { setPadding(dp(12), 0, 0, 0); layoutParams = LinearLayout.LayoutParams(0, -2, 1f) }
+            hubText.addView(label(title, 14f, true))
+            hubText.addView(TextView(this).apply { text = desc; textSize = 11f; setTextColor(MUTED) })
+            hubBtn.addView(hubText)
+            hubBtn.addView(badgePill("HUB"))
+            panel.addView(hubBtn, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
+        }
+
         if (!settings.isKids) {
-            // Dedicated Music Hub Tab
+            // Music Hub
             val musicBtn = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
                 background = rounded(if (screen == "music" || currentTab == "music") 0xFF1DB954.toInt() else 0x22FFFFFF.toInt())
@@ -974,26 +999,10 @@ class MainActivity : AppCompatActivity() {
             musicText.addView(label("Music", 14f, true))
             musicText.addView(TextView(this).apply { text = "Albums, artists & music player"; textSize = 11f; setTextColor(MUTED) })
             musicBtn.addView(musicText)
-            musicBtn.addView(badgePill("MUSIC"))
+            musicBtn.addView(badgePill("HUB"))
             panel.addView(musicBtn, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
 
-            val booksBtn = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
-                background = rounded(if (screen == "books" || currentTab == "books") RED else 0x22FFFFFF.toInt())
-                setPadding(dp(14), dp(12), dp(14), dp(12))
-                isClickable = true
-                setOnClickListener { closeSidebar(); loadBooks() }
-            }
-            booksBtn.addView(ImageView(this).apply {
-                setImageResource(R.drawable.nav_list); imageTintList = ColorStateList.valueOf(Color.WHITE)
-            }, LinearLayout.LayoutParams(dp(22), dp(22)))
-            val booksText = column().apply { setPadding(dp(12), 0, 0, 0); layoutParams = LinearLayout.LayoutParams(0, -2, 1f) }
-            booksText.addView(label("Books Hub", 14f, true))
-            booksText.addView(TextView(this).apply { text = "Bookshelf, 1-page reader & requests"; textSize = 11f; setTextColor(MUTED) })
-            booksBtn.addView(booksText)
-            booksBtn.addView(badgePill("HUB"))
-            panel.addView(booksBtn, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
-
+            // YouTube Hub
             val ytBtn = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
                 background = rounded(if (screen == "youtube") RED else 0x22FFFFFF.toInt())
@@ -1009,7 +1018,25 @@ class MainActivity : AppCompatActivity() {
             ytText.addView(TextView(this).apply { text = "Continue watching, podcasts & trending"; textSize = 11f; setTextColor(MUTED) })
             ytBtn.addView(ytText)
             ytBtn.addView(badgePill("HUB"))
-            panel.addView(ytBtn, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = if (settings.isAdmin) dp(8) else dp(20) })
+            panel.addView(ytBtn, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
+
+            // Books Hub
+            val booksBtn = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+                background = rounded(if (screen == "books" || currentTab == "books") RED else 0x22FFFFFF.toInt())
+                setPadding(dp(14), dp(12), dp(14), dp(12))
+                isClickable = true
+                setOnClickListener { closeSidebar(); loadBooks() }
+            }
+            booksBtn.addView(ImageView(this).apply {
+                setImageResource(R.drawable.nav_list); imageTintList = ColorStateList.valueOf(Color.WHITE)
+            }, LinearLayout.LayoutParams(dp(22), dp(22)))
+            val booksText = column().apply { setPadding(dp(12), 0, 0, 0); layoutParams = LinearLayout.LayoutParams(0, -2, 1f) }
+            booksText.addView(label("Books", 14f, true))
+            booksText.addView(TextView(this).apply { text = "Bookshelf, 1-page reader & requests"; textSize = 11f; setTextColor(MUTED) })
+            booksBtn.addView(booksText)
+            booksBtn.addView(badgePill("HUB"))
+            panel.addView(booksBtn, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = if (settings.isAdmin) dp(8) else dp(20) })
 
             if (settings.isAdmin) {
                 val dlMgrBtn = LinearLayout(this).apply {
@@ -1035,41 +1062,6 @@ class MainActivity : AppCompatActivity() {
                 dlMgrBtn.addView(badgePill("ADMIN"))
                 panel.addView(dlMgrBtn, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(20) })
             }
-        }
-
-        // Section: Jellyfin Media (A–Z)
-        panel.addView(TextView(this).apply {
-            text = "MEDIA LIBRARY (A–Z)"; textSize = 11f; typeface = android.graphics.Typeface.DEFAULT_BOLD
-            setTextColor(MUTED); setPadding(0, 0, 0, dp(4))
-        })
-        panel.addView(TextView(this).apply {
-            text = "Direct access to all media stored on your server, sorted alphabetically."; textSize = 11f
-            setTextColor(0xFF888888.toInt()); setPadding(0, 0, 0, dp(12))
-        })
-
-        // Library Items: Movies (A-Z) and TV Shows (A-Z)
-        val libs = listOf(
-            Triple("Movies", "All movies on your Jellyfin server", "movies"),
-            Triple("TV Shows", "All series on your Jellyfin server", "tv")
-        )
-
-        libs.forEach { (name, desc, type) ->
-            val btn = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
-                background = rounded(0x18FFFFFF.toInt())
-                setPadding(dp(14), dp(12), dp(14), dp(12))
-                isClickable = true
-                setOnClickListener {
-                    closeSidebar()
-                    loadCatalog(type)
-                }
-            }
-            val textCol = column().apply { layoutParams = LinearLayout.LayoutParams(0, -2, 1f) }
-            textCol.addView(label(name, 14f, true))
-            textCol.addView(TextView(this).apply { text = desc; textSize = 11f; setTextColor(MUTED) })
-            btn.addView(textCol)
-            btn.addView(badgePill("A–Z"))
-            panel.addView(btn, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
         }
 
         // Divider
