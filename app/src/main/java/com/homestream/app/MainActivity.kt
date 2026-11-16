@@ -4312,6 +4312,7 @@ class MainActivity : AppCompatActivity() {
         }
         pillRow.addView(categoryPill("Modules", active = adminPanelTab == "modules") { adminPanel("modules") })
         pillRow.addView(categoryPill("Media Management", active = adminPanelTab == "media") { adminPanel("media") })
+        pillRow.addView(categoryPill("Downloads", active = adminPanelTab == "downloads") { adminPanel("downloads") })
         pillRow.addView(categoryPill("System & Profiles", active = adminPanelTab == "system") { adminPanel("system") })
         content.addView(HorizontalScrollView(this).apply {
             isHorizontalScrollBarEnabled = false
@@ -4363,13 +4364,86 @@ class MainActivity : AppCompatActivity() {
                         }
                     }
                     "media" -> {
+                        val nativeData = runCatching { api.call("native/library") }.getOrNull()
+                        if (screen != "admin-panel" || adminPanelTab != "media") return@launch
+                        host.removeAllViews()
+
+                        val nativeSettings = nativeData?.optJSONObject("settings")
+                        val engine = nativeSettings?.optString("mediaEngine", "jellyfin") ?: "jellyfin"
+                        val libs = nativeSettings?.optJSONArray("libraries")
+                        val items = nativeData?.optJSONArray("items")
+                        val stats = nativeData?.optJSONObject("stats")
+                        val streams = nativeData?.optJSONArray("activeStreams")
+
+                        val engineCard = column().apply {
+                            background = rounded(0xFF1A1A1A.toInt(), radius = dp(10).toFloat())
+                            setPadding(dp(14), dp(12), dp(14), dp(12))
+                        }
+                        engineCard.addView(label("Native Media Engine", 15f, true))
+                        engineCard.addView(TextView(this@MainActivity).apply {
+                            text = "Active Engine: ${engine.uppercase()} • Indexed Items: ${items?.length() ?: 0}\n" +
+                                "Active Streams: ${streams?.length() ?: 0} • Watch Time: ${stats?.optDouble("totalWatchHours", 0.0) ?: 0.0}h"
+                            textSize = 12f; setTextColor(MUTED); setPadding(0, dp(6), 0, dp(10))
+                        })
+                        val btnRow = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.HORIZONTAL }
+                        btnRow.addView(action("Scan Libraries", primary = true) {
+                            lifecycleScope.launch {
+                                toast("Scanning native libraries...")
+                                runCatching {
+                                    api.call("native/library", body = JSONObject().put("action", "scan"))
+                                }.onSuccess {
+                                    toast("Library scan finished")
+                                    adminPanel("media")
+                                }.onFailure { toast(it.message ?: "Scan failed") }
+                            }
+                        })
+                        btnRow.addView(action(if (engine == "native") "Use Jellyfin" else "Use Native Engine") {
+                            val nextEngine = if (engine == "native") "jellyfin" else "native"
+                            lifecycleScope.launch {
+                                runCatching {
+                                    api.call(
+                                        "native/library",
+                                        body = JSONObject().put("action", "saveSettings")
+                                            .put("settings", JSONObject().put("mediaEngine", nextEngine))
+                                    )
+                                }.onSuccess {
+                                    toast("Switched engine to $nextEngine")
+                                    adminPanel("media")
+                                }.onFailure { toast(it.message ?: "Switch failed") }
+                            }
+                        }.apply {
+                            (layoutParams as? LinearLayout.LayoutParams)?.marginStart = dp(8)
+                        })
+                        engineCard.addView(btnRow)
+                        host.addView(engineCard, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(10) })
+
+                        if (libs != null && libs.length() > 0) {
+                            val libCard = column().apply {
+                                background = rounded(0xFF1A1A1A.toInt(), radius = dp(10).toFloat())
+                                setPadding(dp(14), dp(12), dp(14), dp(12))
+                            }
+                            libCard.addView(label("Configured Libraries (${libs.length()})", 14f, true))
+                            for (i in 0 until libs.length()) {
+                                val lib = libs.optJSONObject(i) ?: continue
+                                val paths = lib.optJSONArray("paths")?.let { arr ->
+                                    (0 until arr.length()).joinToString(", ") { arr.optString(it) }
+                                } ?: ""
+                                libCard.addView(TextView(this@MainActivity).apply {
+                                    text = "• ${lib.optString("name")} (${lib.optString("type")}): $paths"
+                                    textSize = 12f; setTextColor(MUTED); setPadding(0, dp(4), 0, 0)
+                                })
+                            }
+                            host.addView(libCard, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(10) })
+                        }
+                    }
+                    "downloads" -> {
                         while (kotlinx.coroutines.currentCoroutineContext()[kotlinx.coroutines.Job]?.isActive == true &&
-                            screen == "admin-panel" && adminPanelTab == "media"
+                            screen == "admin-panel" && adminPanelTab == "downloads"
                         ) {
                             val mgr = runCatching { api.call("downloads/manager") }.getOrNull()
                             val music = runCatching { api.call("music/import-status") }.getOrNull()
                             val req = runCatching { api.call("requested") }.getOrNull()
-                            if (screen != "admin-panel" || adminPanelTab != "media") return@launch
+                            if (screen != "admin-panel" || adminPanelTab != "downloads") return@launch
                             host.removeAllViews()
 
                             val torrents = mgr?.objects("torrents").orEmpty()
