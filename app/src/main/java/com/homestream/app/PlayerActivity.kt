@@ -84,6 +84,16 @@ class PlayerActivity : AppCompatActivity() {
     private var negotiation: Job? = null
     private var retryJob: Job? = null
     private var playbackStarted = false
+    private data class SkipSeg(val type: String, val startSec: Double, val endSec: Double)
+    private data class TrickplayCue(val startSec: Double, val endSec: Double, val x: Int, val y: Int, val w: Int, val h: Int)
+    private var skipSegments: List<SkipSeg> = emptyList()
+    private var nativeVersions: List<Pair<String, String>> = emptyList()
+    private var selectedVersionId: String? = null
+    private var trickplayCues: List<TrickplayCue> = emptyList()
+    private var trickplaySprite: android.graphics.Bitmap? = null
+    private var skipBtn: TextView? = null
+    private var trickplayPreview: ImageView? = null
+    private var syncRoomCode: String? = null
     private var remote: RemoteMediaClient? = null
     private var episodes = EpisodeQueue()
     private var episodeJob: Job? = null
@@ -251,8 +261,39 @@ class PlayerActivity : AppCompatActivity() {
             setScrubberColor(Color.WHITE)
             setBufferedColor(0x80FFFFFF.toInt())
             setUnplayedColor(0x33FFFFFF.toInt())
+            addListener(object : androidx.media3.ui.TimeBar.OnScrubListener {
+                override fun onScrubStart(timeBar: androidx.media3.ui.TimeBar, positionMs: Long) = showTrickplayAt(positionMs)
+                override fun onScrubMove(timeBar: androidx.media3.ui.TimeBar, positionMs: Long) = showTrickplayAt(positionMs)
+                override fun onScrubStop(timeBar: androidx.media3.ui.TimeBar, positionMs: Long, canceled: Boolean) {
+                    trickplayPreview?.visibility = View.GONE
+                }
+            })
         }
         frame.addView(playerView, FrameLayout.LayoutParams(-1, -1))
+
+        trickplayPreview = ImageView(this).apply {
+            visibility = View.GONE
+            scaleType = ImageView.ScaleType.CENTER_CROP
+            setBackgroundColor(Color.BLACK)
+            setPadding(dp(2), dp(2), dp(2), dp(2))
+        }
+        frame.addView(trickplayPreview, FrameLayout.LayoutParams(dp(160), dp(90), Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply {
+            bottomMargin = dp(86)
+        })
+
+        skipBtn = TextView(this).apply {
+            visibility = View.GONE
+            text = "Skip Intro →"
+            textSize = 13f
+            setTypeface(null, android.graphics.Typeface.BOLD)
+            setTextColor(Color.BLACK)
+            background = rounded(Color.WHITE, radius = dp(8).toFloat())
+            setPadding(dp(14), dp(8), dp(14), dp(8))
+            isClickable = true; isFocusable = true
+        }
+        frame.addView(skipBtn, FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM or Gravity.END).apply {
+            marginEnd = dp(20); bottomMargin = dp(88)
+        })
 
         // Netflix-style top control overlay with soft vertical scrim gradient
         overlay = column().apply {
@@ -738,7 +779,7 @@ class PlayerActivity : AppCompatActivity() {
                 updateModeBadge()
                 val audioCodecs = getDeviceSupportedAudioCodecs()
                 val stream = if (media.isDownload) JSONObject().put("streamUrl", media.downloadUrl)
-                    else api.call("playback", mapOf(
+                    else api.call("playback", (mapOf(
                         "itemId" to targetId,
                         "forceTranscode" to transcode.toString(),
                         "videoCodecs" to runCatching {
@@ -746,9 +787,11 @@ class PlayerActivity : AppCompatActivity() {
                                 .filter { !it.isEncoder }.flatMap { it.supportedTypes.toList() })
                         }.getOrDefault("h264"),
                         "audioCodecs" to audioCodecs
-                    ) + if (isTelevision()) mapOf("receiver" to "native-tv", "videoCapabilities" to televisionVideoProfiles().toString()) else emptyMap())
+                    ) + (selectedVersionId?.let { mapOf("versionId" to it) } ?: emptyMap())
+                      + if (isTelevision()) mapOf("receiver" to "native-tv", "videoCapabilities" to televisionVideoProfiles().toString()) else emptyMap()))
                 applyInitialResume(stream)
                 describeStream(stream)
+                parseNativePlayerExtras(stream)
                 val url = stream.optString("streamUrl")
                 if (url.isBlank()) {
                     showUnDownloadedUI(stream.optString("error", "This title has not been downloaded yet."))
@@ -794,7 +837,37 @@ class PlayerActivity : AppCompatActivity() {
                     observeEpisodeNavigation(exo)
                     exo.addListener(object : Player.Listener {
                         override fun onPlaybackStateChanged(state: Int) {
-                            if (state == Player.STATE_READY) { prepared = true; clearMessages(); reportStarted() }
+                            if (state == Player.STATE_READY) {
+                                prepared = true; clearMessages(); reportStarted()
+                                lifecycleScope.launch {
+                                    var tick = 0
+                                    while (player === exo && !isFinishing && !isDestroyed) {
+                                        val sec = exo.currentPosition / 1000.0
+                                        val seg = skipSegments.firstOrNull { sec >= it.startSec && sec < it.endSec - 1.0 }
+                                        if (seg != null) {
+                                            skipBtn?.text = if (seg.type == "credits") "Skip Credits →" else "Skip Intro →"
+                                            skipBtn?.setOnClickListener { exo.seekTo((seg.endSec * 1000).toLong()) }
+                                            skipBtn?.visibility = View.VISIBLE
+                                        } else {
+                                            skipBtn?.visibility = View.GONE
+                                        }
+                                        val roomCode = syncRoomCode
+                                        if (roomCode != null && tick % 2 == 0) {
+                                            runCatching {
+                                                val r = api.call("syncplay", mapOf("code" to roomCode)).optJSONObject("room")
+                                                if (r != null) {
+                                                    val targetMs = r.optLong("positionTicks", 0L) / 10_000L
+                                                    if (kotlin.math.abs(exo.currentPosition - targetMs) > 2500L) exo.seekTo(targetMs)
+                                                    val paused = r.optBoolean("isPaused", false)
+                                                    if (paused && exo.isPlaying) exo.pause() else if (!paused && !exo.isPlaying) exo.play()
+                                                }
+                                            }
+                                        }
+                                        tick++
+                                        delay(1000)
+                                    }
+                                }
+                            }
                             if (state == Player.STATE_ENDED) {
                                 position = exo.duration.coerceAtLeast(0); report(true)
                                 if (autoplay) changeEpisode(1, automatic = true)
@@ -1182,10 +1255,79 @@ class PlayerActivity : AppCompatActivity() {
         playerView.findViewById<View>(androidx.media3.ui.R.id.exo_play_pause)?.requestFocus()
     }
 
+    private fun parseNativePlayerExtras(stream: JSONObject) {
+        val segs = mutableListOf<SkipSeg>()
+        stream.optJSONArray("skipSegments")?.let { arr ->
+            for (i in 0 until arr.length()) {
+                val o = arr.optJSONObject(i) ?: continue
+                segs.add(SkipSeg(o.optString("type", "intro"), o.optDouble("startSeconds", 0.0), o.optDouble("endSeconds", 0.0)))
+            }
+        }
+        skipSegments = segs
+
+        val vers = mutableListOf<Pair<String, String>>()
+        stream.optJSONArray("versions")?.let { arr ->
+            for (i in 0 until arr.length()) {
+                val o = arr.optJSONObject(i) ?: continue
+                vers.add(o.optString("id") to o.optString("label", "Version ${i + 1}"))
+            }
+        }
+        nativeVersions = vers
+
+        val tpUrl = stream.optString("trickplayUrl")
+        trickplayCues = emptyList(); trickplaySprite = null
+        if (tpUrl.isNotBlank()) {
+            lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                runCatching {
+                    val req = okhttp3.Request.Builder().url(api.absolute(tpUrl)).build()
+                    val vttText = api.mediaClient().newCall(req).execute().use { it.body?.string().orEmpty() }
+                    val lines = vttText.lines()
+                    val cues = mutableListOf<TrickplayCue>()
+                    var spriteUrl = ""
+                    fun parseTs(ts: String): Double {
+                        val p = ts.trim().split(":").mapNotNull { it.toDoubleOrNull() }
+                        return if (p.size == 3) p[0] * 3600 + p[1] * 60 + p[2] else if (p.size == 2) p[0] * 60 + p[1] else 0.0
+                    }
+                    val tsRe = Regex("""^(\d{2}:\d{2}:\d{2}(?:\.\d+)?)\s*-->\s*(\d{2}:\d{2}:\d{2}(?:\.\d+)?)""")
+                    val xyRe = Regex("""#xywh=(\d+),(\d+),(\d+),(\d+)""")
+                    for (i in lines.indices) {
+                        val m = tsRe.find(lines[i]) ?: continue
+                        val next = lines.getOrNull(i + 1)?.trim().orEmpty()
+                        val xy = xyRe.find(next) ?: continue
+                        if (spriteUrl.isBlank()) spriteUrl = next.substringBefore("#")
+                        cues.add(TrickplayCue(parseTs(m.groupValues[1]), parseTs(m.groupValues[2]), xy.groupValues[1].toInt(), xy.groupValues[2].toInt(), xy.groupValues[3].toInt(), xy.groupValues[4].toInt()))
+                    }
+                    if (spriteUrl.isNotBlank() && cues.isNotEmpty()) {
+                        val sReq = okhttp3.Request.Builder().url(api.absolute(spriteUrl)).build()
+                        val bmp = api.mediaClient().newCall(sReq).execute().use { r ->
+                            r.body?.byteStream()?.let { android.graphics.BitmapFactory.decodeStream(it) }
+                        }
+                        if (bmp != null) {
+                            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) { trickplayCues = cues; trickplaySprite = bmp }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private fun showTrickplayAt(positionMs: Long) {
+        val sprite = trickplaySprite ?: return
+        val sec = positionMs / 1000.0
+        val cue = trickplayCues.firstOrNull { sec >= it.startSec && sec < it.endSec } ?: return
+        if (cue.x + cue.w <= sprite.width && cue.y + cue.h <= sprite.height) {
+            val crop = android.graphics.Bitmap.createBitmap(sprite, cue.x, cue.y, cue.w, cue.h)
+            trickplayPreview?.setImageBitmap(crop)
+            trickplayPreview?.visibility = View.VISIBLE
+        }
+    }
+
     private fun showPlayerSettings() {
-        showPlayerChoices(playerView, listOf("Playback speed", "Audio", "Subtitle appearance")) { choice ->
-            when (choice) {
-                0 -> {
+        val options = mutableListOf("Playback speed", "Audio", "Subtitle appearance", "SyncPlay (Watch Together)")
+        if (nativeVersions.size > 1) options.add("Video version")
+        showPlayerChoices(playerView, options) { choice ->
+            when (options.getOrNull(choice)) {
+                "Playback speed" -> {
                     val exo = player ?: return@showPlayerChoices
                     val speeds = floatArrayOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f)
                     val selected = speeds.indexOfFirst { kotlin.math.abs(it - exo.playbackParameters.speed) < 0.01f }
@@ -1193,7 +1335,7 @@ class PlayerActivity : AppCompatActivity() {
                         exo.setPlaybackSpeed(speeds[index])
                     }
                 }
-                1 -> player?.let { exo ->
+                "Audio" -> player?.let { exo ->
                     val tracks = exo.currentTracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }
                         .flatMap { group -> (0 until group.length).filter { group.isTrackSupported(it) }.map { group to it } }
                     val names = androidx.media3.ui.DefaultTrackNameProvider(resources)
@@ -1211,7 +1353,53 @@ class PlayerActivity : AppCompatActivity() {
                         exo.trackSelectionParameters = parameters.build()
                     }
                 }
-                2 -> subtitleAppearance.show(this, playerView)
+                "Subtitle appearance" -> subtitleAppearance.show(this, playerView)
+                "Video version" -> {
+                    val labels = nativeVersions.map { it.second }
+                    val sel = nativeVersions.indexOfFirst { it.first == selectedVersionId }.coerceAtLeast(0)
+                    showPlayerChoices(playerView, labels, sel) { idx ->
+                        selectedVersionId = nativeVersions[idx].first
+                        startLocal()
+                    }
+                }
+                "SyncPlay (Watch Together)" -> {
+                    val input = android.widget.EditText(this).apply { hint = "Room code (leave empty to create)" }
+                    val msg = if (syncRoomCode != null) "Connected to room: $syncRoomCode" else "Create a new room or enter a room code to join."
+                    val builder = androidx.appcompat.app.AlertDialog.Builder(this)
+                        .setTitle("SyncPlay")
+                        .setMessage(msg)
+                        .setView(input)
+                        .setPositiveButton(if (syncRoomCode != null) "Push Sync" else "Create / Join") { _, _ ->
+                            val code = input.text.toString().trim().uppercase()
+                            lifecycleScope.launch {
+                                runCatching {
+                                    if (syncRoomCode != null && code.isBlank()) {
+                                        val posTicks = ((player?.currentPosition ?: 0L) * 10_000L)
+                                        api.call("syncplay", body = JSONObject().put("action", "sync").put("code", syncRoomCode).put("isPaused", player?.isPlaying != true).put("positionTicks", posTicks))
+                                        Toast.makeText(this@PlayerActivity, "Synced room $syncRoomCode", Toast.LENGTH_SHORT).show()
+                                    } else if (code.isNotBlank()) {
+                                        val r = api.call("syncplay", body = JSONObject().put("action", "join").put("code", code))
+                                        syncRoomCode = r.optJSONObject("room")?.optString("code")
+                                        Toast.makeText(this@PlayerActivity, "Joined SyncPlay room $syncRoomCode", Toast.LENGTH_SHORT).show()
+                                    } else {
+                                        val r = api.call("syncplay", body = JSONObject().put("action", "create").put("itemId", currentPlaybackId).put("title", media.title))
+                                        syncRoomCode = r.optJSONObject("room")?.optString("code")
+                                        Toast.makeText(this@PlayerActivity, "Created SyncPlay room $syncRoomCode", Toast.LENGTH_SHORT).show()
+                                    }
+                                }.onFailure { Toast.makeText(this@PlayerActivity, it.message ?: "SyncPlay error", Toast.LENGTH_SHORT).show() }
+                            }
+                        }
+                    if (syncRoomCode != null) {
+                        builder.setNegativeButton("Leave") { _, _ ->
+                            val c = syncRoomCode ?: return@setNegativeButton
+                            syncRoomCode = null
+                            lifecycleScope.launch { runCatching { api.call("syncplay", body = JSONObject().put("action", "leave").put("code", c)) } }
+                        }
+                    } else {
+                        builder.setNegativeButton("Cancel", null)
+                    }
+                    builder.show()
+                }
             }
         }
     }
