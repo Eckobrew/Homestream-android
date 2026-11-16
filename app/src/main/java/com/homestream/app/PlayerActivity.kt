@@ -83,6 +83,7 @@ class PlayerActivity : AppCompatActivity() {
     private var timer: Job? = null
     private var negotiation: Job? = null
     private var retryJob: Job? = null
+    private var extrasTickerJob: Job? = null
     private var playbackStarted = false
     private data class SkipSeg(val type: String, val startSec: Double, val endSec: Double)
     private data class TrickplayCue(val startSec: Double, val endSec: Double, val x: Int, val y: Int, val w: Int, val h: Int)
@@ -839,7 +840,8 @@ class PlayerActivity : AppCompatActivity() {
                         override fun onPlaybackStateChanged(state: Int) {
                             if (state == Player.STATE_READY) {
                                 prepared = true; clearMessages(); reportStarted()
-                                lifecycleScope.launch {
+                                extrasTickerJob?.cancel()
+                                extrasTickerJob = lifecycleScope.launch {
                                     var tick = 0
                                     while (player === exo && !isFinishing && !isDestroyed) {
                                         val sec = exo.currentPosition / 1000.0
@@ -1093,6 +1095,7 @@ class PlayerActivity : AppCompatActivity() {
         if (castVideoCapabilities != null) {
             params["videoCapabilities"] = castVideoCapabilities!!
         }
+        selectedVersionId?.takeIf { it.isNotBlank() }?.let { params["versionId"] = it }
         if (tmdb > 0) params["tmdbId"] = tmdb.toString()
         params["type"] = if (isTv) "tv" else "movie"
         if (isTv) {
@@ -1358,6 +1361,7 @@ class PlayerActivity : AppCompatActivity() {
                     val labels = nativeVersions.map { it.second }
                     val sel = nativeVersions.indexOfFirst { it.first == selectedVersionId }.coerceAtLeast(0)
                     showPlayerChoices(playerView, labels, sel) { idx ->
+                        position = player?.currentPosition?.coerceAtLeast(0L) ?: position
                         selectedVersionId = nativeVersions[idx].first
                         startLocal()
                     }
