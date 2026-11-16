@@ -1208,6 +1208,7 @@ class PlayerActivity : AppCompatActivity() {
             return
         }
         negotiation?.cancel(); castLoading = false
+        selectedVersionId = null
         media = item; currentPlaybackId = item.playbackId; position = 0; wantsPlay = true
         updateEpisodeControls()
         val session = castCtx?.sessionManager?.currentCastSession

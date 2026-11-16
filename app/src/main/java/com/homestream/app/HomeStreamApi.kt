@@ -182,6 +182,10 @@ class HomeStreamApi(private val settings: ConnectionSettings) {
                     }
                 }.build().toString()
         }
+        if (target.scheme == base.scheme && target.host == base.host && target.port == base.port &&
+            target.encodedPath.endsWith("/api/native/stream")) {
+            return target.newBuilder().encodedPath(target.encodedPath.removeSuffix("/api/native/stream") + "/api/mobile/v1/native/stream").build().toString()
+        }
         return if (target.scheme == base.scheme && target.host == base.host && target.port == base.port &&
             target.encodedPath.endsWith("/api/stream/download")) {
             target.newBuilder().encodedPath(target.encodedPath.removeSuffix("/api/stream/download") + "/api/mobile/v1/stream/download").build().toString()
