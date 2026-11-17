@@ -70,6 +70,7 @@ class PlayerActivity : AppCompatActivity() {
     private var playbackMethod = "DirectPlay"
     private var playbackDetails = "Preparing playback"
     private var modeBadge: TextView? = null
+    private var audioButton: View? = null
     private var isStreamingDownload = false
     private var downloadPollingJob: Job? = null
     private var castGeneration = 0
@@ -303,6 +304,26 @@ class PlayerActivity : AppCompatActivity() {
             })
         }
         subtitleAppearance.apply(playerView.subtitleView)
+        playerView.findViewById<android.view.ViewGroup>(androidx.media3.ui.R.id.exo_basic_controls)?.let { controls ->
+            val subBtn = playerView.findViewById<View>(androidx.media3.ui.R.id.exo_subtitle)
+            val audioBtn = android.widget.ImageButton(this).apply {
+                setImageResource(R.drawable.ic_audio)
+                imageTintList = ColorStateList.valueOf(Color.WHITE)
+                background = subBtn?.background?.constantState?.newDrawable(resources)?.mutate()
+                scaleType = ImageView.ScaleType.CENTER
+                isFocusable = true
+                isClickable = true
+                contentDescription = "Audio"
+                setOnClickListener { showAudioMenu() }
+            }
+            audioButton = audioBtn
+            val lp = subBtn?.layoutParams ?: LinearLayout.LayoutParams(dp(40), dp(40))
+            val insertIndex = if (subBtn != null) controls.indexOfChild(subBtn).coerceAtLeast(0) else 0
+            controls.addView(audioBtn, insertIndex, lp)
+        }
+        playerView.findViewById<View>(androidx.media3.ui.R.id.exo_subtitle)?.setOnClickListener {
+            showSubtitlesMenu()
+        }
         playerView.findViewById<View>(androidx.media3.ui.R.id.exo_settings)?.setOnClickListener {
             showPlayerSettings()
         }
@@ -1497,8 +1518,9 @@ class PlayerActivity : AppCompatActivity() {
             androidx.media3.ui.R.id.exo_next, androidx.media3.ui.R.id.exo_rew,
             androidx.media3.ui.R.id.exo_ffwd, androidx.media3.ui.R.id.exo_settings,
             androidx.media3.ui.R.id.exo_subtitle)
-        for (id in controls) {
-            playerView.findViewById<View>(id)?.apply {
+        val controlViews = controls.mapNotNull { playerView.findViewById<View>(it) } + listOfNotNull(audioButton)
+        for (view in controlViews) {
+            view.apply {
                 background = android.graphics.drawable.StateListDrawable().apply {
                     fun highlight(color: Int) = GradientDrawable().apply {
                         setColor(color); cornerRadius = dp(8).toFloat()
@@ -1597,14 +1619,107 @@ class PlayerActivity : AppCompatActivity() {
         }
     }
 
-    private fun showPlayerSettings() {
-        val options = mutableListOf("Playback speed", "Quality ($qualityMode)", "Audio", "Subtitle appearance", "SyncPlay (Watch Together)")
-        if (burnInSubtitles.isNotEmpty()) {
-            options.add("Subtitles (Burn-in)")
+    private fun showAudioMenu() {
+        if (nativeAudioTracks.size > 1) {
+            val selected = nativeAudioTracks.indexOfFirst { it.first == selectedAudioIndex } + 1
+            val labels = listOf("Auto") + nativeAudioTracks.map { it.second }
+            showPlayerChoices(playerView, labels, selected) { choice ->
+                position = currentMediaPositionMs()
+                selectedAudioIndex = nativeAudioTracks.getOrNull(choice - 1)?.first
+                startLocal()
+            }
+            return
         }
+        val exo = player ?: return
+        val tracks = exo.currentTracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }
+            .flatMap { group -> (0 until group.length).filter { group.isTrackSupported(it) }.map { group to it } }
+        val names = androidx.media3.ui.DefaultTrackNameProvider(resources)
+        val selected = tracks.indexOfFirst { (group, index) -> group.isTrackSelected(index) } + 1
+        showPlayerChoices(playerView, listOf("Auto") + tracks.map { (group, index) ->
+            names.getTrackName(group.getTrackFormat(index))
+        }, selected) { choice ->
+            val parameters = exo.trackSelectionParameters.buildUpon()
+                .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, false)
+                .clearOverridesOfType(C.TRACK_TYPE_AUDIO)
+            if (choice > 0) {
+                val (group, index) = tracks[choice - 1]
+                parameters.addOverride(androidx.media3.common.TrackSelectionOverride(group.mediaTrackGroup, index))
+            }
+            exo.trackSelectionParameters = parameters.build()
+        }
+    }
+
+    private fun showSubtitlesMenu() {
+        val exo = player
+        val textTracks = exo?.currentTracks?.groups
+            ?.filter { it.type == C.TRACK_TYPE_TEXT }
+            ?.flatMap { group -> (0 until group.length).filter { group.isTrackSupported(it) }.map { group to it } }
+            .orEmpty()
+        val names = androidx.media3.ui.DefaultTrackNameProvider(resources)
+        val selectedTextIdx = if (burnSubtitleIndex != null) -1 else textTracks.indexOfFirst { (group, index) -> group.isTrackSelected(index) }
+        val labels = mutableListOf("Off")
+        labels.addAll(textTracks.map { (group, index) -> names.getTrackName(group.getTrackFormat(index)) })
+        val burnOptionIndex = if (burnInSubtitles.isNotEmpty()) {
+            labels.add("Subtitles (Burn-in)")
+            labels.lastIndex
+        } else -1
+        labels.add("Subtitle appearance")
+        val appearanceOptionIndex = labels.lastIndex
+        val selectedRow = if (selectedTextIdx >= 0) selectedTextIdx + 1 else if (burnSubtitleIndex == null) 0 else -1
+
+        showPlayerChoices(playerView, labels, selectedRow) { choice ->
+            when {
+                choice == 0 -> {
+                    if (burnSubtitleIndex != null) {
+                        position = currentMediaPositionMs()
+                        burnSubtitleIndex = null
+                        startLocal()
+                    } else if (exo != null) {
+                        exo.trackSelectionParameters = exo.trackSelectionParameters.buildUpon()
+                            .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
+                            .clearOverridesOfType(C.TRACK_TYPE_TEXT)
+                            .build()
+                    }
+                }
+                choice in 1..textTracks.size -> {
+                    val (group, index) = textTracks[choice - 1]
+                    if (burnSubtitleIndex != null) {
+                        position = currentMediaPositionMs()
+                        burnSubtitleIndex = null
+                        startLocal()
+                    } else if (exo != null) {
+                        exo.trackSelectionParameters = exo.trackSelectionParameters.buildUpon()
+                            .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+                            .clearOverridesOfType(C.TRACK_TYPE_TEXT)
+                            .addOverride(androidx.media3.common.TrackSelectionOverride(group.mediaTrackGroup, index))
+                            .build()
+                    }
+                }
+                choice == burnOptionIndex -> {
+                    val selected = burnInSubtitles.indexOfFirst { it.first == burnSubtitleIndex } + 1
+                    val burnLabels = listOf("Off") + burnInSubtitles.map { it.second }
+                    showPlayerChoices(playerView, burnLabels, selected) { burnChoice ->
+                        position = currentMediaPositionMs()
+                        burnSubtitleIndex = burnInSubtitles.getOrNull(burnChoice - 1)?.first
+                        startLocal()
+                    }
+                }
+                choice == appearanceOptionIndex -> subtitleAppearance.show(this, playerView)
+            }
+        }
+    }
+
+    private fun showPlayerSettings() {
+        val options = mutableListOf("Playback speed", "Quality ($qualityMode)")
         if (nativeVersions.size > 1) {
             options.add("Video version")
         }
+        if (!media.isDownload) {
+            options.add("Playback mode (${if (transcode) "Transcode" else "Direct"})")
+            options.add("Playback details")
+        }
+        options.add("SyncPlay (Watch Together)")
+        options.add("Restart")
         showPlayerChoices(playerView, options) { choice ->
             when (options.getOrNull(choice)) {
                 "Playback speed" -> {
@@ -1625,42 +1740,6 @@ class PlayerActivity : AppCompatActivity() {
                         startLocal()
                     }
                 }
-                "Audio" -> if (nativeAudioTracks.size > 1) {
-                    val selected = nativeAudioTracks.indexOfFirst { it.first == selectedAudioIndex } + 1
-                    val labels = listOf("Auto") + nativeAudioTracks.map { it.second }
-                    showPlayerChoices(playerView, labels, selected) { choice ->
-                        position = currentMediaPositionMs()
-                        selectedAudioIndex = nativeAudioTracks.getOrNull(choice - 1)?.first
-                        startLocal()
-                    }
-                } else player?.let { exo ->
-                    val tracks = exo.currentTracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }
-                        .flatMap { group -> (0 until group.length).filter { group.isTrackSupported(it) }.map { group to it } }
-                    val names = androidx.media3.ui.DefaultTrackNameProvider(resources)
-                    val selected = tracks.indexOfFirst { (group, index) -> group.isTrackSelected(index) } + 1
-                    showPlayerChoices(playerView, listOf("Auto") + tracks.map { (group, index) ->
-                        names.getTrackName(group.getTrackFormat(index))
-                    }, selected) { choice ->
-                        val parameters = exo.trackSelectionParameters.buildUpon()
-                            .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, false)
-                            .clearOverridesOfType(C.TRACK_TYPE_AUDIO)
-                        if (choice > 0) {
-                            val (group, index) = tracks[choice - 1]
-                            parameters.addOverride(androidx.media3.common.TrackSelectionOverride(group.mediaTrackGroup, index))
-                        }
-                        exo.trackSelectionParameters = parameters.build()
-                    }
-                }
-                "Subtitle appearance" -> subtitleAppearance.show(this, playerView)
-                "Subtitles (Burn-in)" -> {
-                    val selected = burnInSubtitles.indexOfFirst { it.first == burnSubtitleIndex } + 1
-                    val labels = listOf("Off") + burnInSubtitles.map { it.second }
-                    showPlayerChoices(playerView, labels, selected) { choice ->
-                        position = currentMediaPositionMs()
-                        burnSubtitleIndex = burnInSubtitles.getOrNull(choice - 1)?.first
-                        startLocal()
-                    }
-                }
                 "Video version" -> {
                     val labels = nativeVersions.map { it.second }
                     val sel = nativeVersions.indexOfFirst { it.first == selectedVersionId }.coerceAtLeast(0)
@@ -1670,6 +1749,21 @@ class PlayerActivity : AppCompatActivity() {
                         selectedAudioIndex = null
                         startLocal()
                     }
+                }
+                "Playback mode (Transcode)", "Playback mode (Direct)" -> {
+                    player?.let { position = currentMediaPositionMs(); wantsPlay = it.playWhenReady }
+                    transcode = !transcode
+                    updateModeBadge()
+                    showMessage(if (transcode) "Switching to compatible HLS transcode…" else "Switching to direct play…")
+                    startLocal()
+                }
+                "Playback details" -> {
+                    androidx.appcompat.app.AlertDialog.Builder(this).setTitle("Playback details")
+                        .setMessage(playbackDetails).setPositiveButton("Close", null).show()
+                }
+                "Restart" -> {
+                    seekMediaTo(0L)
+                    player?.play()
                 }
                 "SyncPlay (Watch Together)" -> {
                     val input = android.widget.EditText(this).apply { hint = "Room code (leave empty to create)" }
