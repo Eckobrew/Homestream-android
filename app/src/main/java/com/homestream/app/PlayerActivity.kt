@@ -576,10 +576,14 @@ class PlayerActivity : AppCompatActivity() {
         val sTitle = intent.getStringExtra("seriesTitle")?.ifBlank { null } ?: media.title
 
         val tmdb = intent.getIntExtra("tmdbId", 0).takeIf { it > 0 } ?: if (media.tmdbId > 0) media.tmdbId else {
-            val strId = media.id.replace("^(?:seerr|tmdb)-(?:movie-|tv-)?".toRegex(), "")
-            strId.toIntOrNull() ?: 0
+            val match = Regex("""^(?:seerr|tmdb)-(?:movie-|tv-|ep-)?(\d+)(?:-\d+-\d+)?$""").find(media.id)
+            match?.groupValues?.get(1)?.toIntOrNull() ?: 0
         }
 
+        if (tmdb <= 0) {
+            showMessage("This title has no TMDB identifier for torrent streaming.")
+            return
+        }
         val totalDurationMs = (media.json.optInt("durationMinutes").takeIf { it > 0 } ?: 120) * 60L * 1000L
         val timeBar = playerView.findViewById<androidx.media3.ui.DefaultTimeBar>(androidx.media3.ui.R.id.exo_progress)
         timeBar?.setDuration(totalDurationMs)
@@ -614,8 +618,8 @@ class PlayerActivity : AppCompatActivity() {
         val sTitle = intent.getStringExtra("seriesTitle")?.ifBlank { null } ?: media.title
 
         val tmdb = intent.getIntExtra("tmdbId", 0).takeIf { it > 0 } ?: if (media.tmdbId > 0) media.tmdbId else {
-            val strId = media.id.replace("^(?:seerr|tmdb)-(?:movie-|tv-)?".toRegex(), "")
-            strId.toIntOrNull() ?: 0
+            val match = Regex("""^(?:seerr|tmdb)-(?:movie-|tv-|ep-)?(\d+)(?:-\d+-\d+)?$""").find(media.id)
+            match?.groupValues?.get(1)?.toIntOrNull() ?: 0
         }
 
         val totalDurationMs = (media.json.optInt("durationMinutes").takeIf { it > 0 } ?: 120) * 60L * 1000L
@@ -875,6 +879,11 @@ class PlayerActivity : AppCompatActivity() {
         if (offlinePath != null) {
             clearMessages()
             launchStreamUrl(Uri.fromFile(java.io.File(offlinePath)).toString())
+            return
+        }
+        // Stream Now must not reuse a qBittorrent download URL supplied by browse metadata.
+        if (media.source != "youtube" && (isStreamingDownload || media.json.optBoolean("isDownloading"))) {
+            startStreamingTorrentPipeline()
             return
         }
         if (media.isDownload || media.source == "youtube") {
@@ -1354,12 +1363,12 @@ class PlayerActivity : AppCompatActivity() {
         val epNum = intent.getIntExtra("episode", 0).takeIf { it > 0 } ?: item.json.optInt("episodeNumber", 1).coerceAtLeast(1)
         val sTitle = intent.getStringExtra("seriesTitle")?.ifBlank { null } ?: item.title
         val tmdb = intent.getIntExtra("tmdbId", 0).takeIf { it > 0 } ?: if (item.tmdbId > 0) item.tmdbId else {
-            val strId = item.id.replace("^(?:seerr|tmdb)-(?:movie-|tv-)?".toRegex(), "")
-            strId.toIntOrNull() ?: 0
+            val match = Regex("""^(?:seerr|tmdb)-(?:movie-|tv-|ep-)?(\d+)(?:-\d+-\d+)?$""").find(item.id)
+            match?.groupValues?.get(1)?.toIntOrNull() ?: 0
         }
 
         val params = mutableMapOf(
-            "itemId" to id,
+            "itemId" to if (isStreamingDownload && tmdb > 0) "tmdb-${if (isTv) "tv" else "movie"}-$tmdb" else id,
             "forceTranscode" to compatible.toString(),
             "receiver" to "cast",
             "canPlayHevc" to receiverProfile.hevc.toString(),
