@@ -16,14 +16,20 @@ import android.text.TextWatcher
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
-import android.webkit.WebChromeClient
-import android.webkit.WebSettings
-import android.webkit.WebView
-import android.webkit.WebViewClient
 import android.widget.*
 import androidx.activity.OnBackPressedCallback
+import androidx.annotation.OptIn
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackException
+import androidx.media3.common.Player
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.okhttp.OkHttpDataSource
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.ui.AspectRatioFrameLayout
+import androidx.media3.ui.PlayerView
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.lifecycleScope
@@ -50,8 +56,49 @@ class MainActivity : AppCompatActivity() {
     private lateinit var root: FrameLayout
     private lateinit var mainContainer: LinearLayout
     private var sidebarDrawer: FrameLayout? = null
-    private var trailerView: WebView? = null
+    private var trailerPlayer: ExoPlayer? = null
+    private var trailerPlayerView: PlayerView? = null
     private var sceneHost: FrameLayout? = null
+
+    @OptIn(UnstableApi::class)
+    private fun releaseTrailerPlayer() {
+        trailerPlayerView?.player = null
+        (trailerPlayerView?.parent as? ViewGroup)?.removeView(trailerPlayerView)
+        trailerPlayerView = null
+        trailerPlayer?.release()
+        trailerPlayer = null
+    }
+
+    @OptIn(UnstableApi::class)
+    private fun attachNativeTrailerPreview(headerArea: FrameLayout, trailerKey: String) {
+        releaseTrailerPlayer()
+        val streamUrl = api.absolute("/api/mobile/v1/youtube/stream-video?videoId=${Uri.encode(trailerKey)}")
+        val player = ExoPlayer.Builder(this)
+            .setMediaSourceFactory(DefaultMediaSourceFactory(OkHttpDataSource.Factory(api.mediaClient())))
+            .build().apply {
+                volume = 0f
+                repeatMode = Player.REPEAT_MODE_ONE
+                playWhenReady = true
+                addListener(object : Player.Listener {
+                    override fun onPlayerError(error: PlaybackException) {
+                        releaseTrailerPlayer()
+                    }
+                })
+                setMediaItem(MediaItem.fromUri(streamUrl))
+                prepare()
+            }
+        val pv = PlayerView(this).apply {
+            useController = false
+            resizeMode = AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+            setKeepContentOnPlayerReset(true)
+            isFocusable = false
+            isClickable = false
+            this.player = player
+        }
+        trailerPlayer = player
+        trailerPlayerView = pv
+        headerArea.addView(pv, FrameLayout.LayoutParams(-1, -1))
+    }
     private var work: Job? = null
     private var searchJob: Job? = null
     private var categoryJob: Job? = null
@@ -95,8 +142,7 @@ class MainActivity : AppCompatActivity() {
     private fun rememberScreen(key: String, reload: () -> Unit) {
         if (::root.isInitialized && key != navigationKey) {
             // Detached screens retain scroll, query, filters and focused cards. Keep memory bounded.
-            trailerView?.apply { (parent as? ViewGroup)?.removeView(this); stopLoading(); destroy() }
-            trailerView = null
+            releaseTrailerPlayer()
             browseHistory.addLast(BrowseState(root, mainContainer, content, sidebarDrawer, screen, currentTab,
                 currentFocus, heroItems, currentHeroIndex, heroContainer, lastDetails, navigationKey, screenLoading, screenLoader))
             while (browseHistory.size > 12) browseHistory.removeFirst()
@@ -108,7 +154,7 @@ class MainActivity : AppCompatActivity() {
         val saved = browseHistory.pollLast() ?: return false
         hubJob?.cancel(); hubSearch?.cancel()
         work?.cancel(); searchJob?.cancel(); categoryJob?.cancel(); heroRotationJob?.cancel(); ++generation
-        trailerView?.apply { stopLoading(); destroy() }; trailerView = null
+        releaseTrailerPlayer()
         root = saved.root; mainContainer = saved.main; content = saved.content; sidebarDrawer = saved.drawer
         screen = saved.screen; currentTab = saved.tab; heroItems = saved.heroItems
         currentHeroIndex = saved.heroIndex; heroContainer = saved.heroContainer; lastDetails = saved.details
@@ -261,7 +307,7 @@ class MainActivity : AppCompatActivity() {
         hubJob?.cancel(); hubSearch?.cancel()
         policyMonitor?.cancel(); policyCheck?.cancel()
         sessionsJob?.cancel()
-        trailerView?.onPause()
+        trailerPlayer?.pause()
         heroRotationJob?.cancel()
         super.onStop()
         castContext(this)?.sessionManager?.removeSessionManagerListener(castSessionListener, CastSession::class.java)
@@ -274,7 +320,7 @@ class MainActivity : AppCompatActivity() {
             verifyProfilePolicy()
             return
         }
-        trailerView?.onResume()
+        if (screen == "details") trailerPlayer?.play()
         if (playbackWasLaunched) {
             playbackWasLaunched = false
             catalogCache.clear()
@@ -315,7 +361,7 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
                 if (::root.isInitialized) root.visibility = View.VISIBLE
-                trailerView?.onResume()
+                if (screen == "details") trailerPlayer?.play()
                 if (intent.getBooleanExtra("musicPlayer", false) && !settings.isKids) { intent.removeExtra("musicPlayer"); musicControls() }
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
@@ -326,7 +372,7 @@ class MainActivity : AppCompatActivity() {
                     addView(action("Sign in / Connect Server") { setup() })
                 }
                 work?.cancel(); searchJob?.cancel(); categoryJob?.cancel(); heroRotationJob?.cancel()
-                trailerView?.onPause()
+                trailerPlayer?.pause()
                 if (e is HomeStreamApi.ResponseException && e.statusCode in listOf(401, 403)) {
                     stopService(Intent(this@MainActivity, MusicService::class.java))
                 }
@@ -338,7 +384,7 @@ class MainActivity : AppCompatActivity() {
     private fun shell() {
         hubJob?.cancel(); hubSearch?.cancel()
         searchJob?.cancel(); categoryJob?.cancel()
-        trailerView?.apply { stopLoading(); destroy() }; trailerView = null
+        releaseTrailerPlayer()
         heroRotationJob?.cancel()
         if (!supportFragmentManager.isStateSaved) {
             supportFragmentManager.findFragmentByTag("cast-mini")?.let {
@@ -1734,30 +1780,15 @@ class MainActivity : AppCompatActivity() {
             }
             headerArea.addView(backdropView, FrameLayout.LayoutParams(-1, -1))
 
-            // Check and load YouTube trailer preview if available
+            // Stream trailer preview via yt-dlp proxy using native ExoPlayer (zero YouTube iframe/WebView)
             val trailerKey = full.trailerKey.ifBlank {
                 data.optJSONObject("item")?.optString("trailerKey").orEmpty()
+            }.ifBlank {
+                full.json.optString("videoId")
             }
 
             if (trailerKey.isNotBlank()) {
-                val webView = WebView(this).apply {
-                    settings.javaScriptEnabled = true
-                    settings.domStorageEnabled = true
-                    settings.mediaPlaybackRequiresUserGesture = false
-                    settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-                    webChromeClient = WebChromeClient()
-                    webViewClient = WebViewClient()
-                    val html = """
-                        <!DOCTYPE html><html><head><meta name="viewport" content="width=device-width, initial-scale=1">
-                        <style>body{margin:0;background:#000;display:flex;align-items:center;justify-content:center;height:100vh;overflow:hidden;}iframe{width:100%;height:100%;border:none;}</style>
-                        </head><body>
-                        <iframe src="https://www.youtube-nocookie.com/embed/$trailerKey?autoplay=1&mute=1&controls=0&loop=1&playlist=$trailerKey&modestbranding=1&rel=0" allow="autoplay; fullscreen"></iframe>
-                        </body></html>
-                    """.trimIndent()
-                    loadDataWithBaseURL("https://www.youtube-nocookie.com", html, "text/html", "UTF-8", null)
-                }
-                trailerView = webView
-                headerArea.addView(webView, FrameLayout.LayoutParams(-1, -1))
+                attachNativeTrailerPreview(headerArea, trailerKey)
             }
 
             // Close button (X) in top right corner
@@ -3185,7 +3216,7 @@ class MainActivity : AppCompatActivity() {
         }
         eachRecycler(visible) { recycler, key -> recycler.layoutManager?.onSaveInstanceState()?.let { recyclerStates[key] = it } }
         val staged = column().apply { setPadding(visible.paddingLeft, visible.paddingTop, visible.paddingRight, visible.paddingBottom) }
-        if (screen == "details") { trailerView?.apply { stopLoading(); destroy() }; trailerView = null }
+        if (screen == "details") releaseTrailerPlayer()
         heroRotationJob?.cancel()
         content = staged
         try { draw(data) } finally { content = visible }
@@ -3289,7 +3320,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
-        trailerView?.apply { stopLoading(); destroy() }; trailerView = null
+        releaseTrailerPlayer()
         super.onDestroy()
     }
 
@@ -5795,31 +5826,7 @@ class MainActivity : AppCompatActivity() {
                             }
 
                             val streamBtn = action("Stream") {
-                                lifecycleScope.launch {
-                                    try {
-                                        toast("Resolving stream...")
-                                        val sRes = api.call("youtube/stream", mapOf("videoId" to item.optString("id")))
-                                        val streamUrl = sRes.optString("streamUrl")
-                                        if (streamUrl.isNotBlank()) {
-                                            val m = JSONObject().apply {
-                                                put("id", "yt-" + item.optString("id"))
-                                                put("title", item.optString("title"))
-                                                put("overview", item.optString("description"))
-                                                put("posterUrl", item.optString("thumbnailUrl"))
-                                                put("backdropUrl", item.optString("thumbnailUrl"))
-                                                put("isDownloading", true)
-                                                val proxyUrl = api.absolute("/api/mobile/v1/youtube/stream-video?videoId=" + item.optString("id"))
-                                                put("downloadStreamUrl", proxyUrl)
-                                                put("source", "youtube")
-                                            }
-                                            play(Media(m))
-                                        } else {
-                                            toast("Could not resolve stream URL")
-                                        }
-                                    } catch (e: Exception) {
-                                        toast("Playback failed: ${e.message}")
-                                    }
-                                }
+                                play(youtubeItemToMedia(item))
                             }.apply {
                                 textSize = 11f
                                 setPadding(dp(10), dp(4), dp(10), dp(4))
@@ -5852,6 +5859,7 @@ class MainActivity : AppCompatActivity() {
                             actionsCol.addView(dlBtn)
 
                             card.addView(actionsCol)
+                            card.setOnClickListener { play(youtubeItemToMedia(item)) }
                             resultsContainer.addView(card)
                         }
                     } catch (e: Exception) {

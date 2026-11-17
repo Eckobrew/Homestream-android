@@ -1055,8 +1055,8 @@ class PlayerActivity : AppCompatActivity() {
                 }
                 val src = track.optString("src")
                 if (src.isBlank()) continue
-                val flags = (if (track.optBoolean("isDefault")) C.SELECTION_FLAG_DEFAULT else 0) or
-                    (if (track.optBoolean("isForced")) C.SELECTION_FLAG_FORCED else 0)
+                // Never mark external WebVTT as DEFAULT so ExoPlayer never blocks video readiness on subtitle HTTP extraction.
+                val flags = if (track.optBoolean("isForced")) C.SELECTION_FLAG_FORCED else 0
                 textConfigs.add(
                     MediaItem.SubtitleConfiguration.Builder(Uri.parse(api.absolute(src)))
                         .setMimeType(MimeTypes.TEXT_VTT).setLanguage(track.optString("language"))
