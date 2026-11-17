@@ -190,7 +190,7 @@ class HomeStreamApi(private val settings: ConnectionSettings) {
         if (sameOrigin) {
             val path = target.encodedPath
             val route = path.substringAfterLast("/api/", "").removePrefix("v1/")
-            if (route in setOf("native/stream", "stream/download", "stream/torrent")) {
+            if (route in setOf("native/stream", "stream/torrent")) {
                 val prefix = path.substringBeforeLast("/api/")
                 return target.newBuilder().encodedPath("$prefix/api/mobile/v1/$route").build().toString()
             }

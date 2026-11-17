@@ -73,7 +73,6 @@ class PlayerActivity : AppCompatActivity() {
     private var audioButton: View? = null
     private var syncPlayButton: View? = null
     private var isStreamingDownload = false
-    private var downloadPollingJob: Job? = null
     private var castGeneration = 0
     private var castLoading = false
     private var castStartup: Job? = null
@@ -557,7 +556,7 @@ class PlayerActivity : AppCompatActivity() {
                 if (session?.isConnected == true) cast(session) else startStreamingTorrentPipeline()
             })
             overlay.addView(action("⬇  Request Download") {
-                startStreamingDownloadPipeline()
+                requestLibraryDownload()
             })
         }
         overlay.addView(action("←  Back to Browse") { finish() })
@@ -565,7 +564,6 @@ class PlayerActivity : AppCompatActivity() {
 
     private fun startStreamingTorrentPipeline() {
         isStreamingDownload = true
-        downloadPollingJob?.cancel()
         negotiation?.cancel()
         releaseLocal()
         clearMessages()
@@ -605,117 +603,28 @@ class PlayerActivity : AppCompatActivity() {
         launchStreamUrl(streamPath)
     }
 
-    private fun startStreamingDownloadPipeline(sendRequest: Boolean = true) {
-        isStreamingDownload = true
-        downloadPollingJob?.cancel()
-        negotiation?.cancel()
-        releaseLocal()
-        clearMessages()
-
+    private fun requestLibraryDownload() {
         val isTv = intent.getStringExtra("mediaType") == "tv" || media.type == "Series" || media.type == "Episode"
-        val sNum = intent.getIntExtra("season", 0).takeIf { it > 0 } ?: media.json.optInt("seasonNumber", 1).coerceAtLeast(1)
-        val epNum = intent.getIntExtra("episode", 0).takeIf { it > 0 } ?: media.json.optInt("episodeNumber", 1).coerceAtLeast(1)
-        val sTitle = intent.getStringExtra("seriesTitle")?.ifBlank { null } ?: media.title
-
-        val tmdb = intent.getIntExtra("tmdbId", 0).takeIf { it > 0 } ?: if (media.tmdbId > 0) media.tmdbId else {
-            val match = Regex("""^(?:seerr|tmdb)-(?:movie-|tv-|ep-)?(\d+)(?:-\d+-\d+)?$""").find(media.id)
-            match?.groupValues?.get(1)?.toIntOrNull() ?: 0
-        }
-
-        val totalDurationMs = (media.json.optInt("durationMinutes").takeIf { it > 0 } ?: 120) * 60L * 1000L
-        val timeBar = playerView.findViewById<androidx.media3.ui.DefaultTimeBar>(androidx.media3.ui.R.id.exo_progress)
-        timeBar?.setDuration(totalDurationMs)
-
-        showMessage("Waiting for download to start…")
-        downloadPollingJob = lifecycleScope.launch {
-            if (sendRequest && tmdb > 0) {
-                try {
-                    val body = JSONObject()
-                        .put("mediaType", if (isTv) "tv" else "movie")
-                        .put("mediaId", tmdb)
-                    if (isTv) body.put("seasons", org.json.JSONArray().put(sNum))
-                    api.call("request", body = body)
-                } catch (e: Exception) {
-                    if (e is kotlinx.coroutines.CancellationException) throw e
-                    android.util.Log.w("HomeStream", "Download request trigger: ${e.message}")
-                }
+        val season = intent.getIntExtra("season", 0).takeIf { it > 0 } ?: media.json.optInt("seasonNumber", 1).coerceAtLeast(1)
+        val tmdb = intent.getIntExtra("tmdbId", 0).takeIf { it > 0 } ?: media.tmdbId.takeIf { it > 0 }
+            ?: Regex("""^(?:seerr|tmdb)-(?:movie-|tv-|ep-)?(\d+)(?:-\d+-\d+)?$""").find(media.id)?.groupValues?.get(1)?.toIntOrNull()
+        if (tmdb == null || tmdb <= 0) { showMessage("This title has no TMDB identifier."); return }
+        negotiation?.cancel()
+        negotiation = lifecycleScope.launch {
+            try {
+                val body = JSONObject().put("mediaType", if (isTv) "tv" else "movie").put("mediaId", tmdb)
+                if (isTv) body.put("seasons", org.json.JSONArray().put(season))
+                api.call("request", body = body)
+                showUnDownloadedUI("Download requested. Play it from your library after import, or choose Stream Now.")
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                showUnDownloadedUI("Could not request this download. Try again or choose Stream Now.")
             }
-
-            var attempts = 0
-            val cleanMediaTitle = sTitle.lowercase().replace(Regex("[^a-z0-9]"), "")
-            var matchedHash = media.json.optString("torrentHash").takeIf { it.isNotBlank() }
-
-            while (isActive && attempts++ < 30) {
-                try {
-                    val res = api.call("downloads")
-                    val items = res.optJSONArray("items")
-                    var matchedTorrent: JSONObject? = null
-
-                    if (items != null) {
-                        for (i in 0 until items.length()) {
-                            val t = items.getJSONObject(i)
-                            val tHash = t.optString("hash")
-                            if (matchedHash != null) {
-                                if (tHash.equals(matchedHash, ignoreCase = true)) {
-                                    matchedTorrent = t
-                                    break
-                                }
-                                continue
-                            }
-                            val tName = t.optString("name").lowercase().replace(Regex("[^a-z0-9]"), "")
-                            if (cleanMediaTitle.isNotBlank() && tName.isNotBlank() && (tName.contains(cleanMediaTitle) || cleanMediaTitle.contains(tName))) {
-                                matchedTorrent = t
-                                matchedHash = tHash
-                                break
-                            }
-                        }
-                    }
-
-                    if (matchedTorrent != null) {
-                        val hash = matchedTorrent.optString("hash")
-                        val progress = matchedTorrent.optDouble("progressPercent", 0.0) / 100.0
-                        val downloadedBytes = matchedTorrent.optLong("downloaded", 0L)
-
-                        // Directly display buffering progress along the seek bar
-                        val bufferedMs = (progress * totalDurationMs).toLong()
-                        timeBar?.setBufferedPosition(bufferedMs)
-
-                        val minBufferBytes = 10L * 1024L * 1024L
-                        val isReady = matchedTorrent.optBoolean("streamable") || downloadedBytes >= minBufferBytes || progress >= 0.01
-                        if (isReady) {
-                            val rawStreamUrl = matchedTorrent.optString("streamUrl")
-                            val streamPath = if (!isTv && rawStreamUrl.isNotBlank()) {
-                                rawStreamUrl
-                            } else {
-                                buildString {
-                                    append("stream/download?hash=").append(hash)
-                                    if (isTv) {
-                                        append("&season=").append(sNum)
-                                        append("&episode=").append(epNum)
-                                    }
-                                }
-                            }
-                            launchStreamUrl(streamPath)
-                            return@launch
-                        }
-                        clearMessages()
-                        showMessage("Buffering download (${matchedTorrent.optInt("progressPercent")}%)…")
-                    }
-                } catch (e: Exception) {
-                    if (e is kotlinx.coroutines.CancellationException) throw e
-                    android.util.Log.w("HomeStream", "Error polling downloads: ${e.message}")
-                }
-                delay(2000)
-            }
-            clearMessages()
-            showMessage("The download has not buffered enough to start playback.")
-            overlay.addView(action("Keep Waiting") { startStreamingDownloadPipeline(sendRequest = false) })
-            overlay.addView(action("←  Back to Browse") { finish() })
         }
     }
 
     private fun deviceStreamUri(uri: Uri, compatible: Boolean): Uri {
-        if (media.source == "youtube" || uri.path?.let { it.endsWith("/stream/torrent") || it.endsWith("/stream/download") } != true) return uri
+        if (media.source == "youtube" || uri.path?.let { it.endsWith("/stream/torrent") } != true) return uri
         val replaced = setOf("receiver", "videoCapabilities", "videoCodecs", "audioCodecs", "native", "transcode", "forceTranscode")
         return uri.buildUpon().clearQuery().apply {
             for (key in uri.queryParameterNames.filter { it !in replaced }) {
@@ -822,7 +731,7 @@ class PlayerActivity : AppCompatActivity() {
                         clearMessages()
                         showMessage("Download playback failed (${status ?: error.errorCodeName}).")
                         overlay.addView(action("Retry") { launchStreamUrl(streamPath, compatible) })
-                        overlay.addView(action("Request Download") { startStreamingDownloadPipeline() })
+                        overlay.addView(action("Request Download") { requestLibraryDownload() })
                         overlay.addView(action("←  Back to Browse") { finish() })
                         return
                     }
@@ -886,7 +795,7 @@ class PlayerActivity : AppCompatActivity() {
             startStreamingTorrentPipeline()
             return
         }
-        if (media.isDownload || media.source == "youtube") {
+        if (media.source == "youtube") {
             isStreamingDownload = true
             launchStreamUrl(media.downloadUrl)
             return
@@ -931,8 +840,7 @@ class PlayerActivity : AppCompatActivity() {
                       + mapOf("videoCapabilities" to detectedVideoCapabilities.toString())
                       + if (isTelevision()) mapOf("receiver" to "native-tv") else emptyMap()
                 )
-                var stream = if (media.isDownload) JSONObject().put("streamUrl", media.downloadUrl)
-                    else fetchPlaybackStream(position)
+                var stream = fetchPlaybackStream(position)
                 val autoVersion = stream.optString("selectedVersionId").takeIf { it.isNotBlank() }
                 if (selectedVersionId == null && autoVersion != null) {
                     selectedVersionId = autoVersion
@@ -1173,7 +1081,7 @@ class PlayerActivity : AppCompatActivity() {
                             }
                             clearMessages()
                             showMessage("Playback failed (${error.errorCodeName}). Check that this device can reach HomeStream.")
-                            if (media.isDownload || media.source == "youtube") {
+                            if (media.source == "youtube") {
                                 showMessage("In-progress downloads may buffer or be unseekable. Wait for more data and retry.")
                                 overlay.addView(action("Retry") { startLocal() })
                             } else overlay.addView(action("Retry with compatible HLS") { transcode = true; updateModeBadge(); startLocal() })
@@ -1942,7 +1850,6 @@ class PlayerActivity : AppCompatActivity() {
     }
     private fun releaseLocal() {
         retryJob?.cancel(); retryJob = null
-        downloadPollingJob?.cancel()
         playerView.player = null
         player?.release()
         player = null
@@ -2035,7 +1942,6 @@ class PlayerActivity : AppCompatActivity() {
         ++castGeneration; castLoading = false
         castStartup?.cancel(); castStartup = null
         episodeJob?.cancel()
-        downloadPollingJob?.cancel()
         runCatching { unregisterReceiver(noisyReceiver) }
         negotiation?.cancel(); timer?.cancel()
         if (prepared || remote != null) report(remote == null)

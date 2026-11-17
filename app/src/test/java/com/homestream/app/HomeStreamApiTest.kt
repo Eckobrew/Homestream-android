@@ -18,7 +18,7 @@ class HomeStreamApiTest {
     }
     @Test fun videoUrlsUseMobileRoutesAndPreserveStreamParameters() {
         val api = HomeStreamApi(settings("https://home.example"))
-        for (route in listOf("native/stream", "stream/download", "stream/torrent")) {
+        for (route in listOf("native/stream", "stream/torrent")) {
             for (prefix in listOf("/api/", "/api/v1/", "/api/mobile/v1/", "/homestream/api/")) {
                 val url = api.absolute("$prefix$route?value=one%20two").toHttpUrl()
                 val basePath = if (prefix.startsWith("/homestream")) "/homestream" else ""
@@ -171,7 +171,7 @@ class HomeStreamApiTest {
     }
     @Test fun legacyDownloadUrlsUseTheAuthenticatedMobileEndpoint() {
         val api = HomeStreamApi(settings("https://home.example"))
-        assertEquals("https://home.example/api/mobile/v1/stream/download?hash=abc", api.absolute("/api/stream/download?hash=abc"))
-        assertEquals("https://other.example/api/stream/download?hash=abc", api.absolute("https://other.example/api/stream/download?hash=abc"))
+        assertEquals("https://home.example/api/mobile/v1/stream/torrent?tmdbId=123", api.absolute("/api/stream/torrent?tmdbId=123"))
+        assertEquals("https://other.example/api/stream/torrent?tmdbId=123", api.absolute("https://other.example/api/stream/torrent?tmdbId=123"))
     }
 }
