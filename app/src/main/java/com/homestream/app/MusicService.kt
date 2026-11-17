@@ -43,10 +43,24 @@ class MusicService : MediaSessionService() {
             setHandleAudioBecomingNoisy(true)
             setWakeMode(C.WAKE_MODE_NETWORK)
             addListener(object : Player.Listener {
+                private var consecutiveErrors = 0
                 override fun onPlayerError(error: PlaybackException) {
-                    playbackError = "Playback unavailable. Check your connection and try again."
+                    consecutiveErrors += 1
+                    if (hasNextMediaItem() && consecutiveErrors < mediaItemCount.coerceAtLeast(1)) {
+                        playbackError = "Track unavailable — skipping to next…"
+                        seekToNextMediaItem()
+                        prepare()
+                        play()
+                    } else {
+                        playbackError = "Playback unavailable. Check your connection and try again."
+                    }
                 }
-                override fun onPlaybackStateChanged(state: Int) { if (state == Player.STATE_READY) playbackError = null }
+                override fun onPlaybackStateChanged(state: Int) {
+                    if (state == Player.STATE_READY) {
+                        consecutiveErrors = 0
+                        playbackError = null
+                    }
+                }
                 override fun onIsPlayingChanged(isPlaying: Boolean) { reportMusicSession(this@apply) }
                 override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) { reportMusicSession(this@apply) }
             })
@@ -71,10 +85,12 @@ class MusicService : MediaSessionService() {
                     if (identity() != identity || settings.isKids) { stopSelf(); return@launch }
                 } catch (e: Exception) {
                     if (e is CancellationException) throw e
-                    if (e is HomeStreamApi.ResponseException && e.statusCode in listOf(401, 403)) { stopSelf(); return@launch }
-                    // Fail closed until the server can confirm the active profile policy.
-                    player.pause()
-                    playbackError = "Reconnect to confirm your profile before continuing playback."
+                    if (e is HomeStreamApi.ResponseException && e.statusCode in listOf(401, 403)) {
+                        player.pause()
+                        stopSelf()
+                        return@launch
+                    }
+                    // Transient network error: keep local playback uninterrupted until connectivity returns
                 }
             }
         }

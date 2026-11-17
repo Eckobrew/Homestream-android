@@ -89,7 +89,14 @@ class HomeStreamApi(private val settings: ConnectionSettings) {
         params.forEach { (key, value) -> url.addQueryParameter(key, value) }
         val request = Request.Builder().url(url.build()).header("Authorization", "Bearer $token")
             .header("Accept", "application/json")
-        if (body != null) {
+        if (method == "DELETE") {
+            if (body != null) {
+                val payload = JSONObject(body.toString()).put("userId", profile)
+                request.delete(payload.toString().toRequestBody("application/json".toMediaType()))
+            } else {
+                request.delete()
+            }
+        } else if (body != null) {
             val payload = JSONObject(body.toString()).put("userId", profile)
             // An optional PIN must be absent, rather than empty, when none is required.
             if ((path == "profiles" || path.startsWith("profiles/")) && payload.optString("parentPin").isBlank()) {
@@ -100,8 +107,6 @@ class HomeStreamApi(private val settings: ConnectionSettings) {
             } else {
                 request.post(payload.toString().toRequestBody("application/json".toMediaType()))
             }
-        } else if (method == "DELETE") {
-            request.delete()
         }
         return awaitResponse(client.newCall(request.build())).use { response ->
             val text = response.body?.string().orEmpty()
@@ -216,6 +221,21 @@ class HomeStreamApi(private val settings: ConnectionSettings) {
         val base = settings.baseUrl.toHttpUrlOrNull() ?: return false
         return target.scheme == base.scheme && target.host == base.host && target.port == base.port
     }
-    suspend fun progress(id: String, positionMs: Long, paused: Boolean, stopped: Boolean = false, started: Boolean = false) = call("progress", body = JSONObject()
-        .put("itemId", id).put("positionTicks", msToTicks(positionMs)).put("isPaused", paused).put("isStopped", stopped).put("isStarted", started))
+    suspend fun progress(
+        id: String,
+        positionMs: Long,
+        paused: Boolean,
+        stopped: Boolean = false,
+        started: Boolean = false,
+        recordedAtMs: Long? = null,
+    ) = call(
+        "progress",
+        body = JSONObject()
+            .put("itemId", id)
+            .put("positionTicks", msToTicks(positionMs))
+            .put("isPaused", paused)
+            .put("isStopped", stopped)
+            .put("isStarted", started)
+            .apply { if (recordedAtMs != null && recordedAtMs > 0L) put("recordedAt", recordedAtMs) }
+    )
 }

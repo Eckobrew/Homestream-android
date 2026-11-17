@@ -102,6 +102,7 @@ class BookReaderActivity : AppCompatActivity() {
     private var isDraggingCurl = false
     private var dragForward = true
     private var velocityTracker: VelocityTracker? = null
+    private var pendingSpinePct: Double = -1.0
 
     private fun dp(v: Int): Int =
         TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v.toFloat(), resources.displayMetrics).toInt()
@@ -445,18 +446,34 @@ class BookReaderActivity : AppCompatActivity() {
         }, FrameLayout.LayoutParams(dp(36), dp(36), Gravity.CENTER))
 
         lifecycleScope.launch {
+            var initialSpineIndex = -1
+            var initialSpinePct = -1.0
             try {
                 if (initialLocation.isBlank()) {
                     runCatching {
-                        val prog = api.call("books/progress?bookId=$bookId").optJSONObject("progress")
-                        if (prog != null) initialLocation = prog.optString("location")
+                        val prog = api.call("books/progress", params = mapOf("bookId" to bookId, "format" to bookFormat)).optJSONObject("progress")
+                        if (prog != null) {
+                            initialLocation = prog.optString("location")
+                            if (prog.has("spineIndex")) initialSpineIndex = prog.optInt("spineIndex", -1)
+                            if (prog.has("spinePct")) initialSpinePct = prog.optDouble("spinePct", -1.0)
+                        }
                     }
                 }
                 val file = withContext(Dispatchers.IO) { downloadBookToCache() }
-                if (bookFormat == "pdf") {
-                    openPdf(file)
-                } else {
-                    openEpub(file)
+                try {
+                    if (bookFormat == "pdf") {
+                        openPdf(file)
+                    } else {
+                        openEpub(file, initialSpineIndex, initialSpinePct)
+                    }
+                } catch (parseErr: Exception) {
+                    // Corrupt or incomplete cache: clear scoped cache and retry once
+                    withContext(Dispatchers.IO) {
+                        runCatching { file.delete() }
+                        runCatching { File(cacheDir, "epub_unzipped_${bookCacheScopeKey()}").deleteRecursively() }
+                    }
+                    val fresh = withContext(Dispatchers.IO) { downloadBookToCache(forceRefresh = true) }
+                    if (bookFormat == "pdf") openPdf(fresh) else openEpub(fresh, initialSpineIndex, initialSpinePct)
                 }
             } catch (e: Exception) {
                 stage.removeAllViews()
@@ -472,9 +489,18 @@ class BookReaderActivity : AppCompatActivity() {
         }
     }
 
-    private fun downloadBookToCache(): File {
+    private fun bookCacheScopeKey(): String {
+        val raw = "${settings.serverIdentity}|${settings.baseUrl}|$bookId|$bookFormat"
+        val digest = java.security.MessageDigest.getInstance("SHA-256").digest(raw.toByteArray())
+            .joinToString("") { "%02x".format(it) }.take(12)
+        return "${digest}_${bookId}"
+    }
+
+    private fun downloadBookToCache(forceRefresh: Boolean = false): File {
         val cacheDir = File(cacheDir, "books_cache").apply { mkdirs() }
-        val target = File(cacheDir, "book_${bookId}.${bookFormat}")
+        val scopeKey = bookCacheScopeKey()
+        val target = File(cacheDir, "book_${scopeKey}.${bookFormat}")
+        if (forceRefresh && target.exists()) target.delete()
         if (target.exists() && target.length() > 128) return target
 
         val url = api.absolute("books/file?bookId=$bookId&format=$bookFormat")
@@ -485,10 +511,18 @@ class BookReaderActivity : AppCompatActivity() {
         val req = Request.Builder().url(url).apply {
             if (settings.token.isNotBlank()) header("Authorization", "Bearer ${settings.token}")
         }.build()
-        client.newCall(req).execute().use { resp ->
-            if (!resp.isSuccessful) error("HTTP ${resp.code}")
-            val body = resp.body ?: error("Empty file response")
-            target.outputStream().use { out -> body.byteStream().copyTo(out) }
+        val tempFile = File(cacheDir, "book_${scopeKey}.${bookFormat}.tmp")
+        try {
+            client.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) error("HTTP ${resp.code}")
+                val body = resp.body ?: error("Empty file response")
+                tempFile.outputStream().use { out -> body.byteStream().copyTo(out) }
+            }
+            if (!tempFile.exists() || tempFile.length() <= 128) error("Downloaded book file is incomplete")
+            if (target.exists()) target.delete()
+            if (!tempFile.renameTo(target)) error("Failed to finalize book cache file")
+        } finally {
+            if (tempFile.exists()) tempFile.delete()
         }
         return target
     }
@@ -545,17 +579,26 @@ class BookReaderActivity : AppCompatActivity() {
     // EPUB 1-Page Renderer (Single-column CSS paginated WebView on cream paper)
     // -------------------------------------------------------------------------
     @SuppressLint("SetJavaScriptEnabled", "ClickableViewAccessibility")
-    private suspend fun openEpub(file: File) {
-        val extractedDir = File(cacheDir, "epub_unzipped_$bookId")
+    private suspend fun openEpub(file: File, initialSpineIndex: Int = -1, initialSpinePct: Double = -1.0) {
+        val extractedDir = File(cacheDir, "epub_unzipped_${bookCacheScopeKey()}")
         val spine = withContext(Dispatchers.IO) { extractAndParseEpub(file, extractedDir) }
         if (spine.isEmpty()) error("No readable chapters found in EPUB")
 
         epubDir = extractedDir
         epubSpine = spine
 
-        val parts = initialLocation.removePrefix("ch:").split(":")
-        epubChapterIndex = (parts.getOrNull(0)?.toIntOrNull() ?: 0).coerceIn(0, spine.size - 1)
-        epubPageInChapter = (parts.getOrNull(1)?.toIntOrNull() ?: 0).coerceAtLeast(0)
+        if (initialLocation.startsWith("ch:")) {
+            val parts = initialLocation.removePrefix("ch:").split(":")
+            epubChapterIndex = (parts.getOrNull(0)?.toIntOrNull() ?: 0).coerceIn(0, spine.size - 1)
+            epubPageInChapter = (parts.getOrNull(1)?.toIntOrNull() ?: 0).coerceAtLeast(0)
+        } else if (initialSpineIndex >= 0) {
+            epubChapterIndex = initialSpineIndex.coerceIn(0, spine.size - 1)
+            epubPageInChapter = 0
+            pendingSpinePct = initialSpinePct
+        } else {
+            epubChapterIndex = 0
+            epubPageInChapter = 0
+        }
 
         val wv = WebView(this).apply {
             setBackgroundColor(PAPER_CREAM)
@@ -731,6 +774,13 @@ class BookReaderActivity : AppCompatActivity() {
             val parts = cleaned.split("/")
             epubPageInChapter = parts.getOrNull(0)?.toIntOrNull() ?: 0
             epubPagesInChapter = (parts.getOrNull(1)?.toIntOrNull() ?: 1).coerceAtLeast(1)
+            if (pendingSpinePct >= 0.0 && epubPagesInChapter > 1) {
+                epubPageInChapter = ((pendingSpinePct / 100.0) * (epubPagesInChapter - 1)).toInt().coerceIn(0, epubPagesInChapter - 1)
+                pendingSpinePct = -1.0
+                scrollEpubToPage()
+            } else {
+                pendingSpinePct = -1.0
+            }
             updateEpubStatus()
         }
     }
@@ -812,14 +862,20 @@ class BookReaderActivity : AppCompatActivity() {
         if (bookId.isBlank()) return
         lifecycleScope.launch(Dispatchers.IO) {
             runCatching {
-                api.call(
-                    "books/progress",
-                    body = JSONObject()
-                        .put("bookId", bookId)
-                        .put("location", location)
-                        .put("percent", pct),
-                    method = "POST"
-                )
+                val body = JSONObject()
+                    .put("bookId", bookId)
+                    .put("location", location)
+                    .put("percent", pct)
+                    .put("format", bookFormat)
+                if (bookFormat == "epub") {
+                    body.put("spineIndex", epubChapterIndex)
+                    val chPages = epubPagesInChapter.coerceAtLeast(1)
+                    if (chPages > 1) {
+                        val localPct = ((epubPageInChapter.coerceIn(0, chPages - 1).toDouble() / (chPages - 1)) * 100.0)
+                        body.put("spinePct", localPct)
+                    }
+                }
+                api.call("books/progress", body = body, method = "POST")
             }
         }
     }

@@ -28,7 +28,7 @@ class HomeStreamApplication : Application() {
             override fun onActivityCreated(a: android.app.Activity, b: android.os.Bundle?) {}
             override fun onActivityStarted(a: android.app.Activity) {}
             override fun onActivityResumed(a: android.app.Activity) { PlaybackSessions.setForegroundActivity(a) }
-            override fun onActivityPaused(a: android.app.Activity) { PlaybackSessions.setForegroundActivity(null) }
+            override fun onActivityPaused(a: android.app.Activity) { PlaybackSessions.clearForegroundActivity(a) }
             override fun onActivityStopped(a: android.app.Activity) {}
             override fun onActivitySaveInstanceState(a: android.app.Activity, b: android.os.Bundle) {}
             override fun onActivityDestroyed(a: android.app.Activity) {}

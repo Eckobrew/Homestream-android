@@ -636,37 +636,45 @@ class PlayerActivity : AppCompatActivity() {
     }
 
     private fun launchStreamUrl(streamPath: String, compatible: Boolean = transcode) {
-        val playUri = if (streamPath.startsWith("http://") || streamPath.startsWith("https://")) {
-            Uri.parse(streamPath).buildUpon().apply {
-                if (media.source != "youtube") {
-                    appendQueryParameter(if (compatible) "transcode" else "native", "1")
-                }
-            }.build()
-        } else {
-            val fullPath = if (streamPath.startsWith("/api/")) streamPath
-                           else "/api/mobile/v1/${streamPath.removePrefix("/")}"
-            Uri.parse(api.absolute(fullPath)).buildUpon().apply {
-                if (media.source != "youtube") {
-                    appendQueryParameter(if (compatible) "transcode" else "native", "1")
-                }
-            }.build()
+        val isLocalFile = streamPath.startsWith("file://") || (streamPath.startsWith("/") && !streamPath.startsWith("/api/"))
+        val playUri = when {
+            isLocalFile -> Uri.parse(
+                if (streamPath.startsWith("/")) Uri.fromFile(java.io.File(streamPath)).toString() else streamPath
+            )
+            streamPath.startsWith("http://") || streamPath.startsWith("https://") -> {
+                Uri.parse(streamPath).buildUpon().apply {
+                    if (media.source != "youtube") {
+                        appendQueryParameter(if (compatible) "transcode" else "native", "1")
+                    }
+                }.build()
+            }
+            else -> {
+                val fullPath = if (streamPath.startsWith("/api/")) streamPath
+                               else "/api/mobile/v1/${streamPath.removePrefix("/")}"
+                Uri.parse(api.absolute(fullPath)).buildUpon().apply {
+                    if (media.source != "youtube") {
+                        appendQueryParameter(if (compatible) "transcode" else "native", "1")
+                    }
+                }.build()
+            }
         }
 
         clearMessages()
-        showMessage("Buffering download stream…")
+        if (!isLocalFile) showMessage("Buffering download stream…")
         describeStream(JSONObject().put("streamUrl", playUri.toString())
-            .put("playMethod", if (compatible && media.source != "youtube") "Transcode" else "DirectPlay"))
+            .put("playMethod", if (isLocalFile || !compatible || media.source == "youtube") "DirectPlay" else "Transcode"))
         var bufferRetries = 0
         val item = MediaItem.Builder()
             .setUri(playUri)
-            .apply { if (compatible && media.source != "youtube") setMimeType(MimeTypes.VIDEO_MP4) }
+            .apply { if (!isLocalFile && compatible && media.source != "youtube") setMimeType(MimeTypes.VIDEO_MP4) }
             .build()
         releaseLocal()
 
         val httpFactory = androidx.media3.datasource.okhttp.OkHttpDataSource.Factory(api.mediaClient())
             .setUserAgent("HomeStream-Android/1.0")
+        val dataSourceFactory = androidx.media3.datasource.DefaultDataSource.Factory(this, httpFactory)
         val mediaSourceFactory = androidx.media3.exoplayer.source.DefaultMediaSourceFactory(this)
-            .setDataSourceFactory(httpFactory)
+            .setDataSourceFactory(dataSourceFactory)
 
         val audioAttributes = AudioAttributes.Builder()
             .setUsage(C.USAGE_MEDIA)
@@ -736,6 +744,7 @@ class PlayerActivity : AppCompatActivity() {
                 }
             })
             exo.setMediaItem(item)
+            if (position > 0) exo.seekTo(position)
             exo.prepare()
             exo.playWhenReady = wantsPlay
         }
@@ -883,7 +892,11 @@ class PlayerActivity : AppCompatActivity() {
                                                 else -> "Skip Intro →"
                                             }
                                             skipBtn?.setOnClickListener { exo.seekTo((seg.endSec * 1000).toLong()) }
+                                            val wasHidden = skipBtn?.visibility != View.VISIBLE
                                             skipBtn?.visibility = View.VISIBLE
+                                            if (wasHidden && isTelevision() && !playerView.isControllerFullyVisible) {
+                                                skipBtn?.requestFocus()
+                                            }
                                         } else {
                                             skipBtn?.visibility = View.GONE
                                         }
@@ -918,12 +931,14 @@ class PlayerActivity : AppCompatActivity() {
                         }
                         override fun onIsPlayingChanged(isPlaying: Boolean) {
                             val code = syncRoomCode
+                            val activeItemId = currentPlaybackId.ifBlank { media.playbackId }
                             if (code != null && !applyingSyncPlay && prepared) {
                                 lifecycleScope.launch {
                                     runCatching {
                                         val payload = JSONObject()
                                             .put("action", "sync")
                                             .put("code", code)
+                                            .put("itemId", activeItemId)
                                             .put("isPaused", !isPlaying)
                                             .put("positionTicks", msToTicks(exo.currentPosition))
                                         api.call("syncplay", body = payload)
@@ -937,12 +952,14 @@ class PlayerActivity : AppCompatActivity() {
                             reason: Int
                         ) {
                             val code = syncRoomCode
+                            val activeItemId = currentPlaybackId.ifBlank { media.playbackId }
                             if (code != null && !applyingSyncPlay && prepared && reason == Player.DISCONTINUITY_REASON_SEEK) {
                                 lifecycleScope.launch {
                                     runCatching {
                                         val payload = JSONObject()
                                             .put("action", "sync")
                                             .put("code", code)
+                                            .put("itemId", activeItemId)
                                             .put("isPaused", !exo.isPlaying)
                                             .put("positionTicks", msToTicks(newPosition.positionMs))
                                         api.call("syncplay", body = payload)
@@ -1220,7 +1237,7 @@ class PlayerActivity : AppCompatActivity() {
                 else -> "video/mp4"
             } })
             .setStreamType(MediaInfo.STREAM_TYPE_BUFFERED).setMetadata(metadata).setMediaTracks(tracks)
-            .setCustomData(JSONObject().put("itemId", id).put("media", item.json).put("playback", JSONObject(stream.toString()).apply {
+            .setCustomData(JSONObject().put("itemId", id).put("loadId", java.util.UUID.randomUUID().toString()).put("media", item.json).put("playback", JSONObject(stream.toString()).apply {
                 put("transport", stream.optString("transport").ifBlank { if (Uri.parse(stream.optString("streamUrl")).path.orEmpty().endsWith(".m3u8", ignoreCase = true)) "HLS" else "file" })
                 put("durationSeconds", durationSec)
                 remove("streamUrl")
@@ -1524,15 +1541,21 @@ class PlayerActivity : AppCompatActivity() {
                             lifecycleScope.launch {
                                 runCatching {
                                     if (syncRoomCode != null && code.isBlank()) {
+                                        val activeItemId = currentPlaybackId.ifBlank { media.playbackId }
                                         val payload = JSONObject()
                                             .put("action", "sync")
                                             .put("code", syncRoomCode)
+                                            .put("itemId", activeItemId)
                                             .put("isPaused", player?.isPlaying != true)
                                             .put("positionTicks", msToTicks(player?.currentPosition ?: 0L))
                                         api.call("syncplay", body = payload)
                                         Toast.makeText(this@PlayerActivity, "Synced room $syncRoomCode", Toast.LENGTH_SHORT).show()
                                     } else if (code.isNotBlank()) {
-                                        val r = api.call("syncplay", body = JSONObject().put("action", "join").put("code", code))
+                                        val activeItemId = currentPlaybackId.ifBlank { media.playbackId }
+                                        val r = api.call(
+                                            "syncplay",
+                                            body = JSONObject().put("action", "join").put("code", code).put("itemId", activeItemId)
+                                        )
                                         syncRoomCode = r.optJSONObject("room")?.optString("code")
                                         Toast.makeText(this@PlayerActivity, "Joined SyncPlay room $syncRoomCode", Toast.LENGTH_SHORT).show()
                                     } else {
@@ -1616,12 +1639,13 @@ class PlayerActivity : AppCompatActivity() {
 
     private fun report(stopped: Boolean, started: Boolean = false) {
         if (media.source == "youtube") {
-            val videoId = media.json.optString("videoId").ifBlank { media.id.removePrefix("yt-") }
+            val videoId = media.json.optString("videoId").ifBlank { media.id.removePrefix("yt-archive-").removePrefix("yt-") }
             player?.let { position = it.currentPosition }
             val snapshot = position
             val durMs = knownDurationMs.takeIf { it > 0 } ?: player?.duration?.takeIf { it > 0 } ?: 0L
             val posSec = (snapshot / 1000).toInt()
             val durSec = (durMs / 1000).toInt()
+            val channel = media.json.optString("channelTitle").ifBlank { media.json.optString("channelName") }
             (application as HomeStreamApplication).enqueuePlaybackReport {
                 runCatching {
                     api.call("youtube/progress", body = JSONObject().apply {
@@ -1630,7 +1654,8 @@ class PlayerActivity : AppCompatActivity() {
                         put("durationSeconds", durSec)
                         put("completed", durSec > 0 && posSec >= durSec - 15)
                         put("title", media.title)
-                        put("channelTitle", media.json.optString("channelTitle"))
+                        put("channelName", channel)
+                        put("channelTitle", channel)
                         put("thumbnailUrl", media.poster)
                     })
                 }
@@ -1781,6 +1806,7 @@ class PlayerActivity : AppCompatActivity() {
                 return true
             }
             if (event.action == KeyEvent.ACTION_DOWN && !playerView.isControllerFullyVisible &&
+                !(skipBtn?.visibility == View.VISIBLE && skipBtn?.hasFocus() == true) &&
                 event.keyCode in listOf(KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER)) {
                 revealingControlsKey = event.keyCode
                 wantsPlay = false

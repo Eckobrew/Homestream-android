@@ -85,6 +85,12 @@ object PlaybackSessions {
         foregroundActivityRef = WeakReference(activity)
     }
 
+    fun clearForegroundActivity(activity: Activity) {
+        if (foregroundActivityRef.get() === activity) {
+            foregroundActivityRef = WeakReference(null)
+        }
+    }
+
     fun registerVideoHandler(handler: (type: String, positionMs: Long?, deltaMs: Long?) -> Boolean) {
         videoCommandHandler = handler
     }

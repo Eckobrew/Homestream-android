@@ -6,51 +6,199 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-/** Cast progress belongs to the session, independently of which screen is visible. */
+internal data class CastPoll(
+    val sessionKey: String,
+    val id: String,
+    val position: Long,
+    val paused: Boolean,
+    val ready: Boolean,
+)
+
+internal data class CastProgressEvent<ApiT>(
+    val api: ApiT,
+    val id: String,
+    val position: Long,
+    val paused: Boolean,
+    val started: Boolean = false,
+    val stopped: Boolean = false,
+)
+
+/**
+ * Pure state machine for Cast progress reporting.
+ * Pins each receiver media session to the account/API that started it, preserves final
+ * `stopped = true` reporting on idle/disconnect, and retains invalidation across transient
+ * reconnects of the same invalidated media session.
+ */
+internal class CastProgressTracker<ApiT> {
+    private data class Snapshot<ApiT>(
+        val sessionKey: String,
+        val id: String,
+        val position: Long,
+        val paused: Boolean,
+        val api: ApiT,
+    )
+
+    private var last: Snapshot<ApiT>? = null
+    private var reportedAt: Long = 0L
+    private var pinnedSessionKey: String? = null
+    private var pinnedAccount: String? = null
+    private var pinnedApi: ApiT? = null
+    private val invalidatedSessionKeys = LinkedHashSet<String>()
+
+    fun step(
+        rawCurrent: CastPoll?,
+        liveAccount: String,
+        nowMs: Long,
+        createPinnedApi: () -> ApiT?,
+    ): List<CastProgressEvent<ApiT>> {
+        val events = mutableListOf<CastProgressEvent<ApiT>>()
+
+        if (rawCurrent == null) {
+            val prev = last
+            if (prev != null) {
+                events.add(CastProgressEvent(prev.api, prev.id, prev.position, prev.paused, stopped = true))
+            }
+            pinnedSessionKey = null
+            pinnedAccount = null
+            pinnedApi = null
+            last = null
+            return events
+        }
+
+        if (rawCurrent.sessionKey in invalidatedSessionKeys) {
+            return events
+        }
+
+        if (rawCurrent.sessionKey != pinnedSessionKey) {
+            pinnedSessionKey = rawCurrent.sessionKey
+            pinnedAccount = liveAccount
+            pinnedApi = createPinnedApi()
+        }
+
+        if (liveAccount != pinnedAccount) {
+            val ownerApi = pinnedApi
+            val prev = last
+            if (ownerApi != null && prev != null && prev.sessionKey == pinnedSessionKey) {
+                events.add(CastProgressEvent(ownerApi, prev.id, prev.position, prev.paused, stopped = true))
+            }
+            if (invalidatedSessionKeys.size >= 32) {
+                invalidatedSessionKeys.iterator().let { if (it.hasNext()) { it.next(); it.remove() } }
+            }
+            invalidatedSessionKeys.add(rawCurrent.sessionKey)
+            pinnedSessionKey = null
+            pinnedAccount = null
+            pinnedApi = null
+            last = null
+            return events
+        }
+
+        if (!rawCurrent.ready) {
+            return events
+        }
+
+        val activeApi = pinnedApi ?: return events
+        val previous = last
+        val changed = previous?.sessionKey != rawCurrent.sessionKey
+        if (changed && previous != null) {
+            events.add(CastProgressEvent(previous.api, previous.id, previous.position, previous.paused, stopped = true))
+        }
+        if (changed || nowMs - reportedAt >= 10_000L || previous?.paused != rawCurrent.paused) {
+            events.add(
+                CastProgressEvent(
+                    activeApi,
+                    rawCurrent.id,
+                    rawCurrent.position,
+                    rawCurrent.paused,
+                    started = changed,
+                )
+            )
+            reportedAt = nowMs
+        }
+        last = Snapshot(rawCurrent.sessionKey, rawCurrent.id, rawCurrent.position, rawCurrent.paused, activeApi)
+        return events
+    }
+}
+
+internal fun castMediaSessionKey(
+    castSessionId: String?,
+    itemId: String,
+    mediaItemId: Int?,
+    loadId: String = "",
+): String = "${castSessionId ?: "cast"}|$itemId|${mediaItemId ?: ""}|$loadId"
+
+/** Cast progress belongs to the session/profile that started it; identity switches stop reporting that media. */
 internal fun HomeStreamApplication.observeCastProgress() {
     val cast = castContext(this) ?: return
-    data class Snapshot(val id: String, val position: Long, val paused: Boolean,
-                        val account: String, val api: HomeStreamApi, val ready: Boolean)
     playbackReports.launch {
-        var last: Snapshot? = null
-        var reportedAt = 0L
+        val tracker = CastProgressTracker<HomeStreamApi>()
+
         while (isActive) {
-            val current = withContext(Dispatchers.Main) {
+            val poll = withContext(Dispatchers.Main) {
                 val session = cast.sessionManager.currentCastSession
                 val client = session?.remoteMediaClient
-                val id = client?.mediaInfo?.customData?.optString("itemId").orEmpty()
-                if (session?.isConnected != true || !hasCastVideo(client) || id.isBlank() ||
-                    client?.playerState == com.google.android.gms.cast.MediaStatus.PLAYER_STATE_IDLE) null else {
-                    val settings = ServerSettings(this@observeCastProgress)
-                    val connection = object : ConnectionSettings {
-                        override val baseUrl = settings.baseUrl
-                        override val token = settings.token
-                        override var profile = settings.profile
-                    }
-                    Snapshot(id, client!!.approximateStreamPosition, client.isPaused,
-                        "${connection.baseUrl}|${connection.profile}|${connection.token}", HomeStreamApi(connection), client.isPlaying || client.isPaused)
-                }
-            }
-            if (current != null && !current.ready) { delay(1000); continue }
-            val previous = last
-            val changed = previous?.id != current?.id || previous?.account != current?.account
-            if (changed && previous != null) {
+                val customData = client?.mediaInfo?.customData
+                val id = customData?.optString("itemId").orEmpty()
                 val settings = ServerSettings(this@observeCastProgress)
-                val account = "${settings.baseUrl}|${settings.profile}|${settings.token}"
-                if (previous.account == account) enqueuePlaybackReport {
-                    runCatching { previous.api.progress(previous.id, previous.position, previous.paused, stopped = true) }
-                        .onFailure { android.util.Log.w("HomeStream", "Could not save Cast stop progress") }
+                val liveAccount = "${settings.baseUrl}|${settings.profile}|${settings.token}"
+                if (session?.isConnected != true || !hasCastVideo(client) || id.isBlank() ||
+                    client?.playerState == com.google.android.gms.cast.MediaStatus.PLAYER_STATE_IDLE
+                ) {
+                    Triple<CastPoll?, String, ServerSettings?>(null, liveAccount, null)
+                } else {
+                    val sKey = castMediaSessionKey(
+                        session.sessionId,
+                        id,
+                        client!!.mediaStatus?.currentItemId,
+                        customData?.optString("loadId").orEmpty(),
+                    )
+                    Triple(
+                        CastPoll(
+                            sKey,
+                            id,
+                            client.approximateStreamPosition,
+                            client.isPaused,
+                            client.isPlaying || client.isPaused,
+                        ),
+                        liveAccount,
+                        settings,
+                    )
                 }
             }
-            val now = android.os.SystemClock.elapsedRealtime()
-            if (current != null && (changed || now - reportedAt >= 10000 || previous?.paused != current.paused)) {
+
+            val events = tracker.step(
+                rawCurrent = poll.first,
+                liveAccount = poll.second,
+                nowMs = android.os.SystemClock.elapsedRealtime(),
+                createPinnedApi = {
+                    poll.third?.let { s ->
+                        HomeStreamApi(
+                            object : ConnectionSettings {
+                                override val baseUrl = s.baseUrl
+                                override val token = s.token
+                                override var profile = s.profile
+                            }
+                        )
+                    }
+                },
+            )
+
+            for (event in events) {
                 enqueuePlaybackReport {
-                    runCatching { current.api.progress(current.id, current.position, current.paused, started = changed) }
-                        .onFailure { android.util.Log.w("HomeStream", "Could not save Cast progress") }
+                    runCatching {
+                        event.api.progress(
+                            event.id,
+                            event.position,
+                            event.paused,
+                            started = event.started,
+                            stopped = event.stopped,
+                        )
+                    }.onFailure {
+                        val label = if (event.stopped) "Cast stop progress" else "Cast progress"
+                        android.util.Log.w("HomeStream", "Could not save $label")
+                    }
                 }
-                reportedAt = now
             }
-            last = current
+
             delay(1000)
         }
     }

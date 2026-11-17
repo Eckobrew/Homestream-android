@@ -821,12 +821,16 @@ class MainActivity : AppCompatActivity() {
                 intArrayOf(INK, 0xF0080808.toInt(), 0xDD080808.toInt()))
         }
 
-        val entries = listOf(
+        val entries = listOfNotNull(
             Triple("Home", R.drawable.nav_home, { loadTab("home") }),
             Triple("Movies", R.drawable.nav_movies, { loadTab("movies") }),
             Triple("TV Shows", R.drawable.nav_series, { loadTab("series") }),
-            Triple("Music", R.drawable.nav_music, { loadTab("music") })
-        ).filter { it.first != "Music" || !settings.isKids }
+            if (!settings.isKids) Triple("Discover", R.drawable.nav_new, { loadTab("requests") }) else null,
+            if (!settings.isKids) Triple("Music", R.drawable.nav_music, { loadTab("music") }) else null,
+            if (!settings.isKids) Triple("YouTube", R.drawable.ic_play_arrow, { loadYouTube() }) else null,
+            if (!settings.isKids) Triple("Books", R.drawable.nav_list, { loadBooks() }) else null,
+            Triple("Settings", R.drawable.nav_settings, { openTrackPreferencesDialog() }),
+        )
 
         val buttons = entries.map { (title, icon, click) ->
             action("", click = click).apply {
@@ -838,6 +842,7 @@ class MainActivity : AppCompatActivity() {
                     "YouTube" -> screen == "youtube"
                     "Discover" -> currentTab == "requests" || screen == "requests"
                     "Music" -> currentTab == "music" || screen == "music"
+                    "Books" -> screen == "books" || currentTab == "books"
                     "Search" -> screen == "search"
                     "My List" -> screen == "mine"
                     "More" -> screen.startsWith("catalog-") || screen.startsWith("categories-") || screen == "downloads"
@@ -1099,6 +1104,25 @@ class MainActivity : AppCompatActivity() {
         })
         settingsBtn.addView(settingsText)
         panel.addView(settingsBtn, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
+
+        // Playback & Track Preferences Button (per-profile audio/subtitle defaults + autoplay)
+        val prefsBtn = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+            background = rounded(0x18FFFFFF.toInt())
+            setPadding(dp(14), dp(12), dp(14), dp(12))
+            isClickable = true
+            setOnClickListener { closeSidebar(); openTrackPreferencesDialog() }
+        }
+        prefsBtn.addView(ImageView(this).apply {
+            setImageResource(R.drawable.nav_settings); imageTintList = ColorStateList.valueOf(Color.WHITE)
+        }, LinearLayout.LayoutParams(dp(20), dp(20)))
+        val prefsText = column().apply { setPadding(dp(12), 0, 0, 0); layoutParams = LinearLayout.LayoutParams(0, -2, 1f) }
+        prefsText.addView(label("Playback & Track Prefs", 13.5f, true))
+        prefsText.addView(TextView(this).apply {
+            text = "Audio, subtitles & autoplay"; textSize = 11f; setTextColor(MUTED)
+        })
+        prefsBtn.addView(prefsText)
+        panel.addView(prefsBtn, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
 
         // Switch Profile Button
         val profileBtn = LinearLayout(this).apply {
@@ -2617,6 +2641,89 @@ class MainActivity : AppCompatActivity() {
         else @Suppress("DEPRECATION") overridePendingTransition(android.R.anim.fade_in, android.R.anim.fade_out)
     }
 
+    private fun openTrackPreferencesDialog() {
+        lifecycleScope.launch {
+            val prefsData = runCatching { api.call("profile-prefs") }.getOrNull()
+            val defaults = prefsData?.optJSONObject("defaults")
+            val playbackPrefs = getSharedPreferences("playback", MODE_PRIVATE)
+
+            val container = LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(20), dp(14), dp(20), dp(8))
+            }
+
+            fun styledInput(hintText: String, value: String) = EditText(this@MainActivity).apply {
+                hint = hintText
+                setText(value)
+                setSingleLine(true)
+            }
+
+            container.addView(TextView(this@MainActivity).apply {
+                text = "Default Audio Language (e.g. eng, jpn)"
+                textSize = 12f
+                setPadding(0, dp(4), 0, dp(2))
+            })
+            val audioInput = styledInput("eng", defaults?.optString("audioLang").orEmpty())
+            container.addView(audioInput)
+
+            container.addView(TextView(this@MainActivity).apply {
+                text = "Default Subtitle Language (e.g. eng, spa)"
+                textSize = 12f
+                setPadding(0, dp(8), 0, dp(2))
+            })
+            val subInput = styledInput("eng", defaults?.optString("subtitleLang").orEmpty())
+            container.addView(subInput)
+
+            container.addView(TextView(this@MainActivity).apply {
+                text = "Subtitle Mode"
+                textSize = 12f
+                setPadding(0, dp(8), 0, dp(2))
+            })
+            val subModes = listOf("auto", "always", "forced", "none")
+            val subSpinner = android.widget.Spinner(this@MainActivity).apply {
+                adapter = android.widget.ArrayAdapter(
+                    this@MainActivity,
+                    android.R.layout.simple_spinner_dropdown_item,
+                    subModes,
+                )
+                val currentMode = defaults?.optString("subtitleMode", "auto").orEmpty()
+                setSelection(subModes.indexOf(currentMode).coerceAtLeast(0))
+            }
+            container.addView(subSpinner)
+
+            val autoplayBox = android.widget.CheckBox(this@MainActivity).apply {
+                text = "Autoplay next episode"
+                isChecked = playbackPrefs.getBoolean("autoplay", true)
+                setPadding(0, dp(8), 0, dp(4))
+            }
+            container.addView(autoplayBox)
+
+            AlertDialog.Builder(this@MainActivity)
+                .setTitle("Playback & Track Preferences")
+                .setView(container)
+                .setPositiveButton("Save") { _, _ ->
+                    playbackPrefs.edit().putBoolean("autoplay", autoplayBox.isChecked).apply()
+                    lifecycleScope.launch {
+                        runCatching {
+                            api.call(
+                                "profile-prefs",
+                                body = JSONObject()
+                                    .put("audioLang", audioInput.text.toString().trim())
+                                    .put("subtitleLang", subInput.text.toString().trim())
+                                    .put("subtitleMode", subModes[subSpinner.selectedItemPosition]),
+                            )
+                        }.onSuccess {
+                            toast("Track preferences saved")
+                        }.onFailure {
+                            toast("Saved autoplay; could not update server track prefs")
+                        }
+                    }
+                }
+                .setNegativeButton("Cancel", null)
+                .show()
+        }
+    }
+
     private fun openServerSettingsDialog() {
         lifecycleScope.launch {
             try {
@@ -3383,15 +3490,22 @@ class MainActivity : AppCompatActivity() {
                                 }
                             }
                             librarySongs -> {
+                                val allSongEntries = mutableListOf<Triple<MusicTrack, MusicAlbum, String?>>()
                                 musicAlbums.filter { it.inLibrary }.forEach { album ->
                                     val tracks = api.call("music/album", mapOf("albumId" to album.id)).objects("tracks").map(::MusicTrack)
                                     val albumArt = albumArtwork(album)
-                                    tracks.forEachIndexed { index, track ->
+                                    tracks.forEach { track ->
                                         if (query.isBlank() || listOf(track.title, album.title, album.artist).any { it.contains(query, ignoreCase = true) }) {
                                             val songArt = track.coverUrl.takeIf { it.isNotBlank() && it != "null" }?.let(api::absolute) ?: albumArt
-                                            staged.addView(musicTrackRow(track.title, "${album.artist} • ${album.title}", track.json.optInt("trackNumber", index + 1), coverUrl = songArt, download = { downloadMusic(track.title, "trackId" to track.id) }) { startMusicTracks(tracks, album, index) })
+                                            allSongEntries.add(Triple(track, album, songArt))
                                         }
                                     }
+                                }
+                                val fullQueue = allSongEntries.map { it.first }
+                                allSongEntries.forEachIndexed { fullIdx, (track, album, songArt) ->
+                                    staged.addView(musicTrackRow(track.title, "${album.artist} • ${album.title}", track.json.optInt("trackNumber", fullIdx + 1), coverUrl = songArt, download = { downloadMusic(track.title, "trackId" to track.id) }) {
+                                        startMusicTracks(fullQueue, album, fullIdx)
+                                    })
                                 }
                                 if (staged.childCount == 0) staged.addView(label("No imported songs found"))
                             }
@@ -3488,7 +3602,7 @@ class MainActivity : AppCompatActivity() {
                             dialog.dismiss()
                             lifecycleScope.launch {
                                 try {
-                                    api.call("music/profile-album", method = "DELETE", body = JSONObject().put("albumId", current.id))
+                                    api.call("music/profile-album", params = mapOf("albumId" to current.id), method = "DELETE")
                                     toast("Removed ${current.title} from your profile")
                                     mediaHub("music")
                                 } catch (e: Exception) {
@@ -3601,6 +3715,10 @@ class MainActivity : AppCompatActivity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(8), dp(8), dp(8), dp(12))
+            val newBtn = action("+ New Playlist", primary = false) {
+                showCreatePlaylistDialog()
+            }
+            addView(newBtn, LinearLayout.LayoutParams(-2, -2).apply { rightMargin = dp(8) })
             val btn = action("+ Import Playlists (Spotify / Exportify)", primary = true) {
                 showSpotifyImportDialog()
             }.apply {
@@ -3948,6 +4066,40 @@ class MainActivity : AppCompatActivity() {
                 toast(e.message ?: "Failed importing Exportify file")
             }
         }
+    }
+
+    private fun showCreatePlaylistDialog() {
+        val form = column().apply { setPadding(dp(20), dp(12), dp(20), dp(12)) }
+        val input = EditText(this).apply {
+            hint = "Playlist name"
+            setTextColor(Color.WHITE)
+            setHintTextColor(MUTED)
+            inputType = InputType.TYPE_CLASS_TEXT
+            setPadding(dp(12), dp(10), dp(12), dp(10))
+            background = rounded(0xFF262626.toInt())
+            form.addView(this)
+        }
+        AlertDialog.Builder(this)
+            .setTitle("New Music Playlist")
+            .setView(form)
+            .setPositiveButton("Create") { _, _ ->
+                val name = input.text.toString().trim()
+                if (name.isBlank()) {
+                    toast("Please enter a playlist name")
+                    return@setPositiveButton
+                }
+                lifecycleScope.launch {
+                    try {
+                        api.call("music/playlists", body = JSONObject().put("name", name))
+                        toast("Created playlist \"$name\"")
+                        mediaHub("music")
+                    } catch (e: Exception) {
+                        toast(e.message ?: "Failed to create playlist")
+                    }
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
     }
 
     private fun showSpotifyImportDialog() {
@@ -4351,6 +4503,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     private var adminPanelTab = "modules"
+    private var adminModuleCategory = "all"
+    private var adminPlaybackCategory = "all"
 
     private fun adminPanel(tab: String = adminPanelTab) {
         if (isTelevision()) {
@@ -4411,16 +4565,38 @@ class MainActivity : AppCompatActivity() {
                         host.removeAllViews()
                         val list = data.objects("integrations")
                         val configured = list.count { it.optBoolean("configured") }
-                        host.addView(label("$configured of ${list.size} modules connected", 12f).apply {
+                        val catMap = mapOf(
+                            "jellyfin" to "media", "tmdb" to "media",
+                            "seerr" to "media", "radarr" to "media", "sonarr" to "media",
+                            "slskd" to "music_books", "spotify" to "music_books", "bookshelf" to "music_books",
+                            "qbittorrent" to "downloaders",
+                        )
+                        val catPills = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, 0, 0, dp(8)) }
+                        listOf("all" to "All", "media" to "Media & Arr", "music_books" to "Music & Books", "downloaders" to "Downloaders", "configured" to "Configured").forEach { (k, labelTxt) ->
+                            catPills.addView(categoryPill(labelTxt, active = adminModuleCategory == k) {
+                                adminModuleCategory = k; adminPanel("modules")
+                            })
+                        }
+                        host.addView(HorizontalScrollView(this@MainActivity).apply { isHorizontalScrollBarEnabled = false; addView(catPills) })
+                        val filtered = list.filter { item ->
+                            when (adminModuleCategory) {
+                                "configured" -> item.optBoolean("configured")
+                                "all" -> true
+                                else -> catMap[item.optString("id")] == adminModuleCategory
+                            }
+                        }
+                        host.addView(label("$configured of ${list.size} modules connected (${filtered.size} shown)", 12f).apply {
                             setTextColor(MUTED); setPadding(0, 0, 0, dp(8))
                         })
                         val downloadsPath = data.optString("downloadsPath")
-                        list.forEach { integration ->
+                        val booksPath = data.optString("booksPath", "/books")
+                        val musicPath = data.optString("musicPath", "/music")
+                        filtered.forEach { integration ->
                             val isConfigured = integration.optBoolean("configured")
                             val card = column().apply {
                                 background = rounded(0xFF1A1A1A.toInt(), radius = dp(10).toFloat())
                                 setPadding(dp(14), dp(12), dp(14), dp(12))
-                                setOnClickListener { editIntegration(integration, downloadsPath) }
+                                setOnClickListener { editIntegration(integration, downloadsPath, booksPath, musicPath) }
                             }
                             val topRow = LinearLayout(this@MainActivity).apply {
                                 orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
@@ -4573,6 +4749,14 @@ class MainActivity : AppCompatActivity() {
                         val nativeData = api.call("native/library")
                         if (screen != "admin-panel" || adminPanelTab != "playback") return@launch
                         host.removeAllViews()
+                        val pbPills = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, 0, 0, dp(8)) }
+                        listOf("all" to "All", "streams" to "Active Streams", "transcoding" to "Transcoding", "languages" to "Languages", "features" to "Features", "previews" to "Intro Previews").forEach { (k, labelTxt) ->
+                            pbPills.addView(categoryPill(labelTxt, active = adminPlaybackCategory == k) {
+                                adminPlaybackCategory = k; adminPanel("playback")
+                            })
+                        }
+                        host.addView(HorizontalScrollView(this@MainActivity).apply { isHorizontalScrollBarEnabled = false; addView(pbPills) })
+
                         val streams = nativeData.objects("activeStreams")
                         val hw = nativeData.optJSONArray("hardwareAcceleration")?.let { arr ->
                             (0 until arr.length()).joinToString(", ") { arr.optString(it) }
@@ -4604,7 +4788,9 @@ class MainActivity : AppCompatActivity() {
                             })
                             diagCard.addView(row)
                         }
-                        host.addView(diagCard, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(10) })
+                        if (adminPlaybackCategory == "all" || adminPlaybackCategory == "streams") {
+                            host.addView(diagCard, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(10) })
+                        }
 
                         val previews = nativeData.objects("introPreviews")
                         val previewCard = column().apply {
@@ -4646,7 +4832,132 @@ class MainActivity : AppCompatActivity() {
                             }.apply { (layoutParams as? LinearLayout.LayoutParams)?.marginStart = dp(8) })
                             previewCard.addView(pRow)
                         }
-                        host.addView(previewCard, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(10) })
+                        if (adminPlaybackCategory == "all" || adminPlaybackCategory == "previews") {
+                            host.addView(previewCard, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(10) })
+                        }
+
+                        val sObj = nativeData.optJSONObject("settings") ?: JSONObject()
+                        val settingsCard = column().apply {
+                            background = rounded(0xFF1A1A1A.toInt(), radius = dp(10).toFloat())
+                            setPadding(dp(14), dp(12), dp(14), dp(12))
+                        }
+                        settingsCard.addView(label("Server Playback & Transcode Settings", 14f, true))
+                        settingsCard.addView(TextView(this@MainActivity).apply {
+                            text = "Shared server defaults (phone admin)"
+                            textSize = 11.5f; setTextColor(MUTED); setPadding(0, dp(2), 0, dp(8))
+                        })
+
+                        fun adminField(title: String, initial: String, numeric: Boolean = false, visible: Boolean = true): EditText {
+                            settingsCard.addView(TextView(this@MainActivity).apply {
+                                text = title; textSize = 11.5f; setTextColor(MUTED); setPadding(0, dp(6), 0, dp(2))
+                                visibility = if (visible) View.VISIBLE else View.GONE
+                            })
+                            return EditText(this@MainActivity).apply {
+                                setText(initial)
+                                setTextColor(Color.WHITE)
+                                setSingleLine(true)
+                                if (numeric) inputType = android.text.InputType.TYPE_CLASS_NUMBER
+                                visibility = if (visible) View.VISIBLE else View.GONE
+                                settingsCard.addView(this)
+                            }
+                        }
+
+                        val showTranscoding = adminPlaybackCategory == "all" || adminPlaybackCategory == "transcoding"
+                        val showLanguages = adminPlaybackCategory == "all" || adminPlaybackCategory == "languages"
+                        val showFeatures = adminPlaybackCategory == "all" || adminPlaybackCategory == "features"
+
+                        val hwModes = listOf("auto", "none", "vaapi", "qsv", "nvenc", "videotoolbox")
+                        val hwLabel = TextView(this@MainActivity).apply {
+                            text = "Hardware Acceleration"; textSize = 11.5f; setTextColor(MUTED); setPadding(0, dp(4), 0, dp(2))
+                            visibility = if (showTranscoding) View.VISIBLE else View.GONE
+                        }
+                        settingsCard.addView(hwLabel)
+                        val hwSpinner = android.widget.Spinner(this@MainActivity).apply {
+                            adapter = android.widget.ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, hwModes)
+                            setSelection(hwModes.indexOf(sObj.optString("hwAccel", "auto")).coerceAtLeast(0))
+                            visibility = if (showTranscoding) View.VISIBLE else View.GONE
+                        }
+                        settingsCard.addView(hwSpinner)
+
+                        val presets = listOf("ultrafast", "superfast", "veryfast", "faster", "fast", "medium")
+                        settingsCard.addView(TextView(this@MainActivity).apply {
+                            text = "Transcode Preset"; textSize = 11.5f; setTextColor(MUTED); setPadding(0, dp(6), 0, dp(2))
+                            visibility = if (showTranscoding) View.VISIBLE else View.GONE
+                        })
+                        val presetSpinner = android.widget.Spinner(this@MainActivity).apply {
+                            adapter = android.widget.ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, presets)
+                            setSelection(presets.indexOf(sObj.optString("transcodePreset", "veryfast")).coerceAtLeast(0))
+                            visibility = if (showTranscoding) View.VISIBLE else View.GONE
+                        }
+                        settingsCard.addView(presetSpinner)
+
+                        val bitrateInput = adminField("Max Transcode Bitrate (Mbps)", sObj.optInt("maxTranscodeBitrateMbps", 20).toString(), numeric = true, visible = showTranscoding)
+                        val defAudioInput = adminField("Default Audio Language", sObj.optString("defaultAudioLanguage", "eng"), visible = showLanguages)
+                        val defSubInput = adminField("Default Subtitle Language", sObj.optString("defaultSubtitleLanguage", "eng"), visible = showLanguages)
+                        val metaLangInput = adminField("Metadata Language", sObj.optString("metadataLanguage", "en-US"), visible = showLanguages)
+
+                        val srvSubModes = listOf("default", "forced", "always", "none")
+                        settingsCard.addView(TextView(this@MainActivity).apply {
+                            text = "Server Subtitle Mode"; textSize = 11.5f; setTextColor(MUTED); setPadding(0, dp(6), 0, dp(2))
+                            visibility = if (showLanguages) View.VISIBLE else View.GONE
+                        })
+                        val srvSubSpinner = android.widget.Spinner(this@MainActivity).apply {
+                            adapter = android.widget.ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, srvSubModes)
+                            setSelection(srvSubModes.indexOf(sObj.optString("subtitleMode", "default")).coerceAtLeast(0))
+                            visibility = if (showLanguages) View.VISIBLE else View.GONE
+                        }
+                        settingsCard.addView(srvSubSpinner)
+
+                        val toggleSpecs = listOf(
+                            "allowDirectPlay" to "Allow Direct Play",
+                            "allowDirectStream" to "Allow Direct Stream / Remux",
+                            "hdrToneMapping" to "HDR → SDR Tone Mapping",
+                            "burnInImageSubtitles" to "Burn-in PGS / VOBSUB / ASS",
+                            "enableSkipIntroCredits" to "Skip Intro & Credits",
+                            "enableMultiVersionGrouping" to "Multi-Version Quality Grouping",
+                            "enableTrickplay" to "Trickplay Seek Thumbnails",
+                            "enableSyncPlay" to "SyncPlay (Watch Together)",
+                            "enableWatchStats" to "Per-Profile Watch Stats",
+                        )
+                        val toggleBoxes = toggleSpecs.associate { (k, labelText) ->
+                            val cb = android.widget.CheckBox(this@MainActivity).apply {
+                                text = labelText
+                                setTextColor(Color.WHITE)
+                                isChecked = sObj.optBoolean(k, k != "enableTrickplay")
+                                visibility = if (showFeatures) View.VISIBLE else View.GONE
+                            }
+                            settingsCard.addView(cb)
+                            k to cb
+                        }
+
+                        if (!showTranscoding && !showLanguages && !showFeatures) {
+                            settingsCard.visibility = View.GONE
+                        }
+
+                        settingsCard.addView(action("Save Server Settings", primary = true) {
+                            lifecycleScope.launch {
+                                val patch = JSONObject()
+                                    .put("hwAccel", hwModes[hwSpinner.selectedItemPosition])
+                                    .put("transcodePreset", presets[presetSpinner.selectedItemPosition])
+                                    .put("maxTranscodeBitrateMbps", bitrateInput.text.toString().toIntOrNull() ?: 20)
+                                    .put("defaultAudioLanguage", defAudioInput.text.toString().trim().ifBlank { "eng" })
+                                    .put("defaultSubtitleLanguage", defSubInput.text.toString().trim().ifBlank { "eng" })
+                                    .put("metadataLanguage", metaLangInput.text.toString().trim().ifBlank { "en-US" })
+                                    .put("subtitleMode", srvSubModes[srvSubSpinner.selectedItemPosition])
+                                toggleBoxes.forEach { (k, cb) -> patch.put(k, cb.isChecked) }
+                                runCatching {
+                                    api.call("native/library", body = JSONObject().put("action", "saveSettings").put("settings", patch))
+                                }.onSuccess {
+                                    toast("Server settings saved")
+                                    adminPanel("playback")
+                                }.onFailure {
+                                    toast("Failed to save server settings")
+                                }
+                            }
+                        }.apply {
+                            layoutParams = LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(10) }
+                        })
+                        host.addView(settingsCard, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(10) })
                     }
                     "maintenance" -> {
                         val nativeData = api.call("native/library", params = mapOf("view" to "maintenance"))
@@ -4758,10 +5069,10 @@ class MainActivity : AppCompatActivity() {
                             })
                             val subTabs = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.HORIZONTAL }
                             subTabs.addView(categoryPill("qBittorrent", active = downloadManagerSubTab == "torrents") {
-                                downloadManagerSubTab = "torrents"; adminPanel("media")
+                                downloadManagerSubTab = "torrents"; adminPanel("downloads")
                             })
                             subTabs.addView(categoryPill("System Queues", active = downloadManagerSubTab == "system") {
-                                downloadManagerSubTab = "system"; adminPanel("media")
+                                downloadManagerSubTab = "system"; adminPanel("downloads")
                             })
                             subTabs.addView(categoryPill("+ Add Magnet", active = false) { showAddTorrentDialog() })
                             summaryCard.addView(HorizontalScrollView(this@MainActivity).apply {
@@ -4771,7 +5082,7 @@ class MainActivity : AppCompatActivity() {
                             host.addView(summaryCard, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(12) })
 
                             if (mgr != null) {
-                                renderInteractiveDownloadManager(host, mgr) { adminPanel("media") }
+                                renderInteractiveDownloadManager(host, mgr) { adminPanel("downloads") }
                             }
 
                             if (reqItems.isNotEmpty()) {
@@ -4809,6 +5120,7 @@ class MainActivity : AppCompatActivity() {
                         pathCard.addView(TextView(this@MainActivity).apply {
                             text = "Downloads: ${integrations?.optString("downloadsPath").orEmpty().ifBlank { "Not set" }}\n" +
                                 "Books: ${integrations?.optString("booksPath").orEmpty().ifBlank { "/books" }}\n" +
+                                "Music: ${integrations?.optString("musicPath").orEmpty().ifBlank { "/music" }}\n" +
                                 "Manage Integrations: ${caps?.optBoolean("canManageIntegrations") == true}"
                             textSize = 12f; setTextColor(MUTED); setPadding(0, dp(6), 0, 0)
                         })
@@ -4898,11 +5210,28 @@ class MainActivity : AppCompatActivity() {
                                     background = rounded(0xFF161616.toInt(), radius = dp(8).toFloat())
                                     setPadding(dp(12), dp(10), dp(12), dp(10))
                                 }
-                                row.addView(label("${s.optString("deviceName")} (${s.optString("platform")})", 13f, true))
+                                row.addView(label("${s.optString("deviceName")} (${s.optString("platform").ifBlank { s.optString("deviceType", "device") }})", 13f, true))
                                 row.addView(TextView(this@MainActivity).apply {
-                                    text = s.optString("title").ifBlank { s.optString("state", "idle") }
-                                    textSize = 11f; setTextColor(MUTED); setPadding(0, dp(2), 0, 0)
+                                    text = s.optString("title").ifBlank { if (s.optBoolean("isPlaying")) "playing" else "idle" }
+                                    textSize = 11f; setTextColor(MUTED); setPadding(0, dp(2), 0, dp(6))
                                 })
+                                val cmdRow = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.HORIZONTAL }
+                                val targetId = s.optString("deviceId")
+                                cmdRow.addView(action("Play/Pause") {
+                                    lifecycleScope.launch {
+                                        runCatching { api.call("sessions/command", body = JSONObject().put("targetDeviceId", targetId).put("type", "togglePlayPause")) }
+                                            .onSuccess { toast("Sent Play/Pause") }
+                                            .onFailure { toast("Command failed") }
+                                    }
+                                })
+                                cmdRow.addView(action("Stop") {
+                                    lifecycleScope.launch {
+                                        runCatching { api.call("sessions/command", body = JSONObject().put("targetDeviceId", targetId).put("type", "stop")) }
+                                            .onSuccess { toast("Sent Stop"); adminPanel("system") }
+                                            .onFailure { toast("Command failed") }
+                                    }
+                                }.apply { (layoutParams as? LinearLayout.LayoutParams)?.marginStart = dp(8) })
+                                row.addView(cmdRow)
                                 host.addView(row, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(6) })
                             }
                         }
@@ -4923,7 +5252,9 @@ class MainActivity : AppCompatActivity() {
                 val data = api.call("integrations")
                 val form = column().apply { setPadding(dp(20), dp(12), dp(20), dp(12)) }
                 data.objects("integrations").forEach { integration ->
-                    form.addView(action("${integration.optString("name")} • ${if (integration.optBoolean("configured")) "Configured" else "Disconnected"}") { editIntegration(integration, data.optString("downloadsPath")) })
+                    form.addView(action("${integration.optString("name")} • ${if (integration.optBoolean("configured")) "Configured" else "Disconnected"}") {
+                        editIntegration(integration, data.optString("downloadsPath"), data.optString("booksPath", "/books"), data.optString("musicPath", "/music"))
+                    })
                 }
                 AlertDialog.Builder(this@MainActivity).setTitle("Admin integrations").setView(form).setNegativeButton("Close", null).show()
             } catch (e: Exception) {
@@ -4933,7 +5264,13 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun editIntegration(integration: JSONObject, downloadsPath: String) {
+    private fun editIntegration(
+        integration: JSONObject,
+        downloadsPath: String,
+        booksPath: String = "/books",
+        musicPath: String = "/music",
+    ) {
+        val id = integration.optString("id")
         val form = column().apply { setPadding(dp(20), dp(12), dp(20), dp(12)) }
         fun field(hintText: String, value: String = "", secret: Boolean = false) = EditText(this).apply {
             hint = hintText; setText(value); setTextColor(Color.WHITE); setHintTextColor(MUTED)
@@ -4941,23 +5278,72 @@ class MainActivity : AppCompatActivity() {
             importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS
             isSaveEnabled = false; form.addView(this)
         }
-        val url = field("HTTP(S) URL; blank disconnects", integration.optString("url"))
+        val url = field(
+            if (id == "spotify") "Spotify Client ID" else "HTTP(S) URL; blank disconnects",
+            integration.optString("url"),
+        ).apply {
+            if (id == "tmdb") visibility = View.GONE
+        }
         val secret = field(if (integration.optBoolean("credentialSet")) "Credential saved; blank preserves" else "Credential", secret = true)
-        val username = if (integration.optString("id") == "qbittorrent") field("Username", integration.optString("username")) else null
+        val username = if (id == "qbittorrent") field("Username", integration.optString("username")) else null
         val path = if (username != null) field("Backend downloads path", downloadsPath) else null
+        val booksPathField = if (id == "bookshelf") field("Backend books path", booksPath) else null
+        val musicPathField = if (id == "slskd") field("Backend music path", musicPath) else null
+
+        val slskdQualities = listOf("mp3-320", "flac", "any-lossless", "mp3-any")
+        val slskdSpinner = if (id == "slskd") {
+            form.addView(label("Audio quality preference", 12f).apply { setTextColor(MUTED); setPadding(0, dp(6), 0, dp(2)) })
+            android.widget.Spinner(this).apply {
+                adapter = android.widget.ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, slskdQualities)
+                setSelection(slskdQualities.indexOf(integration.optString("qualityPreference", "mp3-320")).coerceAtLeast(0))
+                form.addView(this)
+            }
+        } else null
+
+        val arrProfiles = if (id == "radarr" || id == "sonarr") integration.objects("qualityProfiles") else emptyList()
+        val arrSpinner = if (arrProfiles.isNotEmpty()) {
+            form.addView(label("Quality profile", 12f).apply { setTextColor(MUTED); setPadding(0, dp(6), 0, dp(2)) })
+            android.widget.Spinner(this).apply {
+                adapter = android.widget.ArrayAdapter(
+                    this@MainActivity,
+                    android.R.layout.simple_spinner_dropdown_item,
+                    arrProfiles.map { it.optString("name") },
+                )
+                val curId = integration.optInt("qualityProfileId", 1)
+                setSelection(arrProfiles.indexOfFirst { it.optInt("id") == curId }.coerceAtLeast(0))
+                form.addView(this)
+            }
+        } else null
+        val arrProfileInput = if ((id == "radarr" || id == "sonarr") && arrProfiles.isEmpty()) {
+            field("Quality profile ID", integration.optInt("qualityProfileId", 1).toString()).apply {
+                inputType = InputType.TYPE_CLASS_NUMBER
+            }
+        } else null
+
         val pin = field("Parent PIN (if required)", secret = true)
         val status = label(""); form.addView(status)
         val dialog = AlertDialog.Builder(this).setTitle(integration.optString("name")).setView(ScrollView(this).apply { addView(form) })
             .setNegativeButton("Cancel", null).setPositiveButton("Save", null).setNeutralButton("Test", null).create()
         dialog.setOnShowListener {
             fun submit(action: String) {
-                val parsed = url.text.toString().trim().toHttpUrlOrNull()
-                if (url.text.isNotBlank() && (parsed == null || parsed.username.isNotEmpty() || parsed.password.isNotEmpty() || parsed.query != null || parsed.fragment != null)) {
-                    status.text = "Enter an HTTP(S) URL without credentials, query or fragment"; return
+                if (id !in listOf("spotify", "tmdb")) {
+                    val parsed = url.text.toString().trim().toHttpUrlOrNull()
+                    if (url.text.isNotBlank() && (parsed == null || parsed.username.isNotEmpty() || parsed.password.isNotEmpty() || parsed.query != null || parsed.fragment != null)) {
+                        status.text = "Enter an HTTP(S) URL without credentials, query or fragment"; return
+                    }
                 }
-                val payload = JSONObject().put("integration", integration.optString("id")).put("action", action)
+                val payload = JSONObject().put("integration", id).put("action", action)
                     .put("url", url.text.toString().trim()).put("secret", secret.text.toString())
                 username?.let { payload.put("username", it.text.toString()) }; path?.let { payload.put("downloadsPath", it.text.toString()) }
+                booksPathField?.let { payload.put("booksPath", it.text.toString().trim()) }
+                musicPathField?.let { payload.put("musicPath", it.text.toString().trim()) }
+                slskdSpinner?.let { payload.put("qualityPreference", slskdQualities[it.selectedItemPosition]) }
+                arrSpinner?.let { s ->
+                    arrProfiles.getOrNull(s.selectedItemPosition)?.optInt("id")?.let { payload.put("qualityProfileId", it) }
+                }
+                arrProfileInput?.let { inp ->
+                    inp.text.toString().trim().toIntOrNull()?.takeIf { it >= 1 }?.let { payload.put("qualityProfileId", it) }
+                }
                 if (pin.text.isNotBlank()) payload.put("parentPin", pin.text.toString())
                 dialog.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled = false
                 dialog.getButton(AlertDialog.BUTTON_NEUTRAL).isEnabled = false
@@ -5920,20 +6306,37 @@ class MainActivity : AppCompatActivity() {
         content.addView(box)
 
         lifecycleScope.launch {
-            try {
-                val res = api.call("books")
+            var loadedCount = 0
+            suspend fun loadBooksPage(offset: Int, append: Boolean) {
+                val res = api.call("books", if (offset > 0) mapOf("offset" to "$offset") else emptyMap())
                 val arr = res.optJSONArray("books") ?: org.json.JSONArray()
-                listHost.removeAllViews()
-                if (arr.length() == 0) {
+                val total = res.optInt("total", arr.length())
+                if (!append) listHost.removeAllViews()
+                if (!append && arr.length() == 0) {
                     listHost.addView(TextView(this@MainActivity).apply {
                         text = "Your bookshelf is empty. Use Search & Request to grab books via Bookshelf & qBittorrent."
                         textSize = 13f; setTextColor(MUTED); setPadding(0, dp(12), 0, dp(12))
                     })
-                    return@launch
+                    return
                 }
                 for (i in 0 until arr.length()) {
                     listHost.addView(buildBookRow(arr.getJSONObject(i), isDiscover = false))
                 }
+                loadedCount += arr.length()
+                val existingMore = listHost.findViewWithTag<View>("books_load_more")
+                if (existingMore != null) listHost.removeView(existingMore)
+                if (loadedCount < total) {
+                    val moreBtn = action("Load More Books ($loadedCount / $total)") {
+                        lifecycleScope.launch {
+                            runCatching { loadBooksPage(loadedCount, append = true) }
+                                .onFailure { toast("Failed loading more books: ${it.message}") }
+                        }
+                    }.apply { tag = "books_load_more" }
+                    listHost.addView(moreBtn)
+                }
+            }
+            try {
+                loadBooksPage(0, append = false)
             } catch (e: Exception) {
                 listHost.removeAllViews()
                 listHost.addView(TextView(this@MainActivity).apply {
@@ -6079,7 +6482,9 @@ class MainActivity : AppCompatActivity() {
         val inLibrary = book.optBoolean("inLibrary")
         val onShelf = book.optBoolean("onShelf")
         val formatsArr = book.optJSONArray("formats")
-        val firstFormat = if (formatsArr != null && formatsArr.length() > 0) formatsArr.optString(0, "epub") else "epub"
+        val formatsList = (0 until (formatsArr?.length() ?: 0)).map { formatsArr!!.optString(it).lowercase() }
+        val supportedFormat = formatsList.firstOrNull { it == "epub" || it == "pdf" }
+        val isReadable = book.optBoolean("readable", supportedFormat != null) && supportedFormat != null
         val reqStatus = book.optString("requestStatus")
 
         val card = LinearLayout(this).apply {
@@ -6112,31 +6517,42 @@ class MainActivity : AppCompatActivity() {
 
         val actionBtn = TextView(this).apply {
             text = when {
-                inLibrary && onShelf -> "Read"
+                inLibrary && onShelf && isReadable -> "Read"
+                inLibrary && onShelf && !isReadable -> "Unsupported"
                 inLibrary && !onShelf -> "+ Shelf"
                 reqStatus.isNotBlank() -> reqStatus.replaceFirstChar { it.uppercase() }
                 else -> "Request"
             }
             textSize = 12f; typeface = android.graphics.Typeface.DEFAULT_BOLD
             setTextColor(Color.WHITE)
-            background = rounded(if (inLibrary) RED else 0xFF303030.toInt(), radius = dp(10).toFloat())
+            background = rounded(
+                when {
+                    inLibrary && onShelf && !isReadable -> 0xFF444444.toInt()
+                    inLibrary -> RED
+                    else -> 0xFF303030.toInt()
+                },
+                radius = dp(10).toFloat()
+            )
             setPadding(dp(14), dp(8), dp(14), dp(8))
             setOnClickListener {
-                if (inLibrary && onShelf && id.isNotBlank()) {
+                if (inLibrary && onShelf && isReadable && id.isNotBlank()) {
                     startActivity(
                         Intent(this@MainActivity, BookReaderActivity::class.java)
                             .putExtra("bookId", id)
                             .putExtra("title", title)
                             .putExtra("author", author)
-                            .putExtra("format", firstFormat)
+                            .putExtra("format", supportedFormat)
                     )
+                } else if (inLibrary && onShelf && !isReadable) {
+                    val fmtText = formatsList.joinToString(", ").ifBlank { "unknown" }
+                    toast("Unsupported format ($fmtText). Only EPUB and PDF are supported.")
                 } else if (inLibrary && !onShelf && id.isNotBlank()) {
                     text = "…"
                     lifecycleScope.launch {
                         try {
                             api.call("books/profile-book", body = JSONObject().put("bookId", id), method = "POST")
                             book.put("onShelf", true)
-                            text = "Read"
+                            text = if (isReadable) "Read" else "Unsupported"
                             toast("Added \"$title\" to your bookshelf")
                         } catch (e: Exception) {
                             text = "+ Shelf"

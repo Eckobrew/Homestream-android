@@ -137,41 +137,63 @@ class OfflineMediaStore(private val context: Context, private val settings: Conn
         saveEntries(listDownloads().filterNot { it.itemId == itemId && (versionId == null || it.versionId == versionId) })
     }
 
+    companion object {
+        private val progressLock = Any()
+        private val generationCounter = java.util.concurrent.atomic.AtomicLong(0L)
+    }
+
     fun queueOfflineProgress(itemId: String, positionMs: Long) {
         if (positionMs <= 0L) return
-        val current = JSONObject(prefs.getString(progressKey, "{}") ?: "{}")
-        current.put(itemId, JSONObject().put("positionMs", positionMs).put("recordedAt", System.currentTimeMillis()))
-        prefs.edit().putString(progressKey, current.toString()).apply()
+        synchronized(progressLock) {
+            val current = JSONObject(prefs.getString(progressKey, "{}") ?: "{}")
+            current.put(
+                itemId,
+                JSONObject()
+                    .put("positionMs", positionMs)
+                    .put("recordedAt", System.currentTimeMillis())
+                    .put("gen", generationCounter.incrementAndGet())
+            )
+            prefs.edit().putString(progressKey, current.toString()).apply()
+        }
     }
 
     suspend fun syncPendingProgress(api: HomeStreamApi): Int = withContext(Dispatchers.IO) {
-        val current = JSONObject(prefs.getString(progressKey, "{}") ?: "{}")
-        val keys = current.keys().asSequence().toList()
+        data class QueuedProgress(val itemId: String, val posMs: Long, val recordedAt: Long, val gen: Long)
+        val snapshot = synchronized(progressLock) {
+            val current = JSONObject(prefs.getString(progressKey, "{}") ?: "{}")
+            current.keys().asSequence().mapNotNull { itemId ->
+                val entry = current.optJSONObject(itemId) ?: return@mapNotNull null
+                val posMs = entry.optLong("positionMs", -1L)
+                val recordedAt = entry.optLong("recordedAt", 0L)
+                val gen = entry.optLong("gen", 0L)
+                if (posMs <= 0L) null else QueuedProgress(itemId, posMs, recordedAt, gen)
+            }.toList()
+        }
         var synced = 0
-        for (itemId in keys) {
-            val entry = current.optJSONObject(itemId)
-            val posMs = entry?.optLong("positionMs", -1L) ?: -1L
-            if (posMs <= 0L) {
-                current.remove(itemId)
-                continue
-            }
-            val serverAhead = runCatching {
-                val detail = api.call("media/$itemId").optJSONObject("item")
-                detail != null && (detail.optBoolean("played") || detail.optLong("playbackPositionTicks", 0L) > posMs * 10_000L)
-            }.getOrDefault(false)
-            if (serverAhead) {
-                current.remove(itemId)
-                continue
-            }
+        for (q in snapshot) {
             val ok = runCatching {
-                api.progress(itemId, posMs, paused = true, stopped = true)
+                api.progress(
+                    q.itemId,
+                    q.posMs,
+                    paused = true,
+                    stopped = true,
+                    recordedAtMs = q.recordedAt.takeIf { it > 0L },
+                )
             }.isSuccess
             if (ok) {
-                current.remove(itemId)
+                synchronized(progressLock) {
+                    val latest = JSONObject(prefs.getString(progressKey, "{}") ?: "{}")
+                    val latestObj = latest.optJSONObject(q.itemId)
+                    val latestGen = latestObj?.optLong("gen", 0L) ?: 0L
+                    val latestRec = latestObj?.optLong("recordedAt", 0L) ?: 0L
+                    if (latestObj != null && latestGen == q.gen && latestRec == q.recordedAt) {
+                        latest.remove(q.itemId)
+                        prefs.edit().putString(progressKey, latest.toString()).apply()
+                    }
+                }
                 synced++
             }
         }
-        prefs.edit().putString(progressKey, current.toString()).apply()
         synced
     }
 
