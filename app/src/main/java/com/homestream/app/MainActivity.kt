@@ -323,7 +323,7 @@ class MainActivity : AppCompatActivity() {
                     setBackgroundColor(INK); gravity = Gravity.CENTER
                     addView(label("Connect to HomeStream to confirm your profile"))
                     addView(action("Retry") { verifyProfilePolicy() })
-                    if (e is HomeStreamApi.ResponseException && e.statusCode == 401) addView(action("Sign in / pair") { setup() })
+                    addView(action("Sign in / Connect Server") { setup() })
                 }
                 work?.cancel(); searchJob?.cancel(); categoryJob?.cancel(); heroRotationJob?.cancel()
                 trailerView?.onPause()
@@ -2815,17 +2815,31 @@ class MainActivity : AppCompatActivity() {
         dialog.show()
     }
 
-    private fun openJellyfinLoginDialog() {
+    private fun openJellyfinLoginDialog(
+        prefilledUrl: String = "",
+        discoveredLocalUrl: String = "",
+        discoveredName: String = ""
+    ) {
         val form = column().apply { setPadding(dp(20), dp(10), dp(20), dp(10)) }
 
-        form.addView(label("External HomeStream URL", 13.5f, true))
+        form.addView(label("Server Address (Local IP or External URL)", 13.5f, true))
         val extUrlInput = EditText(this).apply {
-            hint = "https://homeflix.example.com"
-            setText(settings.externalUrl.ifBlank { if (settings.baseUrl.startsWith("https")) settings.baseUrl else "" })
+            hint = "http://192.168.1.x:3000 or https://homeflix.example.com"
+            setText(prefilledUrl.ifBlank { settings.baseUrl.ifBlank { settings.externalUrl } })
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
             isSingleLine = true
         }
         form.addView(extUrlInput, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(10) })
+
+        form.addView(label("External URL (Optional, for remote access away from home)", 12.5f, true))
+        val remoteUrlInput = EditText(this).apply {
+            hint = "https://homeflix.example.com"
+            val initialExt = settings.externalUrl.takeIf { it.isNotBlank() && it != prefilledUrl } ?: ""
+            setText(initialExt)
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
+            isSingleLine = true
+        }
+        form.addView(remoteUrlInput, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(10) })
 
         val usersBox = column().apply { visibility = View.GONE }
         val usersLabel = label("Select User", 13.5f, true)
@@ -2848,12 +2862,12 @@ class MainActivity : AppCompatActivity() {
 
         // Helper function to fetch users from the entered URL
         var userLookupJob: Job? = null
-        fun fetchJellyfinUsers(serverUrl: String) {
+        fun fetchServerUsers(serverUrl: String) {
             userLookupJob?.cancel()
             val clean = serverUrl.trim().trimEnd('/')
             if (clean.isBlank()) return
             userLookupJob = lifecycleScope.launch(Dispatchers.IO) {
-                delay(300)
+                delay(250)
                 try {
                     val u = java.net.URL("$clean/api/mobile/v1/auth/users")
                     val conn = (u.openConnection() as java.net.HttpURLConnection).apply {
@@ -2874,7 +2888,7 @@ class MainActivity : AppCompatActivity() {
                                         orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_HORIZONTAL
                                         setPadding(dp(8), dp(4), dp(8), dp(4))
                                         background = rounded(0x22FFFFFF.toInt(), radius = dp(8).toFloat())
-                                        isClickable = true
+                                        isClickable = true; isFocusable = true
                                         setOnClickListener {
                                             usernameInput.setText(uName)
                                             passwordInput.requestFocus()
@@ -2905,14 +2919,14 @@ class MainActivity : AppCompatActivity() {
         }
 
         extUrlInput.addTextChangedListener(object : TextWatcher {
-            override fun afterTextChanged(s: Editable?) { fetchJellyfinUsers(s.toString()) }
+            override fun afterTextChanged(s: Editable?) { fetchServerUsers(s.toString()) }
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
         })
-        if (extUrlInput.text.isNotBlank()) fetchJellyfinUsers(extUrlInput.text.toString())
+        if (extUrlInput.text.isNotBlank()) fetchServerUsers(extUrlInput.text.toString())
 
         val jDialog = AlertDialog.Builder(this)
-            .setTitle("HomeStream Sign In")
+            .setTitle("Sign In to HomeStream")
             .setView(ScrollView(this).apply { addView(form) })
             .setPositiveButton("Sign In", null)
             .setNegativeButton("Cancel", null)
@@ -2953,12 +2967,32 @@ class MainActivity : AppCompatActivity() {
                             val token = resp.optString("token")
                             check(token.isNotBlank()) { "Server did not return a login token" }
                             val userObj = resp.optJSONObject("user")
+                            val isLocalAddr = discoveredLocalUrl.isNotBlank() ||
+                                cleanUrl.startsWith("http://192.168.") ||
+                                cleanUrl.startsWith("http://10.") ||
+                                cleanUrl.startsWith("http://172.") ||
+                                cleanUrl.contains(".local")
+                            val localToSave = when {
+                                discoveredLocalUrl.isNotBlank() -> discoveredLocalUrl
+                                isLocalAddr -> cleanUrl
+                                else -> settings.localUrl
+                            }
+                            val extToSave = remoteUrlInput.text.toString().trim().trimEnd('/').ifBlank {
+                                if (!isLocalAddr) cleanUrl else settings.externalUrl
+                            }
                             withContext(Dispatchers.Main) {
-                                settings.saveServer(local = "", external = cleanUrl, token = token, type = "jellyfin", name = userObj?.optString("name", username) ?: username)
+                                settings.saveServer(
+                                    local = localToSave,
+                                    external = extToSave,
+                                    token = token,
+                                    type = "account",
+                                    name = discoveredName.ifBlank { userObj?.optString("name", username) ?: username }
+                                )
                                 userObj?.optString("id")?.let { if (it.isNotBlank()) settings.profile = it }
                                 toast("Signed in as $username!")
                                 jDialog.dismiss()
-                                resetNavigationHistory(); loadTab("home")
+                                resetNavigationHistory()
+                                verifyProfilePolicy()
                             }
                         } else {
                             val errText = conn.errorStream?.bufferedReader()?.use { it.readText() }.orEmpty()
@@ -2987,14 +3021,14 @@ class MainActivity : AppCompatActivity() {
         if (first) { shell(); heading("Your cinema. Your collection."); message("Connect to your HomeStream server to begin.") }
         val form = column().apply { setPadding(dp(20), dp(8), dp(20), dp(8)) }
 
-        // 1. Local Auto-Discovery Section
+        // 1. Local Auto-Discovery Section (Jellyfin-style: pick server -> sign in with account)
         val discoverySection = column().apply {
             background = rounded(0x15FFFFFF.toInt(), radius = dp(8).toFloat())
             setPadding(dp(12), dp(10), dp(12), dp(10))
         }
         val discTitleRow = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
         discTitleRow.addView(TextView(this).apply {
-            text = "LOCAL — AUTO DISCOVER & PAIR"; textSize = 11f; typeface = android.graphics.Typeface.DEFAULT_BOLD
+            text = "LOCAL SERVERS — DISCOVER & SIGN IN"; textSize = 11f; typeface = android.graphics.Typeface.DEFAULT_BOLD
             setTextColor(RED); layoutParams = LinearLayout.LayoutParams(0, -2, 1f)
         })
         val scanStatus = TextView(this).apply {
@@ -3007,15 +3041,43 @@ class MainActivity : AppCompatActivity() {
         discoverySection.addView(discoveredServersContainer)
         form.addView(discoverySection, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(12) })
 
-        // 2. Remote / External Server Option (Jellyfin Auth)
-        val jellyfinRemoteBtn = Button(this).apply {
+        // 2. Manual Server Address Entry
+        form.addView(label("Or enter server address manually", 12f, true).apply {
+            setTextColor(MUTED); setPadding(0, 0, 0, dp(4))
+        })
+        val manualRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        val manualUrlInput = EditText(this).apply {
+            hint = "http://192.168.1.x:3000 or https://..."
+            setText(settings.baseUrl)
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
+            isSingleLine = true
+            layoutParams = LinearLayout.LayoutParams(0, -2, 1f)
+        }
+        val manualConnectBtn = Button(this).apply {
+            text = "Connect"; textSize = 12.5f; setTextColor(Color.BLACK); isAllCaps = false
+            background = rounded(Color.WHITE, radius = dp(8).toFloat())
+            setPadding(dp(14), 0, dp(14), 0)
+            minHeight = dp(40); minimumHeight = dp(40)
+            setOnClickListener {
+                val entered = manualUrlInput.text.toString().trim().trimEnd('/')
+                if (entered.isBlank()) { manualUrlInput.error = "Enter a server URL"; return@setOnClickListener }
+                connectionDialog?.dismiss()
+                openJellyfinLoginDialog(prefilledUrl = entered)
+            }
+        }
+        manualRow.addView(manualUrlInput, LinearLayout.LayoutParams(0, -2, 1f).apply { marginEnd = dp(8) })
+        manualRow.addView(manualConnectBtn, LinearLayout.LayoutParams(-2, dp(40)))
+        form.addView(manualRow, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(12) })
+
+        // 3. Direct External Sign-In Option
+        val externalLoginBtn = Button(this).apply {
             text = "🌐 Connect External Server"; textSize = 12.5f
             setTextColor(Color.WHITE); isAllCaps = false
             background = rounded(0x28FFFFFF.toInt(), radius = dp(8).toFloat())
             minHeight = dp(40); minimumHeight = dp(40)
             setOnClickListener { connectionDialog?.dismiss(); openJellyfinLoginDialog() }
         }
-        form.addView(jellyfinRemoteBtn, LinearLayout.LayoutParams(-1, dp(40)).apply { bottomMargin = dp(14) })
+        form.addView(externalLoginBtn, LinearLayout.LayoutParams(-1, dp(40)).apply { bottomMargin = dp(10) })
 
         var discoveryJob: Job? = null
         val dialog = AlertDialog.Builder(this).setTitle("Connect HomeStream")
@@ -3050,7 +3112,7 @@ class MainActivity : AppCompatActivity() {
                 info.addView(TextView(this@MainActivity).apply { text = s.url; textSize = 11f; setTextColor(MUTED) })
                 sCard.addView(info)
 
-                val pairBtn = Button(this@MainActivity).apply {
+                val connectBtn = Button(this@MainActivity).apply {
                     text = "Connect"; textSize = 13f; setTextColor(Color.BLACK); isAllCaps = false
                     isFocusable = true; isClickable = true
                     contentDescription = "Connect to ${s.name}"
@@ -3058,44 +3120,26 @@ class MainActivity : AppCompatActivity() {
                     minHeight = dp(48); minimumHeight = dp(48)
                     setPadding(dp(16), 0, dp(16), 0)
                     setOnClickListener {
-                        isEnabled = false; text = "Pairing…"
-                        lifecycleScope.launch {
-                            try {
-                                val candidate = object : ConnectionSettings {
-                                    override val baseUrl = s.url
-                                    override val token = ""
-                                    override var profile = ""
-                                }
-                                val deviceId = android.provider.Settings.Secure.getString(contentResolver, android.provider.Settings.Secure.ANDROID_ID)
-                                    ?: java.util.UUID.randomUUID().toString()
-                                val result = HomeStreamApi(candidate).call("auth/pair", body = JSONObject()
-                                    .put("deviceId", deviceId)
-                                    .put("deviceName", "${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}"))
-                                val pairedToken = result.getString("token")
-                                val external = result.getString("externalUrl")
-                                check(pairedToken.isNotBlank() && external.toHttpUrlOrNull() != null) { "Invalid pairing response" }
-                                if (dialog.isShowing) {
-                                    settings.saveServer(s.url, external, pairedToken, name = s.name)
-                                    dialog.dismiss(); resetNavigationHistory(); loadTab("home")
-                                }
-                            } catch (e: Exception) {
-                                if (e is kotlinx.coroutines.CancellationException) throw e
-                                scanStatus.text = e.message ?: "Pairing failed"
-                            } finally { isEnabled = true; text = "Connect" }
-                        }
+                        discoveryJob?.cancel()
+                        dialog.dismiss()
+                        openJellyfinLoginDialog(
+                            prefilledUrl = s.url,
+                            discoveredLocalUrl = s.url,
+                            discoveredName = s.name
+                        )
                     }
                 }
-                sCard.addView(pairBtn, LinearLayout.LayoutParams(-2, dp(48)))
+                sCard.addView(connectBtn, LinearLayout.LayoutParams(-2, dp(48)))
                 if (isTelevision()) addTvFocusIndicators(sCard)
 
                 discoveredServersContainer.addView(sCard, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(6) })
-                if (isTelevision() && foundServers.size == 1 && dialog.isShowing && !form.hasFocus()) pairBtn.post { if (dialog.isShowing) pairBtn.requestFocus() }
+                if (isTelevision() && foundServers.size == 1 && dialog.isShowing && !form.hasFocus()) connectBtn.post { if (dialog.isShowing) connectBtn.requestFocus() }
             }
         }
 
         discoveryJob?.invokeOnCompletion {
             runOnUiThread {
-                if (dialog.isShowing) scanStatus.text = if (foundServers.isEmpty()) "No servers found. Check Wi-Fi, then retry." else "Found ${foundServers.size} server(s)"
+                if (dialog.isShowing) scanStatus.text = if (foundServers.isEmpty()) "No servers found. Check Wi-Fi or enter address below." else "Found ${foundServers.size} server(s)"
             }
         }
         val retry = Button(this).apply {

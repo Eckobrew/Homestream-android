@@ -28,16 +28,16 @@ class MainActivityTest {
     private fun descendants(view: View): List<View> = listOf(view) + if (view is ViewGroup)
         (0 until view.childCount).flatMap { descendants(view.getChildAt(it)) } else emptyList()
 
-    @Test fun firstLaunchOffersOnlyLocalPairingAndExternalLogin() {
+    @Test fun firstLaunchOffersLocalDiscoveryAndManualServerLogin() {
         Robolectric.buildActivity(MainActivity::class.java).setup().use { controller ->
             val dialog = ShadowDialog.getLatestDialog()
             assertTrue(dialog.isShowing)
             val views = descendants(dialog.window!!.decorView)
-            assertTrue(views.filterIsInstance<EditText>().isEmpty())
+            assertTrue(views.filterIsInstance<EditText>().isNotEmpty())
             val labels = views.filterIsInstance<TextView>().map { it.text.toString() }
-            assertTrue(labels.contains("LOCAL — AUTO DISCOVER & PAIR"))
+            assertTrue(labels.contains("LOCAL SERVERS — DISCOVER & SIGN IN"))
             assertTrue(labels.any { it.contains("External Server") })
-            assertFalse(labels.any { it.contains("MANUAL SERVER") || it.contains("HOMESTREAM_MOBILE_TOKEN") })
+            assertFalse(labels.any { it.contains("HOMESTREAM_MOBILE_TOKEN") })
             assertTrue(dialog.isShowing)
             assertFalse(controller.get().isFinishing)
             assertNotNull(controller.get().findViewById<View>(R.id.phone_header))

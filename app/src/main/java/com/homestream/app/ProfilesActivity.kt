@@ -153,7 +153,7 @@ class ProfilesActivity : AppCompatActivity() {
                 val accountOptions = if (canManage) api.call("profiles/users", body = JSONObject().put("parentPin", pin)) else null
                 val users = accountOptions?.optJSONArray("users")
                 showEditor(profile, canManage, (0 until (users?.length() ?: 0)).map { users!!.getJSONObject(it) }, pin,
-                    nativeEngine = accountOptions?.optString("mediaEngine") == "native")
+                    nativeEngine = true)
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
                 Toast.makeText(this@ProfilesActivity, e.message ?: "Could not load profile options", Toast.LENGTH_LONG).show()

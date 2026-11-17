@@ -105,7 +105,7 @@ class ServerSettings(context: Context, private val keyProvider: (() -> SecretKey
         if (url == localUrl || url == externalUrl) prefs.edit().putString("activeUrl", url).apply()
     }
 
-    val canUseProfiles: Boolean get() = authType in listOf("device", "local") && token.startsWith("hst_dev_")
+    val canUseProfiles: Boolean get() = token.isNotBlank()
 
     val serverIdentity: String get() = localUrl.ifBlank { externalUrl.ifBlank { baseUrl } }
 
