@@ -736,6 +736,13 @@ class PlayerActivity : AppCompatActivity() {
                 override fun getContentPosition(): Long = currentMediaPositionMs()
                 override fun getBufferedPosition(): Long = torrentStartOffsetMs + exo.bufferedPosition.coerceAtLeast(0L)
                 override fun isCurrentMediaItemSeekable(): Boolean = true
+                override fun getAvailableCommands(): Player.Commands = super.getAvailableCommands().buildUpon()
+                    .addAll(Player.COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM, Player.COMMAND_SEEK_BACK, Player.COMMAND_SEEK_FORWARD).build()
+                override fun isCommandAvailable(command: Int): Boolean = command in setOf(
+                    Player.COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM, Player.COMMAND_SEEK_BACK, Player.COMMAND_SEEK_FORWARD
+                ) || super.isCommandAvailable(command)
+                override fun seekToDefaultPosition() = seekMediaTo(0L)
+                override fun seekToDefaultPosition(mediaItemIndex: Int) = seekMediaTo(0L)
                 override fun seekTo(positionMs: Long) = seekMediaTo(positionMs)
                 override fun seekTo(mediaItemIndex: Int, positionMs: Long) = seekMediaTo(positionMs)
                 override fun seekBack() = seekMediaTo((currentMediaPositionMs() - seekBackIncrement).coerceAtLeast(0L))
