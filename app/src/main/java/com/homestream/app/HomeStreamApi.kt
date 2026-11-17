@@ -200,7 +200,7 @@ class HomeStreamApi(private val settings: ConnectionSettings) {
 
     /** Network interceptors run again for redirects and every HLS/subtitle request. */
     fun mediaClient(): OkHttpClient = OkHttpClient.Builder()
-        .connectTimeout(20, TimeUnit.SECONDS).readTimeout(60, TimeUnit.SECONDS)
+        .connectTimeout(20, TimeUnit.SECONDS).readTimeout(180, TimeUnit.SECONDS)
         .followRedirects(true)
         .followSslRedirects(true)
         .addNetworkInterceptor { chain ->

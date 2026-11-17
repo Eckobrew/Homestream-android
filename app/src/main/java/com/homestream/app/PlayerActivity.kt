@@ -60,6 +60,8 @@ class PlayerActivity : AppCompatActivity() {
     private var knownDurationMs = 0L
     private var position = 0L
     private var hlsStartOffsetMs = 0L
+    private var torrentStreamPath: String? = null
+    private var torrentStartOffsetMs = 0L
     private var isHlsTranscodeActive = false
     private var refreshInitialResume = true
     private var currentPlaybackId = ""
@@ -202,7 +204,7 @@ class PlayerActivity : AppCompatActivity() {
     private fun currentMediaPositionMs(): Long {
         val exo = player ?: return position.coerceAtLeast(0L)
         val basePos = exo.currentPosition.coerceAtLeast(0L)
-        return if (isHlsTranscodeActive) hlsStartOffsetMs + basePos else basePos
+        return if (torrentStreamPath != null) torrentStartOffsetMs + basePos else if (isHlsTranscodeActive) hlsStartOffsetMs + basePos else basePos
     }
 
     private fun serverMediaUrl(rawUrl: String): String {
@@ -222,6 +224,18 @@ class PlayerActivity : AppCompatActivity() {
     private fun seekMediaTo(targetMs: Long) {
         val clamped = targetMs.coerceAtLeast(0L)
         val exo = player ?: return
+        torrentStreamPath?.let { path ->
+            val uri = Uri.parse(path)
+            val next = uri.buildUpon().clearQuery().apply {
+                uri.queryParameterNames.filter { it != "start" && it != "startTimeTicks" }.forEach { key ->
+                    uri.getQueryParameters(key).forEach { appendQueryParameter(key, it) }
+                }
+                appendQueryParameter("start", (clamped / 1000.0).toString())
+            }.build().toString()
+            position = clamped
+            launchStreamUrl(next, compatible = clamped > 0L)
+            return
+        }
         if (isHlsTranscodeActive) {
             val relMs = clamped - hlsStartOffsetMs
             val loadedDur = exo.duration.takeIf { it > 0 && it != C.TIME_UNSET } ?: 0L
@@ -571,7 +585,7 @@ class PlayerActivity : AppCompatActivity() {
         val isTv = intent.getStringExtra("mediaType") == "tv" || media.type == "Series" || media.type == "Episode"
         val sNum = intent.getIntExtra("season", 0).takeIf { it > 0 } ?: media.json.optInt("seasonNumber", 1).coerceAtLeast(1)
         val epNum = intent.getIntExtra("episode", 0).takeIf { it > 0 } ?: media.json.optInt("episodeNumber", 1).coerceAtLeast(1)
-        val sTitle = intent.getStringExtra("seriesTitle")?.ifBlank { null } ?: media.title
+        val sTitle = intent.getStringExtra("seriesTitle")?.ifBlank { null } ?: media.json.optString("seriesName").ifBlank { media.title }
 
         val tmdb = intent.getIntExtra("tmdbId", 0).takeIf { it > 0 } ?: if (media.tmdbId > 0) media.tmdbId else {
             val match = Regex("""^(?:seerr|tmdb)-(?:movie-|tv-|ep-)?(\d+)(?:-\d+-\d+)?$""").find(media.id)
@@ -582,7 +596,9 @@ class PlayerActivity : AppCompatActivity() {
             showMessage("This title has no TMDB identifier for torrent streaming.")
             return
         }
+        currentPlaybackId = if (isTv) "tmdb-ep-$tmdb-$sNum-$epNum" else "tmdb-movie-$tmdb"
         val totalDurationMs = (media.json.optInt("durationMinutes").takeIf { it > 0 } ?: 120) * 60L * 1000L
+        if (knownDurationMs <= 0) knownDurationMs = totalDurationMs
         val timeBar = playerView.findViewById<androidx.media3.ui.DefaultTimeBar>(androidx.media3.ui.R.id.exo_progress)
         timeBar?.setDuration(totalDurationMs)
 
@@ -591,6 +607,7 @@ class PlayerActivity : AppCompatActivity() {
         val streamPath = buildString {
             append("stream/torrent?tmdbId=").append(tmdb)
             append("&type=").append(if (isTv) "tv" else "movie")
+            if (position > 0L) append("&start=").append(position / 1000.0)
             if (isTv) {
                 append("&season=").append(sNum)
                 append("&episode=").append(epNum)
@@ -647,6 +664,9 @@ class PlayerActivity : AppCompatActivity() {
     }
 
     private fun launchStreamUrl(streamPath: String, compatible: Boolean = transcode) {
+        val torrentUri = Uri.parse(streamPath)
+        torrentStreamPath = streamPath.takeIf { torrentUri.path?.endsWith("/stream/torrent") == true }
+        torrentStartOffsetMs = if (torrentStreamPath != null) ((torrentUri.getQueryParameter("start")?.toDoubleOrNull() ?: 0.0) * 1000).toLong() else 0L
         isHlsTranscodeActive = false
         hlsStartOffsetMs = 0L
         val isLocalFile = streamPath.startsWith("file://") || (streamPath.startsWith("/") && !streamPath.startsWith("/api/"))
@@ -690,16 +710,47 @@ class PlayerActivity : AppCompatActivity() {
             .setAudioAttributes(audioAttributes, true)
             .build().also { exo ->
             observeVideoDecoder(exo)
-            playerView.player = exo
+            playerView.player = if (torrentStreamPath == null) exo else object : androidx.media3.common.ForwardingPlayer(exo) {
+                override fun getCurrentTimeline(): androidx.media3.common.Timeline {
+                    val base = super.getCurrentTimeline()
+                    if (knownDurationMs <= 0L || base.isEmpty) return base
+                    return object : androidx.media3.exoplayer.source.ForwardingTimeline(base) {
+                        override fun getWindow(windowIndex: Int, window: Window, defaultPositionProjectionUs: Long): Window {
+                            super.getWindow(windowIndex, window, defaultPositionProjectionUs)
+                            window.durationUs = knownDurationMs * 1000L
+                            window.isDynamic = false; window.isSeekable = true; window.liveConfiguration = null
+                            return window
+                        }
+                        override fun getPeriod(periodIndex: Int, period: Period, setIds: Boolean): Period {
+                            super.getPeriod(periodIndex, period, setIds)
+                            period.durationUs = knownDurationMs * 1000L
+                            return period
+                        }
+                    }
+                }
+                override fun getContentDuration(): Long = duration
+                override fun isCurrentMediaItemDynamic(): Boolean = false
+                override fun isCurrentMediaItemLive(): Boolean = false
+                override fun getDuration(): Long = knownDurationMs.takeIf { it > 0L } ?: super.getDuration()
+                override fun getCurrentPosition(): Long = currentMediaPositionMs()
+                override fun getContentPosition(): Long = currentMediaPositionMs()
+                override fun getBufferedPosition(): Long = torrentStartOffsetMs + exo.bufferedPosition.coerceAtLeast(0L)
+                override fun isCurrentMediaItemSeekable(): Boolean = true
+                override fun seekTo(positionMs: Long) = seekMediaTo(positionMs)
+                override fun seekTo(mediaItemIndex: Int, positionMs: Long) = seekMediaTo(positionMs)
+                override fun seekBack() = seekMediaTo((currentMediaPositionMs() - seekBackIncrement).coerceAtLeast(0L))
+                override fun seekForward() = seekMediaTo((currentMediaPositionMs() + seekForwardIncrement).coerceAtMost(duration))
+            }
             observeEpisodeNavigation(exo)
             exo.addListener(object : Player.Listener {
                 override fun onPlaybackStateChanged(state: Int) {
                     if (state == Player.STATE_READY) {
                         prepared = true
                         clearMessages()
+                        reportStarted()
                     }
                     if (state == Player.STATE_ENDED) {
-                        position = exo.duration.coerceAtLeast(0)
+                        position = currentMediaPositionMs()
                         report(true)
                     }
                 }
@@ -776,6 +827,8 @@ class PlayerActivity : AppCompatActivity() {
     }
 
     private fun startLocal() {
+        torrentStreamPath = null
+        torrentStartOffsetMs = 0L
         val castSession = castCtx?.sessionManager?.currentCastSession
         if (castSession?.isConnected == true) {
             cast(castSession)
@@ -1798,7 +1851,7 @@ class PlayerActivity : AppCompatActivity() {
         startLocal()
     }
     private fun reportStarted() {
-        if (reportedStartedId == currentPlaybackId || (media.isDownload && media.source != "youtube")) return
+        if (reportedStartedId == currentPlaybackId) return
         reportedStartedId = currentPlaybackId
         report(false, started = true)
     }
@@ -1828,12 +1881,13 @@ class PlayerActivity : AppCompatActivity() {
             }
             return
         }
-        if (media.isDownload || remote != null) return
+        if (remote != null) return
         val client = remote
         val activeId = if (currentPlaybackId.isNotBlank()) currentPlaybackId else media.playbackId
         if (client != null && client.mediaInfo?.customData?.optString("itemId") != activeId) return
         if (client != null) position = client.approximateStreamPosition else if (player != null) position = currentMediaPositionMs()
         val snapshot = position
+        val recordedAt = System.currentTimeMillis()
         val paused = client?.isPaused ?: (player?.isPlaying == false)
         val launcherItem = episodes.items.firstOrNull { it.playbackId == activeId } ?: media
         val launcherMedia = Media(JSONObject(launcherItem.json.toString()).put("id", activeId).put("jellyfinId", activeId))
@@ -1843,7 +1897,7 @@ class PlayerActivity : AppCompatActivity() {
         // A final report must survive Activity destruction (Back/rotation).
         (application as HomeStreamApplication).enqueuePlaybackReport {
             if (launcherScope.isNotBlank()) runCatching { WatchNext.record(applicationContext, launcherMedia, snapshot, launcherDuration, launcherScope) }
-            runCatching { api.progress(activeId, snapshot, paused, stopped, started) }.onFailure {
+            runCatching { api.progress(activeId, snapshot, paused, stopped, started, recordedAt) }.onFailure {
                 OfflineMediaStore(applicationContext, ServerSettings(applicationContext)).queueOfflineProgress(activeId, snapshot)
             }
         }
