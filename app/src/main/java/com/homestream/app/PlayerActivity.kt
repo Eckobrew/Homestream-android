@@ -71,6 +71,7 @@ class PlayerActivity : AppCompatActivity() {
     private var playbackDetails = "Preparing playback"
     private var modeBadge: TextView? = null
     private var audioButton: View? = null
+    private var syncPlayButton: View? = null
     private var isStreamingDownload = false
     private var downloadPollingJob: Job? = null
     private var castGeneration = 0
@@ -306,6 +307,17 @@ class PlayerActivity : AppCompatActivity() {
         subtitleAppearance.apply(playerView.subtitleView)
         playerView.findViewById<android.view.ViewGroup>(androidx.media3.ui.R.id.exo_basic_controls)?.let { controls ->
             val subBtn = playerView.findViewById<View>(androidx.media3.ui.R.id.exo_subtitle)
+            val syncBtn = android.widget.ImageButton(this).apply {
+                setImageResource(R.drawable.ic_syncplay)
+                imageTintList = ColorStateList.valueOf(Color.WHITE)
+                background = subBtn?.background?.constantState?.newDrawable(resources)?.mutate()
+                scaleType = ImageView.ScaleType.CENTER
+                isFocusable = true
+                isClickable = true
+                contentDescription = "SyncPlay"
+                setOnClickListener { showSyncPlayDialog() }
+            }
+            syncPlayButton = syncBtn
             val audioBtn = android.widget.ImageButton(this).apply {
                 setImageResource(R.drawable.ic_audio)
                 imageTintList = ColorStateList.valueOf(Color.WHITE)
@@ -319,7 +331,8 @@ class PlayerActivity : AppCompatActivity() {
             audioButton = audioBtn
             val lp = subBtn?.layoutParams ?: LinearLayout.LayoutParams(dp(40), dp(40))
             val insertIndex = if (subBtn != null) controls.indexOfChild(subBtn).coerceAtLeast(0) else 0
-            controls.addView(audioBtn, insertIndex, lp)
+            controls.addView(syncBtn, insertIndex, lp)
+            controls.addView(audioBtn, insertIndex + 1, lp)
         }
         playerView.findViewById<View>(androidx.media3.ui.R.id.exo_subtitle)?.setOnClickListener {
             showSubtitlesMenu()
@@ -1518,7 +1531,7 @@ class PlayerActivity : AppCompatActivity() {
             androidx.media3.ui.R.id.exo_next, androidx.media3.ui.R.id.exo_rew,
             androidx.media3.ui.R.id.exo_ffwd, androidx.media3.ui.R.id.exo_settings,
             androidx.media3.ui.R.id.exo_subtitle)
-        val controlViews = controls.mapNotNull { playerView.findViewById<View>(it) } + listOfNotNull(audioButton)
+        val controlViews = controls.mapNotNull { playerView.findViewById<View>(it) } + listOfNotNull(syncPlayButton, audioButton)
         for (view in controlViews) {
             view.apply {
                 background = android.graphics.drawable.StateListDrawable().apply {
@@ -1718,7 +1731,6 @@ class PlayerActivity : AppCompatActivity() {
             options.add("Playback mode (${if (transcode) "Transcode" else "Direct"})")
             options.add("Playback details")
         }
-        options.add("SyncPlay (Watch Together)")
         options.add("Restart")
         showPlayerChoices(playerView, options) { choice ->
             when (options.getOrNull(choice)) {
@@ -1765,7 +1777,11 @@ class PlayerActivity : AppCompatActivity() {
                     seekMediaTo(0L)
                     player?.play()
                 }
-                "SyncPlay (Watch Together)" -> {
+            }
+        }
+    }
+
+    private fun showSyncPlayDialog() {
                     val input = android.widget.EditText(this).apply { hint = "Room code (leave empty to create)" }
                     val msg = if (syncRoomCode != null) "Connected to room: $syncRoomCode" else "Create a new room or enter a room code to join."
                     val builder = androidx.appcompat.app.AlertDialog.Builder(this)
@@ -1818,9 +1834,6 @@ class PlayerActivity : AppCompatActivity() {
                         builder.setNegativeButton("Cancel", null)
                     }
                     builder.show()
-                }
-            }
-        }
     }
 
     private fun showCastSubtitles() {
