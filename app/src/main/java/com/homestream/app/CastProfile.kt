@@ -23,9 +23,11 @@ fun automaticCastProfile(model: String, compatible: Boolean): CastProfile =
 
 internal const val CAST_NAMESPACE = "urn:x-cast:uk.eckonet.homestream"
 
+internal data class CastReceiverCapabilities(val video: String, val audioCodecs: String?)
+
 internal suspend fun requestCastVideoCapabilities(
     session: com.google.android.gms.cast.framework.CastSession
-): String? = kotlinx.coroutines.withTimeoutOrNull(1200) {
+): CastReceiverCapabilities? = kotlinx.coroutines.withTimeoutOrNull(1200) {
     try {
         kotlinx.coroutines.suspendCancellableCoroutine { continuation ->
             val requestId = java.util.UUID.randomUUID().toString()
@@ -33,7 +35,12 @@ internal suspend fun requestCastVideoCapabilities(
                 val response = runCatching { org.json.JSONObject(message) }.getOrNull()
                 if (response?.optString("type") == "capabilities" && response.optString("requestId") == requestId &&
                     continuation.isActive) {
-                    continuation.resume(response.optJSONArray("video")?.takeIf { it.length() in 1..5 }?.toString())
+                    val video = response.optJSONArray("video")?.takeIf { it.length() in 1..5 }
+                    val audio = response.optJSONArray("audio")?.takeIf { it.length() <= 8 }?.let { values ->
+                        (0 until values.length()).map { values.optString(it) }
+                            .filter { it in listOf("aac", "mp3", "opus", "vorbis", "flac", "ac3", "eac3") }.distinct().joinToString(",")
+                    }
+                    continuation.resume(video?.let { CastReceiverCapabilities(it.toString(), audio) })
                 }
             }
             try {

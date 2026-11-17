@@ -5,8 +5,8 @@ fun videoCodecsForMimeTypes(types: List<String>): String {
     return types.mapNotNull { names[it.lowercase(java.util.Locale.ROOT)] }.distinct().joinToString(",").ifBlank { "h264" }
 }
 
-/** TV capability bounds come from one decoder per codec, rather than MIME support alone. */
-fun televisionVideoProfiles(): org.json.JSONArray {
+/** Capability bounds come from one hardware decoder per codec. */
+fun deviceVideoProfiles(): org.json.JSONArray {
     val result = org.json.JSONArray()
     val mimeNames = mapOf("video/avc" to "h264", "video/hevc" to "hevc", "video/x-vnd.on2.vp8" to "vp8", "video/x-vnd.on2.vp9" to "vp9", "video/av01" to "av1")
     val decoders = runCatching { android.media.MediaCodecList(android.media.MediaCodecList.REGULAR_CODECS).codecInfos.filter { !it.isEncoder } }.getOrDefault(emptyList())
@@ -20,14 +20,16 @@ fun televisionVideoProfiles(): org.json.JSONArray {
                 val names = when (codec) {
                     "h264" -> listOf(1 to "baseline", 2 to "main", 4 to "extended", 8 to "high", 16 to "high 10")
                     "hevc" -> listOf(1 to "main", 2 to "main 10")
+                    "vp9" -> listOf(1 to "profile 0", 2 to "profile 1", 4 to "profile 2", 8 to "profile 3")
                     else -> emptyList()
                 }.filter { it.first in profiles }.map { it.second }.toMutableList()
                 if ("baseline" in names) names.add("constrained baseline")
-                val software = decoder.name.startsWith("OMX.google.") || decoder.name.startsWith("c2.android.")
+                val software = if (android.os.Build.VERSION.SDK_INT >= 29) !decoder.isHardwareAccelerated || decoder.isSoftwareOnly
+                    else decoder.name.startsWith("OMX.google.") || decoder.name.startsWith("c2.android.")
                 Triple(dimensions, names, software)
             }.getOrNull()
         }
-        val best = candidates.filter { !it.third }.ifEmpty { candidates }
+        val best = candidates.filter { !it.third }
             .maxByOrNull { it.first.first * it.first.second } ?: continue
         // Unknown H.264/HEVC profiles must not be treated as unrestricted.
         if (codec in listOf("h264", "hevc") && best.second.isEmpty()) continue

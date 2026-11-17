@@ -80,6 +80,7 @@ class PlayerActivity : AppCompatActivity() {
     private var castCompatible = false
     private var castNeedsSafeProfile = false
     private val castRejectedItems = mutableSetOf<String>()
+    private var castAudioCodecs = "aac,mp3"
     private var receiverProfile = castProfiles[2]
     private var wantsPlay = true
     private var timer: Job? = null
@@ -675,6 +676,29 @@ class PlayerActivity : AppCompatActivity() {
         }
     }
 
+    private fun deviceStreamUri(uri: Uri, compatible: Boolean): Uri {
+        if (media.source == "youtube" || uri.path?.let { it.endsWith("/stream/torrent") || it.endsWith("/stream/download") } != true) return uri
+        val replaced = setOf("receiver", "videoCapabilities", "videoCodecs", "audioCodecs", "native", "transcode", "forceTranscode")
+        return uri.buildUpon().clearQuery().apply {
+            for (key in uri.queryParameterNames.filter { it !in replaced }) {
+                uri.getQueryParameters(key).forEach { appendQueryParameter(key, it) }
+            }
+            appendQueryParameter("receiver", if (isTelevision()) "native-tv" else "native-android")
+            appendQueryParameter("videoCapabilities", deviceVideoProfiles().toString())
+            appendQueryParameter("audioCodecs", getDeviceSupportedAudioCodecs())
+            if (compatible) appendQueryParameter("forceTranscode", "true")
+        }.build()
+    }
+
+    private fun observeVideoDecoder(exo: ExoPlayer) {
+        exo.addAnalyticsListener(object : androidx.media3.exoplayer.analytics.AnalyticsListener {
+            override fun onVideoDecoderInitialized(eventTime: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime,
+                decoderName: String, initializedTimestampMs: Long, initializationDurationMs: Long) {
+                android.util.Log.i("HomeStream", "Video decoder initialized: $decoderName")
+            }
+        })
+    }
+
     private fun launchStreamUrl(streamPath: String, compatible: Boolean = transcode) {
         isHlsTranscodeActive = false
         hlsStartOffsetMs = 0L
@@ -683,21 +707,11 @@ class PlayerActivity : AppCompatActivity() {
             isLocalFile -> Uri.parse(
                 if (streamPath.startsWith("/")) Uri.fromFile(java.io.File(streamPath)).toString() else streamPath
             )
-            streamPath.startsWith("http://") || streamPath.startsWith("https://") -> {
-                Uri.parse(streamPath).buildUpon().apply {
-                    if (media.source != "youtube") {
-                        appendQueryParameter(if (compatible) "transcode" else "native", "1")
-                    }
-                }.build()
-            }
+            streamPath.startsWith("http://") || streamPath.startsWith("https://") -> deviceStreamUri(Uri.parse(streamPath), compatible)
             else -> {
                 val fullPath = if (streamPath.startsWith("/api/")) streamPath
                                else "/api/mobile/v1/${streamPath.removePrefix("/")}"
-                Uri.parse(api.absolute(fullPath)).buildUpon().apply {
-                    if (media.source != "youtube") {
-                        appendQueryParameter(if (compatible) "transcode" else "native", "1")
-                    }
-                }.build()
+                deviceStreamUri(Uri.parse(api.absolute(fullPath)), compatible)
             }
         }
 
@@ -724,9 +738,11 @@ class PlayerActivity : AppCompatActivity() {
             .build()
 
         player = ExoPlayer.Builder(this)
+            .setRenderersFactory(androidx.media3.exoplayer.DefaultRenderersFactory(this).setEnableDecoderFallback(true))
             .setMediaSourceFactory(mediaSourceFactory)
             .setAudioAttributes(audioAttributes, true)
             .build().also { exo ->
+            observeVideoDecoder(exo)
             playerView.player = exo
             observeEpisodeNavigation(exo)
             exo.addListener(object : Player.Listener {
@@ -848,10 +864,10 @@ class PlayerActivity : AppCompatActivity() {
 
                 updateModeBadge()
                 val audioCodecs = getDeviceSupportedAudioCodecs()
-                val detectedVideoCodecs = runCatching {
-                    videoCodecsForMimeTypes(MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos
-                        .filter { !it.isEncoder }.flatMap { it.supportedTypes.toList() })
-                }.getOrDefault("h264")
+                val detectedVideoCapabilities = deviceVideoProfiles()
+                val detectedVideoCodecs = (0 until detectedVideoCapabilities.length()).joinToString(",") {
+                    detectedVideoCapabilities.getJSONObject(it).getString("codec")
+                }
                 suspend fun fetchPlaybackStream(startMs: Long): JSONObject = api.call(
                     "playback",
                     mapOf(
@@ -869,7 +885,8 @@ class PlayerActivity : AppCompatActivity() {
                           "original" -> mapOf("maxWidth" to "3840", "maxHeight" to "2160")
                           else -> emptyMap()
                       }
-                      + if (isTelevision()) mapOf("receiver" to "native-tv", "videoCapabilities" to televisionVideoProfiles().toString()) else emptyMap()
+                      + mapOf("videoCapabilities" to detectedVideoCapabilities.toString())
+                      + if (isTelevision()) mapOf("receiver" to "native-tv") else emptyMap()
                 )
                 var stream = if (media.isDownload) JSONObject().put("streamUrl", media.downloadUrl)
                     else fetchPlaybackStream(position)
@@ -927,9 +944,11 @@ class PlayerActivity : AppCompatActivity() {
                     .build()
 
                 player = ExoPlayer.Builder(this@PlayerActivity)
+                    .setRenderersFactory(androidx.media3.exoplayer.DefaultRenderersFactory(this@PlayerActivity).setEnableDecoderFallback(true))
                     .setMediaSourceFactory(mediaSourceFactory)
                     .setAudioAttributes(audioAttributes, /* handleAudioFocus= */ true)
                     .build().also { exo ->
+                    observeVideoDecoder(exo)
                     playerView.player = object : androidx.media3.common.ForwardingPlayer(exo) {
                         override fun getCurrentTimeline(): androidx.media3.common.Timeline {
                             val base = super.getCurrentTimeline()
@@ -1215,8 +1234,10 @@ class PlayerActivity : AppCompatActivity() {
                 loadEpisodeContextNow(targetId)
                 val current = episodes.items.firstOrNull { it.playbackId == targetId } ?: media
                 if (current.type == "Episode") { media = current; updateEpisodeControls() }
-                castVideoCapabilities = if (BuildConfig.CAST_RECEIVER_APP_ID.isBlank() || castCompatible || targetId in castRejectedItems || selected != null) null
+                val reportedCapabilities = if (BuildConfig.CAST_RECEIVER_APP_ID.isBlank() || castCompatible || targetId in castRejectedItems || selected != null) null
                     else requestCastVideoCapabilities(session)
+                castVideoCapabilities = reportedCapabilities?.video
+                castAudioCodecs = reportedCapabilities?.audioCodecs ?: "aac,mp3"
                 val info = castMediaInfo(current, targetId)
                 castStartPosition = position
                 castStartup = lifecycleScope.launch {
@@ -1308,10 +1329,23 @@ class PlayerActivity : AppCompatActivity() {
             "forceTranscode" to compatible.toString(),
             "receiver" to "cast",
             "canPlayHevc" to receiverProfile.hevc.toString(),
-            "audioCodecs" to "aac,mp3,opus,vorbis"
+            "maxWidth" to receiverProfile.width.toString(),
+            "maxHeight" to receiverProfile.height.toString(),
+            "audioCodecs" to castAudioCodecs
         )
         if (castVideoCapabilities != null) {
+            params.remove("maxWidth")
+            params.remove("maxHeight")
             params["videoCapabilities"] = castVideoCapabilities!!
+        }
+        if (castVideoCapabilities == null) {
+            val profiles = org.json.JSONArray().put(org.json.JSONObject().put("codec", "h264")
+                .put("width", receiverProfile.width).put("height", receiverProfile.height)
+                .put("profiles", org.json.JSONArray(listOf("baseline", "main", "high"))))
+            if (receiverProfile.hevc) profiles.put(org.json.JSONObject().put("codec", "hevc")
+                .put("width", receiverProfile.width).put("height", receiverProfile.height)
+                .put("profiles", org.json.JSONArray(listOf("main", "main 10"))))
+            params["videoCapabilities"] = profiles.toString()
         }
         selectedVersionId?.takeIf { it.isNotBlank() }?.let { params["versionId"] = it }
         selectedAudioIndex?.let { params["audioIndex"] = it.toString() }
