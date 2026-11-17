@@ -137,7 +137,7 @@ internal fun HomeStreamApplication.observeCastProgress() {
                 val session = cast.sessionManager.currentCastSession
                 val client = session?.remoteMediaClient
                 val customData = client?.mediaInfo?.customData
-                val id = customData?.optString("itemId").orEmpty()
+                val id = customData?.optString("streamItemId").orEmpty().ifBlank { customData?.optString("itemId").orEmpty() }
                 val settings = ServerSettings(this@observeCastProgress)
                 val liveAccount = "${settings.baseUrl}|${settings.profile}|${settings.token}"
                 if (session?.isConnected != true || !hasCastVideo(client) || id.isBlank() ||
@@ -183,6 +183,7 @@ internal fun HomeStreamApplication.observeCastProgress() {
             )
 
             for (event in events) {
+                val recordedAt = System.currentTimeMillis()
                 enqueuePlaybackReport {
                     runCatching {
                         event.api.progress(
@@ -191,6 +192,7 @@ internal fun HomeStreamApplication.observeCastProgress() {
                             event.paused,
                             started = event.started,
                             stopped = event.stopped,
+                            recordedAtMs = recordedAt,
                         )
                     }.onFailure {
                         val label = if (event.stopped) "Cast stop progress" else "Cast progress"

@@ -1390,7 +1390,10 @@ class PlayerActivity : AppCompatActivity() {
                 else -> "video/mp4"
             } })
             .setStreamType(MediaInfo.STREAM_TYPE_BUFFERED).setMetadata(metadata).setMediaTracks(tracks)
-            .setCustomData(JSONObject().put("itemId", id).put("loadId", java.util.UUID.randomUUID().toString()).put("media", item.json).put("playback", JSONObject(stream.toString()).apply {
+            .setCustomData(JSONObject().put("itemId", id)
+                .put("streamItemId", if (tmdb > 0 && (isStreamingDownload || id.startsWith("tmdb-") || id.startsWith("seerr-"))) {
+                    if (isTv) "tmdb-ep-$tmdb-$sNum-$epNum" else "tmdb-movie-$tmdb"
+                } else id).put("loadId", java.util.UUID.randomUUID().toString()).put("media", item.json).put("playback", JSONObject(stream.toString()).apply {
                 put("transport", stream.optString("transport").ifBlank { if (Uri.parse(stream.optString("streamUrl")).path.orEmpty().endsWith(".m3u8", ignoreCase = true)) "HLS" else "file" })
                 put("durationSeconds", durationSec)
                 remove("streamUrl")
