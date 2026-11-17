@@ -59,6 +59,8 @@ class PlayerActivity : AppCompatActivity() {
     private var castControllerOpened = false
     private var knownDurationMs = 0L
     private var position = 0L
+    private var hlsStartOffsetMs = 0L
+    private var isHlsTranscodeActive = false
     private var refreshInitialResume = true
     private var currentPlaybackId = ""
     private var playbackPolicy = ""
@@ -193,6 +195,44 @@ class PlayerActivity : AppCompatActivity() {
             else -> "SERVER STREAM"
         }
         modeBadge?.background = rounded(if (transcode) 0x66E50914.toInt() else 0x44FFFFFF.toInt(), radius = dp(14).toFloat())
+    }
+
+    private fun currentMediaPositionMs(): Long {
+        val exo = player ?: return position.coerceAtLeast(0L)
+        val basePos = exo.currentPosition.coerceAtLeast(0L)
+        return if (isHlsTranscodeActive) hlsStartOffsetMs + basePos else basePos
+    }
+
+    private fun serverMediaUrl(rawUrl: String): String {
+        if (rawUrl.isBlank()) return ""
+        val parsed = Uri.parse(rawUrl)
+        val path = parsed.encodedPath
+        val relative = if (!parsed.scheme.isNullOrBlank() && path != null && path.startsWith("/api/")) {
+            buildString {
+                append(path)
+                parsed.encodedQuery?.takeIf { it.isNotBlank() }?.let { append('?').append(it) }
+                parsed.encodedFragment?.takeIf { it.isNotBlank() }?.let { append('#').append(it) }
+            }
+        } else rawUrl
+        return api.absolute(relative)
+    }
+
+    private fun seekMediaTo(targetMs: Long) {
+        val clamped = targetMs.coerceAtLeast(0L)
+        val exo = player ?: return
+        if (isHlsTranscodeActive) {
+            val relMs = clamped - hlsStartOffsetMs
+            val loadedDur = exo.duration.takeIf { it > 0 && it != C.TIME_UNSET } ?: 0L
+            if (relMs < 0L || loadedDur <= 4000L || relMs > loadedDur - 2000L) {
+                position = clamped
+                wantsPlay = exo.playWhenReady
+                startLocal()
+                return
+            }
+            exo.seekTo(relMs)
+        } else {
+            exo.seekTo(clamped)
+        }
     }
 
     private fun getDeviceSupportedAudioCodecs(): String {
@@ -382,7 +422,7 @@ class PlayerActivity : AppCompatActivity() {
                         cast(session, forceReload = true)
                         return@setOnClickListener
                     }
-                    player?.let { position = it.currentPosition; wantsPlay = it.playWhenReady }
+                    player?.let { position = currentMediaPositionMs(); wantsPlay = it.playWhenReady }
                     transcode = !transcode
                     updateModeBadge()
                     showMessage(if (transcode) "Switching to compatible HLS transcode…" else "Switching to direct play…")
@@ -636,6 +676,8 @@ class PlayerActivity : AppCompatActivity() {
     }
 
     private fun launchStreamUrl(streamPath: String, compatible: Boolean = transcode) {
+        isHlsTranscodeActive = false
+        hlsStartOffsetMs = 0L
         val isLocalFile = streamPath.startsWith("file://") || (streamPath.startsWith("/") && !streamPath.startsWith("/api/"))
         val playUri = when {
             isLocalFile -> Uri.parse(
@@ -806,16 +848,19 @@ class PlayerActivity : AppCompatActivity() {
 
                 updateModeBadge()
                 val audioCodecs = getDeviceSupportedAudioCodecs()
-                val stream = if (media.isDownload) JSONObject().put("streamUrl", media.downloadUrl)
-                    else api.call("playback", (mapOf(
+                val detectedVideoCodecs = runCatching {
+                    videoCodecsForMimeTypes(MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos
+                        .filter { !it.isEncoder }.flatMap { it.supportedTypes.toList() })
+                }.getOrDefault("h264")
+                suspend fun fetchPlaybackStream(startMs: Long): JSONObject = api.call(
+                    "playback",
+                    mapOf(
                         "itemId" to targetId,
                         "forceTranscode" to transcode.toString(),
-                        "videoCodecs" to runCatching {
-                            videoCodecsForMimeTypes(MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos
-                                .filter { !it.isEncoder }.flatMap { it.supportedTypes.toList() })
-                        }.getOrDefault("h264"),
+                        "videoCodecs" to detectedVideoCodecs,
                         "audioCodecs" to audioCodecs
-                    ) + (selectedVersionId?.let { mapOf("versionId" to it) } ?: emptyMap())
+                    ) + (if (startMs > 0L) mapOf("startTimeTicks" to msToTicks(startMs).toString()) else emptyMap())
+                      + (selectedVersionId?.let { mapOf("versionId" to it) } ?: emptyMap())
                       + (selectedAudioIndex?.let { mapOf("audioIndex" to it.toString()) } ?: emptyMap())
                       + (burnSubtitleIndex?.let { mapOf("burnSubtitleIndex" to it.toString()) } ?: emptyMap())
                       + when (qualityMode) {
@@ -824,34 +869,48 @@ class PlayerActivity : AppCompatActivity() {
                           "original" -> mapOf("maxWidth" to "3840", "maxHeight" to "2160")
                           else -> emptyMap()
                       }
-                      + if (isTelevision()) mapOf("receiver" to "native-tv", "videoCapabilities" to televisionVideoProfiles().toString()) else emptyMap()))
+                      + if (isTelevision()) mapOf("receiver" to "native-tv", "videoCapabilities" to televisionVideoProfiles().toString()) else emptyMap()
+                )
+                var stream = if (media.isDownload) JSONObject().put("streamUrl", media.downloadUrl)
+                    else fetchPlaybackStream(position)
                 val autoVersion = stream.optString("selectedVersionId").takeIf { it.isNotBlank() }
                 if (selectedVersionId == null && autoVersion != null) {
                     selectedVersionId = autoVersion
                 }
                 applyInitialResume(stream)
-                describeStream(stream)
-                parseNativePlayerExtras(stream)
-                val url = stream.optString("streamUrl")
+                var url = stream.optString("streamUrl")
                 if (url.isBlank()) {
                     showUnDownloadedUI(stream.optString("error", "This title has not been downloaded yet."))
                     return@launch
                 }
+                var isTranscodingStream = stream.optString("transport") == "HLS" || Uri.parse(url).path.orEmpty().endsWith(".m3u8", ignoreCase = true)
+                if (!media.isDownload && isTranscodingStream && position > 0L && stream.optLong("startTimeTicks", 0L) == 0L) {
+                    stream = fetchPlaybackStream(position)
+                    url = stream.optString("streamUrl")
+                    if (url.isBlank()) {
+                        showUnDownloadedUI(stream.optString("error", "This title has not been downloaded yet."))
+                        return@launch
+                    }
+                    isTranscodingStream = stream.optString("transport") == "HLS" || Uri.parse(url).path.orEmpty().endsWith(".m3u8", ignoreCase = true)
+                }
+                describeStream(stream)
+                parseNativePlayerExtras(stream)
                 currentPlaybackId = targetId
                 // Resolve the resumed episode and its queue before playback can end.
                 loadEpisodeContextNow(targetId)
-                val isTranscodingStream = stream.optString("transport") == "HLS" || Uri.parse(url).path.orEmpty().endsWith(".m3u8", ignoreCase = true)
+                isHlsTranscodeActive = isTranscodingStream
+                hlsStartOffsetMs = if (isTranscodingStream) ticksToMs(stream.optLong("startTimeTicks", 0L)) else 0L
                 if (isTranscodingStream && !transcode) {
                     transcode = true
                     updateModeBadge()
                 }
 
-                val rawUri = api.absolute(url)
+                val rawUri = serverMediaUrl(url)
                 val playUri = Uri.parse(rawUri)
 
-                val tracks = if (media.isDownload) emptyList() else subtitleItems(targetId)
+                val tracks = if (media.isDownload) emptyList() else subtitleItems(targetId, includeTextAsBurnIn = isTranscodingStream)
                 val item = MediaItem.Builder().setUri(playUri).setMediaId(targetId)
-                    .setSubtitleConfigurations(tracks).apply {
+                    .setSubtitleConfigurations(if (isTranscodingStream) emptyList() else tracks).apply {
                         if (isTranscodingStream) setMimeType(MimeTypes.APPLICATION_M3U8)
                     }.build()
                 releaseLocal()
@@ -860,6 +919,7 @@ class PlayerActivity : AppCompatActivity() {
                     .setUserAgent("HomeStream-Android/1.0")
                 val mediaSourceFactory = androidx.media3.exoplayer.source.DefaultMediaSourceFactory(this@PlayerActivity)
                     .setDataSourceFactory(httpFactory)
+                    .experimentalParseSubtitlesDuringExtraction(false)
 
                 val audioAttributes = AudioAttributes.Builder()
                     .setUsage(C.USAGE_MEDIA)
@@ -871,8 +931,45 @@ class PlayerActivity : AppCompatActivity() {
                     .setAudioAttributes(audioAttributes, /* handleAudioFocus= */ true)
                     .build().also { exo ->
                     playerView.player = object : androidx.media3.common.ForwardingPlayer(exo) {
+                        override fun getCurrentTimeline(): androidx.media3.common.Timeline {
+                            val base = super.getCurrentTimeline()
+                            if (!isTranscodingStream || knownDurationMs <= 0L || base.isEmpty) return base
+                            return object : androidx.media3.exoplayer.source.ForwardingTimeline(base) {
+                                override fun getWindow(windowIndex: Int, window: Window, defaultPositionProjectionUs: Long): Window {
+                                    super.getWindow(windowIndex, window, defaultPositionProjectionUs)
+                                    window.durationUs = knownDurationMs * 1000L
+                                    window.isDynamic = false
+                                    window.isSeekable = true
+                                    window.liveConfiguration = null
+                                    window.defaultPositionUs = 0L
+                                    return window
+                                }
+                                override fun getPeriod(periodIndex: Int, period: Period, setIds: Boolean): Period {
+                                    super.getPeriod(periodIndex, period, setIds)
+                                    period.durationUs = knownDurationMs * 1000L
+                                    return period
+                                }
+                            }
+                        }
                         override fun getDuration(): Long = knownDurationMs.takeIf { it > 0 } ?: super.getDuration()
                         override fun getContentDuration(): Long = knownDurationMs.takeIf { it > 0 } ?: super.getContentDuration()
+                        override fun getCurrentPosition(): Long = currentMediaPositionMs()
+                        override fun getContentPosition(): Long = currentMediaPositionMs()
+                        override fun getBufferedPosition(): Long = (if (isTranscodingStream) hlsStartOffsetMs else 0L) + super.getBufferedPosition().coerceAtLeast(0L)
+                        override fun getContentBufferedPosition(): Long = (if (isTranscodingStream) hlsStartOffsetMs else 0L) + super.getContentBufferedPosition().coerceAtLeast(0L)
+                        override fun isCurrentMediaItemDynamic(): Boolean = if (isTranscodingStream) false else super.isCurrentMediaItemDynamic()
+                        override fun isCurrentMediaItemLive(): Boolean = if (isTranscodingStream) false else super.isCurrentMediaItemLive()
+                        override fun isCurrentMediaItemSeekable(): Boolean = if (isTranscodingStream && knownDurationMs > 0L) true else super.isCurrentMediaItemSeekable()
+                        override fun seekTo(positionMs: Long) = seekMediaTo(positionMs)
+                        override fun seekTo(mediaItemIndex: Int, positionMs: Long) {
+                            if (mediaItemIndex == currentMediaItemIndex) seekMediaTo(positionMs)
+                            else super.seekTo(mediaItemIndex, positionMs)
+                        }
+                        override fun seekBack() = seekMediaTo(currentMediaPositionMs() - seekBackIncrement)
+                        override fun seekForward() {
+                            val maxDur = duration.takeIf { it > 0 && it != C.TIME_UNSET } ?: Long.MAX_VALUE
+                            seekMediaTo((currentMediaPositionMs() + seekForwardIncrement).coerceAtMost(maxDur))
+                        }
                     }
                     observeEpisodeNavigation(exo)
                     exo.addListener(object : Player.Listener {
@@ -883,7 +980,7 @@ class PlayerActivity : AppCompatActivity() {
                                 extrasTickerJob = lifecycleScope.launch {
                                     var tick = 0
                                     while (player === exo && !isFinishing && !isDestroyed) {
-                                        val sec = exo.currentPosition / 1000.0
+                                        val sec = currentMediaPositionMs() / 1000.0
                                         val seg = skipSegments.firstOrNull { sec >= it.startSec && sec < it.endSec - 1.0 }
                                         if (seg != null) {
                                             skipBtn?.text = when (seg.type) {
@@ -891,7 +988,7 @@ class PlayerActivity : AppCompatActivity() {
                                                 "recap" -> "Skip Recap →"
                                                 else -> "Skip Intro →"
                                             }
-                                            skipBtn?.setOnClickListener { exo.seekTo((seg.endSec * 1000).toLong()) }
+                                            skipBtn?.setOnClickListener { seekMediaTo((seg.endSec * 1000).toLong()) }
                                             val wasHidden = skipBtn?.visibility != View.VISIBLE
                                             skipBtn?.visibility = View.VISIBLE
                                             if (wasHidden && isTelevision() && !playerView.isControllerFullyVisible) {
@@ -910,7 +1007,7 @@ class PlayerActivity : AppCompatActivity() {
                                                     applyingSyncPlay = true
                                                     try {
                                                         val targetMs = r.optLong("positionTicks", 0L) / 10_000L
-                                                        if (kotlin.math.abs(exo.currentPosition - targetMs) > 2500L) exo.seekTo(targetMs)
+                                                        if (kotlin.math.abs(currentMediaPositionMs() - targetMs) > 2500L) seekMediaTo(targetMs)
                                                         val paused = r.optBoolean("isPaused", false)
                                                         if (paused && exo.isPlaying) exo.pause() else if (!paused && !exo.isPlaying) exo.play()
                                                     } finally {
@@ -925,7 +1022,9 @@ class PlayerActivity : AppCompatActivity() {
                                 }
                             }
                             if (state == Player.STATE_ENDED) {
-                                position = exo.duration.coerceAtLeast(0); report(true)
+                                val totalDur = knownDurationMs.takeIf { it > 0 }
+                                    ?: ((if (isTranscodingStream) hlsStartOffsetMs else 0L) + exo.duration.coerceAtLeast(0))
+                                position = totalDur; report(true)
                                 if (autoplay) changeEpisode(1, automatic = true)
                             }
                         }
@@ -940,7 +1039,7 @@ class PlayerActivity : AppCompatActivity() {
                                             .put("code", code)
                                             .put("itemId", activeItemId)
                                             .put("isPaused", !isPlaying)
-                                            .put("positionTicks", msToTicks(exo.currentPosition))
+                                            .put("positionTicks", msToTicks(currentMediaPositionMs()))
                                         api.call("syncplay", body = payload)
                                     }
                                 }
@@ -956,12 +1055,13 @@ class PlayerActivity : AppCompatActivity() {
                             if (code != null && !applyingSyncPlay && prepared && reason == Player.DISCONTINUITY_REASON_SEEK) {
                                 lifecycleScope.launch {
                                     runCatching {
+                                        val absMs = (if (isTranscodingStream) hlsStartOffsetMs else 0L) + newPosition.positionMs.coerceAtLeast(0L)
                                         val payload = JSONObject()
                                             .put("action", "sync")
                                             .put("code", code)
                                             .put("itemId", activeItemId)
                                             .put("isPaused", !exo.isPlaying)
-                                            .put("positionTicks", msToTicks(newPosition.positionMs))
+                                            .put("positionTicks", msToTicks(absMs))
                                         api.call("syncplay", body = payload)
                                     }
                                 }
@@ -973,7 +1073,7 @@ class PlayerActivity : AppCompatActivity() {
                             if (audioGroups.isNotEmpty()) {
                                 val anySupported = audioGroups.any { it.isSupported }
                                 if (!anySupported && !transcode && !media.isDownload) {
-                                    position = exo.currentPosition
+                                    position = currentMediaPositionMs()
                                     wantsPlay = exo.playWhenReady
                                     android.util.Log.w("HomeStream", "Audio format not supported by device decoder. Triggering server transcode fallback.")
                                     transcode = true
@@ -985,7 +1085,7 @@ class PlayerActivity : AppCompatActivity() {
                         }
                         override fun onPlayerError(error: PlaybackException) {
                             android.util.Log.e("HomeStream", "Playback error encountered: ${error.errorCodeName} (${error.errorCode})")
-                            position = exo.currentPosition
+                            position = currentMediaPositionMs()
                             if (isStreamingDownload) {
                                 retryJob?.cancel()
                                 retryJob = lifecycleScope.launch {
@@ -1018,7 +1118,12 @@ class PlayerActivity : AppCompatActivity() {
                             overlay.addView(action("←  Back to Browse") { finish() })
                         }
                     })
-                    exo.setMediaItem(item); exo.seekTo(position); exo.prepare(); exo.playWhenReady = wantsPlay
+                    exo.setMediaItem(item)
+                    if (!isTranscodingStream && position > 0L) {
+                        exo.seekTo(position)
+                    }
+                    exo.prepare()
+                    exo.playWhenReady = wantsPlay
                 }
                 playerView.showController(); focusPlaybackControl()
             } catch (_: kotlinx.coroutines.CancellationException) {
@@ -1037,7 +1142,7 @@ class PlayerActivity : AppCompatActivity() {
             }
         }
     }
-    private suspend fun subtitleItems(targetId: String = ""): List<MediaItem.SubtitleConfiguration> = try {
+    private suspend fun subtitleItems(targetId: String = "", includeTextAsBurnIn: Boolean = false): List<MediaItem.SubtitleConfiguration> = try {
         val queryId = targetId.ifBlank { if (currentPlaybackId.isNotBlank()) currentPlaybackId else media.playbackId }
         val query = buildMap {
             put("itemId", queryId)
@@ -1048,17 +1153,20 @@ class PlayerActivity : AppCompatActivity() {
             val textConfigs = mutableListOf<MediaItem.SubtitleConfiguration>()
             for (i in 0 until tracks.length()) {
                 val track = tracks.getJSONObject(i)
+                val idx = track.optInt("index", -1)
                 if (track.optBoolean("burnIn")) {
-                    val idx = track.optInt("index", -1)
                     if (idx >= 0) burnIns.add(idx to track.optString("title", "Track $idx"))
                     continue
+                }
+                if (includeTextAsBurnIn && idx in 0..999) {
+                    burnIns.add(idx to track.optString("title", "Track $idx"))
                 }
                 val src = track.optString("src")
                 if (src.isBlank()) continue
                 // Never mark external WebVTT as DEFAULT so ExoPlayer never blocks video readiness on subtitle HTTP extraction.
                 val flags = if (track.optBoolean("isForced")) C.SELECTION_FLAG_FORCED else 0
                 textConfigs.add(
-                    MediaItem.SubtitleConfiguration.Builder(Uri.parse(api.absolute(src)))
+                    MediaItem.SubtitleConfiguration.Builder(Uri.parse(serverMediaUrl(src)))
                         .setMimeType(MimeTypes.TEXT_VTT).setLanguage(track.optString("language"))
                         .setSelectionFlags(flags).setLabel(track.optString("title")).build()
                 )
@@ -1094,7 +1202,7 @@ class PlayerActivity : AppCompatActivity() {
             releaseLocal(); clearMessages(); showCastControls(); return
         }
         if (!forceReload) {
-            position = player?.currentPosition ?: position
+            position = if (player != null) currentMediaPositionMs() else position
             wantsPlay = player?.playWhenReady ?: wantsPlay
         }
         player?.pause(); negotiation?.cancel(); castLoading = true
@@ -1160,7 +1268,7 @@ class PlayerActivity : AppCompatActivity() {
         androidx.appcompat.app.AlertDialog.Builder(this).setTitle("Cast device model")
             .setItems(castProfiles.map { it.label }.toTypedArray()) { _, index ->
                 val client = remote
-                if (client == null) player?.let { position = it.currentPosition; wantsPlay = it.playWhenReady }
+                if (client == null) player?.let { position = currentMediaPositionMs(); wantsPlay = it.playWhenReady }
                 if (client != null) { position = client.approximateStreamPosition; wantsPlay = client.isPlaying; client.unregisterCallback(remoteCallback); remote = null }
                 receiverProfile = castProfiles[index]
                 castNeedsSafeProfile = false; castRejectedItems.clear()
@@ -1230,7 +1338,7 @@ class PlayerActivity : AppCompatActivity() {
             .setName(track.label ?: "Subtitle").setLanguage(track.language ?: "und").build() }
         val durationSec = stream.optDouble("durationSeconds").takeIf { it > 0 }
             ?: (item.json.optInt("durationMinutes").takeIf { it > 0 } ?: 120) * 60.0
-        return MediaInfo.Builder(api.absolute(stream.getString("streamUrl")))
+        return MediaInfo.Builder(serverMediaUrl(stream.getString("streamUrl")))
             .setContentType(stream.optString("contentType").ifBlank { when {
                 Uri.parse(stream.getString("streamUrl")).path.orEmpty().endsWith(".m3u8", ignoreCase = true) -> "application/x-mpegURL"
                 Uri.parse(stream.getString("streamUrl")).path.orEmpty().endsWith(".webm", ignoreCase = true) -> "video/webm"
@@ -1346,8 +1454,8 @@ class PlayerActivity : AppCompatActivity() {
     private fun seekWithRemote(offsetMs: Long) {
         val exo = player ?: return
         if (!exo.isCommandAvailable(Player.COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM)) return
-        val duration = exo.duration.takeIf { it > 0 } ?: knownDurationMs.takeIf { it > 0 } ?: Long.MAX_VALUE
-        exo.seekTo((exo.currentPosition + offsetMs).coerceIn(0L, duration))
+        val duration = knownDurationMs.takeIf { it > 0 } ?: exo.duration.takeIf { it > 0 } ?: Long.MAX_VALUE
+        seekMediaTo((currentMediaPositionMs() + offsetMs).coerceIn(0L, duration))
     }
 
     private fun configureRemoteControls() {
@@ -1407,7 +1515,7 @@ class PlayerActivity : AppCompatActivity() {
         if (tpUrl.isNotBlank()) {
             trickplayJob = lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) {
                 runCatching {
-                    val req = okhttp3.Request.Builder().url(api.absolute(tpUrl)).build()
+                    val req = okhttp3.Request.Builder().url(serverMediaUrl(tpUrl)).build()
                     val vttText = api.mediaClient().newCall(req).execute().use { it.body?.string().orEmpty() }
                     val lines = vttText.lines()
                     val cues = mutableListOf<TrickplayCue>()
@@ -1429,7 +1537,7 @@ class PlayerActivity : AppCompatActivity() {
                     if (sheetUrls.isNotEmpty() && cues.isNotEmpty()) {
                         val loaded = mutableMapOf<String, android.graphics.Bitmap>()
                         for (sheet in sheetUrls) {
-                            val sReq = okhttp3.Request.Builder().url(api.absolute(sheet)).build()
+                            val sReq = okhttp3.Request.Builder().url(serverMediaUrl(sheet)).build()
                             val bmp = api.mediaClient().newCall(sReq).execute().use { r ->
                                 r.body?.byteStream()?.let { android.graphics.BitmapFactory.decodeStream(it) }
                             }
@@ -1478,7 +1586,7 @@ class PlayerActivity : AppCompatActivity() {
                     val qVals = listOf("auto", "original", "1080p", "720p")
                     val sel = qVals.indexOf(qualityMode).coerceAtLeast(0)
                     showPlayerChoices(playerView, qLabels, sel) { idx ->
-                        position = player?.currentPosition?.coerceAtLeast(0L) ?: position
+                        position = currentMediaPositionMs()
                         qualityMode = qVals[idx]
                         startLocal()
                     }
@@ -1487,7 +1595,7 @@ class PlayerActivity : AppCompatActivity() {
                     val selected = nativeAudioTracks.indexOfFirst { it.first == selectedAudioIndex } + 1
                     val labels = listOf("Auto") + nativeAudioTracks.map { it.second }
                     showPlayerChoices(playerView, labels, selected) { choice ->
-                        position = player?.currentPosition?.coerceAtLeast(0L) ?: position
+                        position = currentMediaPositionMs()
                         selectedAudioIndex = nativeAudioTracks.getOrNull(choice - 1)?.first
                         startLocal()
                     }
@@ -1514,7 +1622,7 @@ class PlayerActivity : AppCompatActivity() {
                     val selected = burnInSubtitles.indexOfFirst { it.first == burnSubtitleIndex } + 1
                     val labels = listOf("Off") + burnInSubtitles.map { it.second }
                     showPlayerChoices(playerView, labels, selected) { choice ->
-                        position = player?.currentPosition?.coerceAtLeast(0L) ?: position
+                        position = currentMediaPositionMs()
                         burnSubtitleIndex = burnInSubtitles.getOrNull(choice - 1)?.first
                         startLocal()
                     }
@@ -1523,7 +1631,7 @@ class PlayerActivity : AppCompatActivity() {
                     val labels = nativeVersions.map { it.second }
                     val sel = nativeVersions.indexOfFirst { it.first == selectedVersionId }.coerceAtLeast(0)
                     showPlayerChoices(playerView, labels, sel) { idx ->
-                        position = player?.currentPosition?.coerceAtLeast(0L) ?: position
+                        position = currentMediaPositionMs()
                         selectedVersionId = nativeVersions[idx].first
                         selectedAudioIndex = null
                         startLocal()
@@ -1547,7 +1655,7 @@ class PlayerActivity : AppCompatActivity() {
                                             .put("code", syncRoomCode)
                                             .put("itemId", activeItemId)
                                             .put("isPaused", player?.isPlaying != true)
-                                            .put("positionTicks", msToTicks(player?.currentPosition ?: 0L))
+                                            .put("positionTicks", msToTicks(currentMediaPositionMs()))
                                         api.call("syncplay", body = payload)
                                         Toast.makeText(this@PlayerActivity, "Synced room $syncRoomCode", Toast.LENGTH_SHORT).show()
                                     } else if (code.isNotBlank()) {
@@ -1564,7 +1672,7 @@ class PlayerActivity : AppCompatActivity() {
                                             .put("itemId", currentPlaybackId)
                                             .put("title", media.title)
                                             .put("isPaused", player?.isPlaying != true)
-                                            .put("positionTicks", msToTicks(player?.currentPosition ?: 0L))
+                                            .put("positionTicks", msToTicks(currentMediaPositionMs()))
                                         val r = api.call("syncplay", body = payload)
                                         syncRoomCode = r.optJSONObject("room")?.optString("code")
                                         Toast.makeText(this@PlayerActivity, "Created SyncPlay room $syncRoomCode", Toast.LENGTH_SHORT).show()
@@ -1640,7 +1748,7 @@ class PlayerActivity : AppCompatActivity() {
     private fun report(stopped: Boolean, started: Boolean = false) {
         if (media.source == "youtube") {
             val videoId = media.json.optString("videoId").ifBlank { media.id.removePrefix("yt-archive-").removePrefix("yt-") }
-            player?.let { position = it.currentPosition }
+            if (player != null) position = currentMediaPositionMs()
             val snapshot = position
             val durMs = knownDurationMs.takeIf { it > 0 } ?: player?.duration?.takeIf { it > 0 } ?: 0L
             val posSec = (snapshot / 1000).toInt()
@@ -1666,7 +1774,7 @@ class PlayerActivity : AppCompatActivity() {
         val client = remote
         val activeId = if (currentPlaybackId.isNotBlank()) currentPlaybackId else media.playbackId
         if (client != null && client.mediaInfo?.customData?.optString("itemId") != activeId) return
-        if (client != null) position = client.approximateStreamPosition else player?.let { position = it.currentPosition }
+        if (client != null) position = client.approximateStreamPosition else if (player != null) position = currentMediaPositionMs()
         val snapshot = position
         val paused = client?.isPaused ?: (player?.isPlaying == false)
         val launcherItem = episodes.items.firstOrNull { it.playbackId == activeId } ?: media
@@ -1693,7 +1801,7 @@ class PlayerActivity : AppCompatActivity() {
     }
     private fun clearMessages() { while (overlay.childCount > 1) overlay.removeViewAt(1) }
     private fun showMessage(text: String) { overlay.visibility = View.VISIBLE; overlay.addView(label(text, 14f)) }
-    override fun onSaveInstanceState(outState: Bundle) { outState.putString("media", media.json.toString()); outState.putLong("position", player?.currentPosition ?: position); super.onSaveInstanceState(outState) }
+    override fun onSaveInstanceState(outState: Bundle) { outState.putString("media", media.json.toString()); outState.putLong("position", if (player != null) currentMediaPositionMs() else position); super.onSaveInstanceState(outState) }
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
         if (player?.isPlaying == true && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
@@ -1708,10 +1816,11 @@ class PlayerActivity : AppCompatActivity() {
             "pause" -> { exo.pause(); reportVideoSession(); true }
             "togglePlayPause" -> { if (exo.isPlaying) exo.pause() else exo.play(); reportVideoSession(); true }
             "stop" -> { finish(); true }
-            "seekTo" -> if (positionMs != null) { exo.seekTo(positionMs); reportVideoSession(); true } else false
+            "seekTo" -> if (positionMs != null) { seekMediaTo(positionMs); reportVideoSession(); true } else false
             "seekBy" -> if (deltaMs != null) {
-                val target = (exo.currentPosition + deltaMs).coerceAtLeast(0L)
-                exo.seekTo(if (exo.duration > 0) target.coerceAtMost(exo.duration) else target)
+                val target = (currentMediaPositionMs() + deltaMs).coerceAtLeast(0L)
+                val maxDur = knownDurationMs.takeIf { it > 0 } ?: exo.duration
+                seekMediaTo(if (maxDur > 0) target.coerceAtMost(maxDur) else target)
                 reportVideoSession()
                 true
             } else false
@@ -1720,11 +1829,11 @@ class PlayerActivity : AppCompatActivity() {
                 if (next != null) { selectEpisode(next); true } else false
             }
             "previous" -> {
-                if (exo.currentPosition > 5000L) {
-                    exo.seekTo(0L); reportVideoSession(); true
+                if (currentMediaPositionMs() > 5000L) {
+                    seekMediaTo(0L); reportVideoSession(); true
                 } else {
                     val prev = episodes.previous(currentPlaybackId)
-                    if (prev != null) { selectEpisode(prev); true } else { exo.seekTo(0L); true }
+                    if (prev != null) { selectEpisode(prev); true } else { seekMediaTo(0L); true }
                 }
             }
             else -> false
@@ -1741,6 +1850,8 @@ class PlayerActivity : AppCompatActivity() {
         }.orEmpty()
         val seriesTitle = media.json.optString("seriesName").ifBlank { media.title }
         val art = media.backdrop.ifBlank { media.poster }
+        val effectivePosMs = currentMediaPositionMs()
+        val effectiveDurMs = knownDurationMs.takeIf { it > 0L } ?: exo.duration.coerceAtLeast(0L)
         PlaybackSessions.reportHeartbeatAsync(
             context = this,
             mediaId = currentPlaybackId.ifBlank { media.id },
@@ -1749,9 +1860,9 @@ class PlayerActivity : AppCompatActivity() {
             subtitle = epLabel.ifBlank { media.metadata },
             artworkUrl = if (art.isNotBlank()) api.absolute(art) else "",
             isPlaying = exo.isPlaying,
-            positionMs = exo.currentPosition,
-            durationMs = exo.duration.coerceAtLeast(knownDurationMs).coerceAtLeast(0L),
-            canSeek = (exo.duration > 0L || knownDurationMs > 0L),
+            positionMs = effectivePosMs,
+            durationMs = effectiveDurMs,
+            canSeek = (effectiveDurMs > 0L),
             canSkipNext = episodes.next(currentPlaybackId) != null,
             canSkipPrev = episodes.previous(currentPlaybackId) != null,
         )
@@ -1778,7 +1889,7 @@ class PlayerActivity : AppCompatActivity() {
         runCatching { unregisterReceiver(noisyReceiver) }
         negotiation?.cancel(); timer?.cancel()
         if (prepared || remote != null) report(remote == null)
-        if (remote == null) player?.let { position = it.currentPosition; wantsPlay = it.playWhenReady }
+        if (remote == null) player?.let { position = currentMediaPositionMs(); wantsPlay = it.playWhenReady }
         releaseLocal(); remote?.unregisterCallback(remoteCallback)
         castCtx?.sessionManager?.removeSessionManagerListener(sessionListener, CastSession::class.java)
         super.onStop()
