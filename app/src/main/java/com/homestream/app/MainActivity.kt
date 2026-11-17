@@ -936,7 +936,7 @@ class MainActivity : AppCompatActivity() {
             background = GradientDrawable().apply { setColor(0xFF10B981.toInt()); shape = GradientDrawable.OVAL }
         }, LinearLayout.LayoutParams(dp(7), dp(7)))
         status.addView(TextView(this).apply {
-            text = "  Jellyfin Library"; textSize = 10f; setTextColor(MUTED)
+            text = "  Media Library"; textSize = 10f; setTextColor(MUTED)
         })
         titleCol.addView(status)
         head.addView(titleCol, LinearLayout.LayoutParams(0, -2, 1f))
@@ -1172,7 +1172,7 @@ class MainActivity : AppCompatActivity() {
         screen = tab
         fetch("home") { data ->
             if (data.optBoolean("isDemoMode")) {
-                message("DEMO LIBRARY • Connect Jellyfin on your HomeStream server to play your media.")
+                message("DEMO LIBRARY • Add media libraries on your HomeStream server to play your media.")
             }
 
             // Extract candidate hero items for dynamic billboard
@@ -2770,7 +2770,7 @@ class MainActivity : AppCompatActivity() {
             text = "Local Server: ${currentLocal.ifBlank { "Not configured" }}"; textSize = 12f; setTextColor(Color.WHITE)
         })
         val authStatus = if (settings.authType == "device") "Device Pairing Token (Keystore secured)"
-            else if (settings.authType == "jellyfin") "Jellyfin Account Authentication" else "Pre-shared Mobile Token"
+            else if (settings.authType == "account" || settings.authType == "jellyfin") "HomeStream Account Authentication" else "Pre-shared Mobile Token"
         infoBox.addView(TextView(this).apply {
             text = "Authentication: $authStatus"; textSize = 11f; setTextColor(0xFF10B981.toInt()); setPadding(0, dp(4), 0, dp(2))
         })
@@ -4610,8 +4610,8 @@ class MainActivity : AppCompatActivity() {
                         val list = data.objects("integrations")
                         val configured = list.count { it.optBoolean("configured") }
                         val catMap = mapOf(
-                            "jellyfin" to "media", "tmdb" to "media",
-                            "seerr" to "media", "radarr" to "media", "sonarr" to "media",
+                            "tmdb" to "media",
+                            "radarr" to "media", "sonarr" to "media",
                             "slskd" to "music_books", "spotify" to "music_books", "bookshelf" to "music_books",
                             "qbittorrent" to "downloaders",
                         )
@@ -4668,7 +4668,7 @@ class MainActivity : AppCompatActivity() {
                         host.removeAllViews()
 
                         val nativeSettings = nativeData.optJSONObject("settings")
-                        val engine = nativeSettings?.optString("mediaEngine", "jellyfin") ?: "jellyfin"
+                        val engine = nativeSettings?.optString("mediaEngine", "native") ?: "native"
                         val libs = nativeSettings?.optJSONArray("libraries")
                         val items = nativeData.optJSONArray("items")
                         val stats = nativeData.optJSONObject("stats")
@@ -4696,45 +4696,16 @@ class MainActivity : AppCompatActivity() {
                                 }.onFailure { toast(it.message ?: "Scan failed") }
                             }
                         })
-                        btnRow.addView(action(if (engine == "native") "Use Jellyfin" else "Use Native Engine") {
-                            val nextEngine = if (engine == "native") "jellyfin" else "native"
-                            lifecycleScope.launch {
-                                runCatching {
-                                    api.call(
-                                        "native/library",
-                                        body = JSONObject().put("action", "saveSettings")
-                                            .put("settings", JSONObject().put("mediaEngine", nextEngine))
-                                    )
-                                }.onSuccess {
-                                    toast("Switched engine to $nextEngine")
-                                    adminPanel("media")
-                                }.onFailure { toast(it.message ?: "Switch failed") }
-                            }
-                        }.apply {
-                            (layoutParams as? LinearLayout.LayoutParams)?.marginStart = dp(8)
-                        })
-                        engineCard.addView(btnRow)
-                        val libActionsRow = LinearLayout(this@MainActivity).apply {
-                            orientation = LinearLayout.HORIZONTAL
-                            setPadding(0, dp(8), 0, 0)
-                        }
-                        libActionsRow.addView(action("Refresh Metadata") {
+                        btnRow.addView(action("Refresh Metadata") {
                             lifecycleScope.launch {
                                 runCatching { api.call("native/library", body = JSONObject().put("action", "refreshMetadata")) }
                                     .onSuccess { toast("Metadata refreshed"); adminPanel("media") }
                                     .onFailure { toast(it.message ?: "Refresh failed") }
                             }
+                        }.apply {
+                            (layoutParams as? LinearLayout.LayoutParams)?.marginStart = dp(8)
                         })
-                        libActionsRow.addView(action("Jellyfin Preview") {
-                            lifecycleScope.launch {
-                                runCatching { api.call("native/library", body = JSONObject().put("action", "importJellyfinHistory").put("dryRun", true)) }
-                                    .onSuccess { d ->
-                                        toast("Preview: ${d.optInt("imported")} new, ${d.optInt("unmatched")} unmatched")
-                                    }
-                                    .onFailure { toast(it.message ?: "Preview failed") }
-                            }
-                        }.apply { (layoutParams as? LinearLayout.LayoutParams)?.marginStart = dp(8) })
-                        engineCard.addView(libActionsRow)
+                        engineCard.addView(btnRow)
                         host.addView(engineCard, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(10) })
 
                         val health = nativeData.optJSONObject("health")

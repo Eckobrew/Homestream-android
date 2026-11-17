@@ -999,7 +999,7 @@ class PlayerActivity : AppCompatActivity() {
                                 return
                             }
                             if (error.errorCode == PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS) {
-                                showUnDownloadedUI("Media file has not been downloaded or is not available on Jellyfin.")
+                                showUnDownloadedUI("Media file has not been downloaded or is not available on HomeStream.")
                                 return
                             }
                             if (!transcode && !media.isDownload) {
@@ -1010,7 +1010,7 @@ class PlayerActivity : AppCompatActivity() {
                                 return
                             }
                             clearMessages()
-                            showMessage("Playback failed (${error.errorCodeName}). Check that this device can reach Jellyfin.")
+                            showMessage("Playback failed (${error.errorCodeName}). Check that this device can reach HomeStream.")
                             if (media.isDownload || media.source == "youtube") {
                                 showMessage("In-progress downloads may buffer or be unseekable. Wait for more data and retry.")
                                 overlay.addView(action("Retry") { startLocal() })

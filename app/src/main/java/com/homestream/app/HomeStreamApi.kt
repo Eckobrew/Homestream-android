@@ -115,7 +115,7 @@ class HomeStreamApi(private val settings: ConnectionSettings) {
             if (response.code == 401) BrowseCache.clear()
             if (!response.isSuccessful) throw ResponseException(response.code, when (response.code) {
                 401 -> "Pairing token rejected. Check Settings."
-                503 -> "Service unavailable. Check the mobile token and Jellyfin configuration."
+                503 -> "Service unavailable. Check the mobile token and server configuration."
                 else -> data?.optString("error", "Server error (${response.code})") ?: "Server error (${response.code})"
             })
             checkNotNull(data)

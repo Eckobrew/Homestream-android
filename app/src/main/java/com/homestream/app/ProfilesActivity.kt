@@ -148,21 +148,13 @@ class ProfilesActivity : AppCompatActivity() {
     }
 
     private fun edit(profile: JSONObject?, canManage: Boolean) {
-        fun load(pin: String) { lifecycleScope.launch {
-            try {
-                val accountOptions = if (canManage) api.call("profiles/users", body = JSONObject().put("parentPin", pin)) else null
-                val users = accountOptions?.optJSONArray("users")
-                showEditor(profile, canManage, (0 until (users?.length() ?: 0)).map { users!!.getJSONObject(it) }, pin,
-                    nativeEngine = true)
-            } catch (e: Exception) {
-                if (e is CancellationException) throw e
-                Toast.makeText(this@ProfilesActivity, e.message ?: "Could not load profile options", Toast.LENGTH_LONG).show()
-            }
-        } }
+        fun load(pin: String) {
+            showEditor(profile, canManage, pin)
+        }
         if (parentPinConfigured) askPin("Parent PIN to manage profiles", ::load) else load("")
     }
 
-    private fun showEditor(profile: JSONObject?, canManage: Boolean, users: List<JSONObject>, parentPin: String, nativeEngine: Boolean) {
+    private fun showEditor(profile: JSONObject?, canManage: Boolean, parentPin: String) {
         val form = column().apply { setPadding(dp(20), dp(8), dp(20), dp(16)) }
         val name = EditText(this).apply { hint = "Profile name"; isSingleLine = true; setText(profile?.optString("name").orEmpty()); isEnabled = canManage }
         form.addView(label("Profile name", 14f)); form.addView(name)
@@ -190,29 +182,6 @@ class ProfilesActivity : AppCompatActivity() {
             })
         }
         paintChoices(); form.addView(avatarGrid, LinearLayout.LayoutParams(-1, -2))
-        val mode = RadioGroup(this)
-        val existing = RadioButton(this).apply { id = View.generateViewId(); text = "Link existing Jellyfin account" }
-        val create = RadioButton(this).apply { id = View.generateViewId(); text = "Create new Jellyfin account" }
-        val account = Spinner(this).apply {
-            adapter = ArrayAdapter(this@ProfilesActivity, android.R.layout.simple_spinner_dropdown_item,
-                users.map { it.optString("name") }.ifEmpty { listOf("No Jellyfin accounts available") })
-            val linked = profile?.optString("jellyfinUserId").orEmpty().ifBlank { profile?.optString("id").orEmpty() }
-            setSelection(users.indexOfFirst { it.optString("id") == linked }.coerceAtLeast(0))
-        }
-        val username = EditText(this).apply { hint = "Jellyfin username (defaults to profile name)"; isSingleLine = true }
-        val passwordNote = label("New accounts use no password when supported. If Jellyfin requires one, it will match the Jellyfin username.", 12f).apply { setTextColor(MUTED) }
-        if (canManage && !nativeEngine) {
-            form.addView(label("Jellyfin account", 14f).apply { setPadding(0, dp(14), 0, dp(6)) })
-            if (profile == null) { mode.addView(existing); mode.addView(create); form.addView(mode) }
-            form.addView(account)
-            if (profile == null) { form.addView(username); form.addView(passwordNote) }
-            mode.setOnCheckedChangeListener { _, checked ->
-                account.visibility = if (checked == existing.id) View.VISIBLE else View.GONE
-                username.visibility = if (checked == create.id) View.VISIBLE else View.GONE
-                passwordNote.visibility = username.visibility
-            }
-            mode.check(if (users.isNotEmpty()) existing.id else create.id)
-        }
         val kids = CheckBox(this).apply { text = "Kids profile"; isChecked = profile?.optBoolean("isKids") == true }
         var birthDate = profile?.optString("kidsDateOfBirth").orEmpty()
         val automaticRating = label("", 14f)
@@ -239,10 +208,7 @@ class ProfilesActivity : AppCompatActivity() {
         val pin = EditText(this).apply { hint = "Create parent PIN (4–8 digits)"; isSingleLine = true; inputType = 18; filters = arrayOf(android.text.InputFilter.LengthFilter(8)) }
         val confirmPin = EditText(this).apply { hint = "Confirm parent PIN"; isSingleLine = true; inputType = 18; filters = arrayOf(android.text.InputFilter.LengthFilter(8)) }
         val restrictionDescription = "Only titles at or below this rating are shown. A parent PIN is required to leave Kids mode or change restrictions."
-        val restrictionNote = label(
-            if (nativeEngine) restrictionDescription else "$restrictionDescription Use a non-admin Jellyfin account.",
-            12f
-        ).apply { setTextColor(MUTED) }
+        val restrictionNote = label(restrictionDescription, 12f).apply { setTextColor(MUTED) }
         fun showKidsControls() {
             dateButton.visibility = if (kids.isChecked) View.VISIBLE else View.GONE
             automaticRating.visibility = dateButton.visibility
@@ -263,43 +229,22 @@ class ProfilesActivity : AppCompatActivity() {
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
                 val displayName = name.text.toString().trim()
                 if (displayName.isBlank() || displayName.length > 64) { name.error = "Enter a name of 1–64 characters"; return@setOnClickListener }
-                val isNewAccount = profile == null && mode.checkedRadioButtonId == create.id
-                val selectedUser = users.getOrNull(account.selectedItemPosition)
-                if (canManage && !nativeEngine && !isNewAccount && selectedUser == null) {
-                    error.text = "Choose an existing account or create a new one"
-                    return@setOnClickListener
-                }
                 if (kids.isChecked && birthDate.isBlank()) { error.text = "Choose the child’s date of birth"; return@setOnClickListener }
                 val effectivePin = if (parentPinConfigured) parentPin else pin.text.toString()
                 if (kids.isChecked && !parentPinConfigured && (!effectivePin.matches(Regex("[0-9]{4,8}")) || effectivePin != confirmPin.text.toString())) {
                     error.text = "Enter matching parent PINs of 4–8 digits"; return@setOnClickListener
                 }
-                if (kids.isChecked && selectedUser?.optBoolean("isAdministrator") == true && !isNewAccount) {
-                    error.text = "Choose a non-administrator Jellyfin account for Kids mode"; return@setOnClickListener
-                }
                 val body = JSONObject().put("isKids", kids.isChecked).put("kidsDateOfBirth", birthDate).put("parentPin", effectivePin).put("action", if (profile == null) "create" else "update")
-                    .put("name", displayName).put("avatarId", chosen)
+                    .put("name", displayName).put("avatarId", chosen).put("mode", "native")
                 profile?.optString("id")?.let { body.put("profileId", it) }
-                if (nativeEngine) {
-                    body.put("mode", "native")
-                } else if (canManage) {
-                    body.put("mode", if (isNewAccount) "new" else "existing")
-                    if (isNewAccount) body.put("jellyfinName", username.text.toString().trim().ifBlank { displayName })
-                    else body.put("jellyfinUserId", selectedUser!!.getString("id"))
-                }
                 val button = dialog.getButton(AlertDialog.BUTTON_POSITIVE)
                 button.isEnabled = false; error.text = ""
                 saveJob = lifecycleScope.launch {
                     try {
-                        val result = api.call("profiles", body = body)
+                        api.call("profiles", body = body)
                         if (api.refreshProfilePolicy()) clearCastIdle(this@ProfilesActivity)
                         setResult(Activity.RESULT_OK)
-                        val message = when (result.optString("passwordMode")) {
-                            "none" -> "Profile added. Jellyfin account created without a password."
-                            "username" -> "Profile added. The Jellyfin password matches its username."
-                            else -> "Profile saved"
-                        }
-                        Toast.makeText(this@ProfilesActivity, message, Toast.LENGTH_LONG).show()
+                        Toast.makeText(this@ProfilesActivity, "Profile saved", Toast.LENGTH_LONG).show()
                         // Clear the reference before dismissing so a successful save is not canceled mid-refresh.
                         saveJob = null; dialog.dismiss(); refresh()
                     } catch (e: Exception) {
