@@ -16,10 +16,25 @@ android {
         versionName = "1.0.1"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
+    val releaseStorePath = providers.gradleProperty("HOMESTREAM_KEYSTORE_PATH").orNull ?: System.getenv("HOMESTREAM_KEYSTORE_PATH")
+    val releaseStorePassword = providers.gradleProperty("HOMESTREAM_KEYSTORE_PASSWORD").orNull ?: System.getenv("HOMESTREAM_KEYSTORE_PASSWORD")
+    val releaseKeyAlias = providers.gradleProperty("HOMESTREAM_KEY_ALIAS").orNull ?: System.getenv("HOMESTREAM_KEY_ALIAS")
+    val releaseKeyPassword = providers.gradleProperty("HOMESTREAM_KEY_PASSWORD").orNull ?: System.getenv("HOMESTREAM_KEY_PASSWORD")
+    val hasReleaseSigning = !releaseStorePath.isNullOrBlank() && !releaseStorePassword.isNullOrBlank() && !releaseKeyAlias.isNullOrBlank() && !releaseKeyPassword.isNullOrBlank()
+    signingConfigs {
+        if (hasReleaseSigning) {
+            create("release") {
+                storeFile = file(releaseStorePath!!)
+                storePassword = releaseStorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+            }
+        }
+    }
     buildTypes {
         release {
             isMinifyEnabled = false
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = if (hasReleaseSigning) signingConfigs.getByName("release") else signingConfigs.getByName("debug")
         }
     }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }

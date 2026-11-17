@@ -87,17 +87,21 @@ class PlayerActivity : AppCompatActivity() {
     private var trickplayJob: Job? = null
     private var playbackStarted = false
     private data class SkipSeg(val type: String, val startSec: Double, val endSec: Double)
-    private data class TrickplayCue(val startSec: Double, val endSec: Double, val x: Int, val y: Int, val w: Int, val h: Int)
+    private data class TrickplayCue(val startSec: Double, val endSec: Double, val x: Int, val y: Int, val w: Int, val h: Int, val sheetUrl: String)
     private var skipSegments: List<SkipSeg> = emptyList()
     private var nativeVersions: List<Pair<String, String>> = emptyList()
     private var selectedVersionId: String? = null
     private var nativeAudioTracks: List<Pair<Int, String>> = emptyList()
     private var selectedAudioIndex: Int? = null
+    private var burnInSubtitles: List<Pair<Int, String>> = emptyList()
+    private var burnSubtitleIndex: Int? = null
+    private var qualityMode: String = "auto"
     private var trickplayCues: List<TrickplayCue> = emptyList()
-    private var trickplaySprite: android.graphics.Bitmap? = null
+    private var trickplaySprites: Map<String, android.graphics.Bitmap> = emptyMap()
     private var skipBtn: TextView? = null
     private var trickplayPreview: ImageView? = null
     private var syncRoomCode: String? = null
+    private var applyingSyncPlay = false
     private var remote: RemoteMediaClient? = null
     private var episodes = EpisodeQueue()
     private var episodeJob: Job? = null
@@ -171,6 +175,7 @@ class PlayerActivity : AppCompatActivity() {
         val hls = stream.optString("transport") == "HLS" || Uri.parse(stream.optString("streamUrl")).path.orEmpty().endsWith(".m3u8", ignoreCase = true)
         playbackDetails = listOf(
             "Delivery: $playbackMethod",
+            stream.optString("resolution").takeIf { it.isNotBlank() }?.let { "Resolution: $it" },
             "Transport: ${if (hls) "HLS" else "progressive file"}",
             stream.optString("sourceVideoCodec").takeIf { it.isNotBlank() }?.let { "Source video: $it" },
             stream.optString("sourceAudioCodec").takeIf { it.isNotBlank() }?.let { "Source audio: $it" },
@@ -793,7 +798,18 @@ class PlayerActivity : AppCompatActivity() {
                         "audioCodecs" to audioCodecs
                     ) + (selectedVersionId?.let { mapOf("versionId" to it) } ?: emptyMap())
                       + (selectedAudioIndex?.let { mapOf("audioIndex" to it.toString()) } ?: emptyMap())
+                      + (burnSubtitleIndex?.let { mapOf("burnSubtitleIndex" to it.toString()) } ?: emptyMap())
+                      + when (qualityMode) {
+                          "1080p" -> mapOf("maxWidth" to "1920", "maxHeight" to "1080")
+                          "720p" -> mapOf("maxWidth" to "1280", "maxHeight" to "720")
+                          "original" -> mapOf("maxWidth" to "3840", "maxHeight" to "2160")
+                          else -> emptyMap()
+                      }
                       + if (isTelevision()) mapOf("receiver" to "native-tv", "videoCapabilities" to televisionVideoProfiles().toString()) else emptyMap()))
+                val autoVersion = stream.optString("selectedVersionId").takeIf { it.isNotBlank() }
+                if (selectedVersionId == null && autoVersion != null) {
+                    selectedVersionId = autoVersion
+                }
                 applyInitialResume(stream)
                 describeStream(stream)
                 parseNativePlayerExtras(stream)
@@ -851,7 +867,11 @@ class PlayerActivity : AppCompatActivity() {
                                         val sec = exo.currentPosition / 1000.0
                                         val seg = skipSegments.firstOrNull { sec >= it.startSec && sec < it.endSec - 1.0 }
                                         if (seg != null) {
-                                            skipBtn?.text = if (seg.type == "credits") "Skip Credits →" else "Skip Intro →"
+                                            skipBtn?.text = when (seg.type) {
+                                                "credits" -> "Skip Credits →"
+                                                "recap" -> "Skip Recap →"
+                                                else -> "Skip Intro →"
+                                            }
                                             skipBtn?.setOnClickListener { exo.seekTo((seg.endSec * 1000).toLong()) }
                                             skipBtn?.visibility = View.VISIBLE
                                         } else {
@@ -861,11 +881,18 @@ class PlayerActivity : AppCompatActivity() {
                                         if (roomCode != null && tick % 2 == 0) {
                                             runCatching {
                                                 val r = api.call("syncplay", mapOf("code" to roomCode)).optJSONObject("room")
-                                                if (r != null) {
-                                                    val targetMs = r.optLong("positionTicks", 0L) / 10_000L
-                                                    if (kotlin.math.abs(exo.currentPosition - targetMs) > 2500L) exo.seekTo(targetMs)
-                                                    val paused = r.optBoolean("isPaused", false)
-                                                    if (paused && exo.isPlaying) exo.pause() else if (!paused && !exo.isPlaying) exo.play()
+                                                val activeItemId = currentPlaybackId.ifBlank { media.playbackId }
+                                                val roomItemId = r?.optString("itemId").orEmpty()
+                                                if (r != null && roomItemId.isNotBlank() && roomItemId == activeItemId) {
+                                                    applyingSyncPlay = true
+                                                    try {
+                                                        val targetMs = r.optLong("positionTicks", 0L) / 10_000L
+                                                        if (kotlin.math.abs(exo.currentPosition - targetMs) > 2500L) exo.seekTo(targetMs)
+                                                        val paused = r.optBoolean("isPaused", false)
+                                                        if (paused && exo.isPlaying) exo.pause() else if (!paused && !exo.isPlaying) exo.play()
+                                                    } finally {
+                                                        applyingSyncPlay = false
+                                                    }
                                                 }
                                             }
                                         }
@@ -877,6 +904,40 @@ class PlayerActivity : AppCompatActivity() {
                             if (state == Player.STATE_ENDED) {
                                 position = exo.duration.coerceAtLeast(0); report(true)
                                 if (autoplay) changeEpisode(1, automatic = true)
+                            }
+                        }
+                        override fun onIsPlayingChanged(isPlaying: Boolean) {
+                            val code = syncRoomCode
+                            if (code != null && !applyingSyncPlay && prepared) {
+                                lifecycleScope.launch {
+                                    runCatching {
+                                        val payload = JSONObject()
+                                            .put("action", "sync")
+                                            .put("code", code)
+                                            .put("isPaused", !isPlaying)
+                                            .put("positionTicks", msToTicks(exo.currentPosition))
+                                        api.call("syncplay", body = payload)
+                                    }
+                                }
+                            }
+                        }
+                        override fun onPositionDiscontinuity(
+                            oldPosition: Player.PositionInfo,
+                            newPosition: Player.PositionInfo,
+                            reason: Int
+                        ) {
+                            val code = syncRoomCode
+                            if (code != null && !applyingSyncPlay && prepared && reason == Player.DISCONTINUITY_REASON_SEEK) {
+                                lifecycleScope.launch {
+                                    runCatching {
+                                        val payload = JSONObject()
+                                            .put("action", "sync")
+                                            .put("code", code)
+                                            .put("isPaused", !exo.isPlaying)
+                                            .put("positionTicks", msToTicks(newPosition.positionMs))
+                                        api.call("syncplay", body = payload)
+                                    }
+                                }
                             }
                         }
                         override fun onTracksChanged(tracks: Tracks) {
@@ -956,14 +1017,27 @@ class PlayerActivity : AppCompatActivity() {
             selectedVersionId?.let { put("versionId", it) }
         }
         api.call("subtitles", query).optJSONArray("subtitles")?.let { tracks ->
-            (0 until tracks.length()).map { i ->
+            val burnIns = mutableListOf<Pair<Int, String>>()
+            val textConfigs = mutableListOf<MediaItem.SubtitleConfiguration>()
+            for (i in 0 until tracks.length()) {
                 val track = tracks.getJSONObject(i)
+                if (track.optBoolean("burnIn")) {
+                    val idx = track.optInt("index", -1)
+                    if (idx >= 0) burnIns.add(idx to track.optString("title", "Track $idx"))
+                    continue
+                }
+                val src = track.optString("src")
+                if (src.isBlank()) continue
                 val flags = (if (track.optBoolean("isDefault")) C.SELECTION_FLAG_DEFAULT else 0) or
                     (if (track.optBoolean("isForced")) C.SELECTION_FLAG_FORCED else 0)
-                MediaItem.SubtitleConfiguration.Builder(Uri.parse(api.absolute(track.getString("src"))))
-                    .setMimeType(MimeTypes.TEXT_VTT).setLanguage(track.optString("language"))
-                    .setSelectionFlags(flags).setLabel(track.optString("title")).build()
+                textConfigs.add(
+                    MediaItem.SubtitleConfiguration.Builder(Uri.parse(api.absolute(src)))
+                        .setMimeType(MimeTypes.TEXT_VTT).setLanguage(track.optString("language"))
+                        .setSelectionFlags(flags).setLabel(track.optString("title")).build()
+                )
             }
+            burnInSubtitles = burnIns
+            textConfigs
         }.orEmpty()
     } catch (e: Exception) {
         if (e is kotlinx.coroutines.CancellationException) throw e
@@ -1106,6 +1180,7 @@ class PlayerActivity : AppCompatActivity() {
         }
         selectedVersionId?.takeIf { it.isNotBlank() }?.let { params["versionId"] = it }
         selectedAudioIndex?.let { params["audioIndex"] = it.toString() }
+        burnSubtitleIndex?.let { params["burnSubtitleIndex"] = it.toString() }
         if (tmdb > 0) params["tmdbId"] = tmdb.toString()
         params["type"] = if (isTv) "tv" else "movie"
         if (isTv) {
@@ -1220,6 +1295,8 @@ class PlayerActivity : AppCompatActivity() {
         negotiation?.cancel(); castLoading = false
         selectedVersionId = null
         selectedAudioIndex = null
+        burnSubtitleIndex = null
+        burnInSubtitles = emptyList()
         media = item; currentPlaybackId = item.playbackId; position = 0; wantsPlay = true
         updateEpisodeControls()
         val session = castCtx?.sessionManager?.currentCastSession
@@ -1298,7 +1375,7 @@ class PlayerActivity : AppCompatActivity() {
 
         val tpUrl = stream.optString("trickplayUrl")
         trickplayJob?.cancel()
-        trickplayCues = emptyList(); trickplaySprite = null
+        trickplayCues = emptyList(); trickplaySprites = emptyMap()
         trickplayPreview?.visibility = View.GONE
         if (tpUrl.isNotBlank()) {
             trickplayJob = lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) {
@@ -1307,7 +1384,7 @@ class PlayerActivity : AppCompatActivity() {
                     val vttText = api.mediaClient().newCall(req).execute().use { it.body?.string().orEmpty() }
                     val lines = vttText.lines()
                     val cues = mutableListOf<TrickplayCue>()
-                    var spriteUrl = ""
+                    val sheetUrls = linkedSetOf<String>()
                     fun parseTs(ts: String): Double {
                         val p = ts.trim().split(":").mapNotNull { it.toDoubleOrNull() }
                         return if (p.size == 3) p[0] * 3600 + p[1] * 60 + p[2] else if (p.size == 2) p[0] * 60 + p[1] else 0.0
@@ -1318,16 +1395,21 @@ class PlayerActivity : AppCompatActivity() {
                         val m = tsRe.find(lines[i]) ?: continue
                         val next = lines.getOrNull(i + 1)?.trim().orEmpty()
                         val xy = xyRe.find(next) ?: continue
-                        if (spriteUrl.isBlank()) spriteUrl = next.substringBefore("#")
-                        cues.add(TrickplayCue(parseTs(m.groupValues[1]), parseTs(m.groupValues[2]), xy.groupValues[1].toInt(), xy.groupValues[2].toInt(), xy.groupValues[3].toInt(), xy.groupValues[4].toInt()))
+                        val sheetUrl = next.substringBefore("#")
+                        if (sheetUrl.isNotBlank()) sheetUrls.add(sheetUrl)
+                        cues.add(TrickplayCue(parseTs(m.groupValues[1]), parseTs(m.groupValues[2]), xy.groupValues[1].toInt(), xy.groupValues[2].toInt(), xy.groupValues[3].toInt(), xy.groupValues[4].toInt(), sheetUrl))
                     }
-                    if (spriteUrl.isNotBlank() && cues.isNotEmpty()) {
-                        val sReq = okhttp3.Request.Builder().url(api.absolute(spriteUrl)).build()
-                        val bmp = api.mediaClient().newCall(sReq).execute().use { r ->
-                            r.body?.byteStream()?.let { android.graphics.BitmapFactory.decodeStream(it) }
+                    if (sheetUrls.isNotEmpty() && cues.isNotEmpty()) {
+                        val loaded = mutableMapOf<String, android.graphics.Bitmap>()
+                        for (sheet in sheetUrls) {
+                            val sReq = okhttp3.Request.Builder().url(api.absolute(sheet)).build()
+                            val bmp = api.mediaClient().newCall(sReq).execute().use { r ->
+                                r.body?.byteStream()?.let { android.graphics.BitmapFactory.decodeStream(it) }
+                            }
+                            if (bmp != null) loaded[sheet] = bmp
                         }
-                        if (bmp != null) {
-                            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) { trickplayCues = cues; trickplaySprite = bmp }
+                        if (loaded.isNotEmpty()) {
+                            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) { trickplayCues = cues; trickplaySprites = loaded }
                         }
                     }
                 }
@@ -1336,9 +1418,9 @@ class PlayerActivity : AppCompatActivity() {
     }
 
     private fun showTrickplayAt(positionMs: Long) {
-        val sprite = trickplaySprite ?: return
         val sec = positionMs / 1000.0
         val cue = trickplayCues.firstOrNull { sec >= it.startSec && sec < it.endSec } ?: return
+        val sprite = trickplaySprites[cue.sheetUrl] ?: return
         if (cue.x + cue.w <= sprite.width && cue.y + cue.h <= sprite.height) {
             val crop = android.graphics.Bitmap.createBitmap(sprite, cue.x, cue.y, cue.w, cue.h)
             trickplayPreview?.setImageBitmap(crop)
@@ -1347,7 +1429,10 @@ class PlayerActivity : AppCompatActivity() {
     }
 
     private fun showPlayerSettings() {
-        val options = mutableListOf("Playback speed", "Audio", "Subtitle appearance", "SyncPlay (Watch Together)")
+        val options = mutableListOf("Playback speed", "Quality ($qualityMode)", "Audio", "Subtitle appearance", "SyncPlay (Watch Together)")
+        if (burnInSubtitles.isNotEmpty()) {
+            options.add("Subtitles (Burn-in)")
+        }
         if (nativeVersions.size > 1) {
             options.add("Video version")
         }
@@ -1359,6 +1444,16 @@ class PlayerActivity : AppCompatActivity() {
                     val selected = speeds.indexOfFirst { kotlin.math.abs(it - exo.playbackParameters.speed) < 0.01f }
                     showPlayerChoices(playerView, speeds.map { "${it}×" }, selected) { index ->
                         exo.setPlaybackSpeed(speeds[index])
+                    }
+                }
+                "Quality ($qualityMode)" -> {
+                    val qLabels = listOf("Auto", "Original", "1080p", "720p")
+                    val qVals = listOf("auto", "original", "1080p", "720p")
+                    val sel = qVals.indexOf(qualityMode).coerceAtLeast(0)
+                    showPlayerChoices(playerView, qLabels, sel) { idx ->
+                        position = player?.currentPosition?.coerceAtLeast(0L) ?: position
+                        qualityMode = qVals[idx]
+                        startLocal()
                     }
                 }
                 "Audio" -> if (nativeAudioTracks.size > 1) {
@@ -1388,6 +1483,15 @@ class PlayerActivity : AppCompatActivity() {
                     }
                 }
                 "Subtitle appearance" -> subtitleAppearance.show(this, playerView)
+                "Subtitles (Burn-in)" -> {
+                    val selected = burnInSubtitles.indexOfFirst { it.first == burnSubtitleIndex } + 1
+                    val labels = listOf("Off") + burnInSubtitles.map { it.second }
+                    showPlayerChoices(playerView, labels, selected) { choice ->
+                        position = player?.currentPosition?.coerceAtLeast(0L) ?: position
+                        burnSubtitleIndex = burnInSubtitles.getOrNull(choice - 1)?.first
+                        startLocal()
+                    }
+                }
                 "Video version" -> {
                     val labels = nativeVersions.map { it.second }
                     val sel = nativeVersions.indexOfFirst { it.first == selectedVersionId }.coerceAtLeast(0)
