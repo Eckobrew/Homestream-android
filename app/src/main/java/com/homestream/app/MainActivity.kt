@@ -1481,8 +1481,10 @@ class MainActivity : AppCompatActivity() {
                 minHeight = dp(40); minimumHeight = dp(40)
                 setPadding(dp(14), 0, dp(14), 0)
                 setOnClickListener {
-                    val added = list.toggle(item)
-                    text = if (added) "✓  My List" else "+  My List"
+                    lifecycleScope.launch {
+                        val added = list.syncToggle(item, api)
+                        text = if (added) "✓  My List" else "+  My List"
+                    }
                 }
             }
             btnRow.addView(listBtn, LinearLayout.LayoutParams(-2, dp(40)).apply { marginEnd = dp(10) })
@@ -1805,7 +1807,12 @@ class MainActivity : AppCompatActivity() {
                 setTextColor(Color.WHITE); isAllCaps = false
                 background = rounded(0x33FFFFFF.toInt(), radius = dp(8).toFloat())
                 minHeight = dp(40); minimumHeight = dp(40)
-                setOnClickListener { text = if (list.toggle(full)) "✓ My List" else "+ My List" }
+                setOnClickListener {
+                    lifecycleScope.launch {
+                        val added = list.syncToggle(full, api)
+                        text = if (added) "✓ My List" else "+ My List"
+                    }
+                }
             }
             btnRow.addView(listBtn, LinearLayout.LayoutParams(0, dp(40), 1f).apply {
                 marginEnd = dp(8)
@@ -4310,8 +4317,10 @@ class MainActivity : AppCompatActivity() {
             orientation = LinearLayout.HORIZONTAL
             setPadding(gutter, dp(4), gutter, dp(12))
         }
+        pillRow.addView(categoryPill("Libraries", active = adminPanelTab == "media") { adminPanel("media") })
+        pillRow.addView(categoryPill("Playback", active = adminPanelTab == "playback") { adminPanel("playback") })
+        pillRow.addView(categoryPill("Maintenance", active = adminPanelTab == "maintenance") { adminPanel("maintenance") })
         pillRow.addView(categoryPill("Modules", active = adminPanelTab == "modules") { adminPanel("modules") })
-        pillRow.addView(categoryPill("Media Management", active = adminPanelTab == "media") { adminPanel("media") })
         pillRow.addView(categoryPill("Downloads", active = adminPanelTab == "downloads") { adminPanel("downloads") })
         pillRow.addView(categoryPill("System & Profiles", active = adminPanelTab == "system") { adminPanel("system") })
         content.addView(HorizontalScrollView(this).apply {
@@ -4415,7 +4424,61 @@ class MainActivity : AppCompatActivity() {
                             (layoutParams as? LinearLayout.LayoutParams)?.marginStart = dp(8)
                         })
                         engineCard.addView(btnRow)
+                        val libActionsRow = LinearLayout(this@MainActivity).apply {
+                            orientation = LinearLayout.HORIZONTAL
+                            setPadding(0, dp(8), 0, 0)
+                        }
+                        libActionsRow.addView(action("Refresh Metadata") {
+                            lifecycleScope.launch {
+                                runCatching { api.call("native/library", body = JSONObject().put("action", "refreshMetadata")) }
+                                    .onSuccess { toast("Metadata refreshed"); adminPanel("media") }
+                                    .onFailure { toast(it.message ?: "Refresh failed") }
+                            }
+                        })
+                        libActionsRow.addView(action("Jellyfin Preview") {
+                            lifecycleScope.launch {
+                                runCatching { api.call("native/library", body = JSONObject().put("action", "importJellyfinHistory").put("dryRun", true)) }
+                                    .onSuccess { d ->
+                                        toast("Preview: ${d.optInt("imported")} new, ${d.optInt("unmatched")} unmatched")
+                                    }
+                                    .onFailure { toast(it.message ?: "Preview failed") }
+                            }
+                        }.apply { (layoutParams as? LinearLayout.LayoutParams)?.marginStart = dp(8) })
+                        engineCard.addView(libActionsRow)
                         host.addView(engineCard, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(10) })
+
+                        val health = nativeData.optJSONObject("health")
+                        if (health != null) {
+                            val missingFilesCount = health.optJSONArray("missingFiles")?.length() ?: 0
+                            val missingMetaCount = health.optJSONArray("missingMetadata")?.length() ?: 0
+                            val staleTp = health.optInt("missingOrStaleTrickplay", 0)
+                            val healthCard = column().apply {
+                                background = rounded(0xFF1A1A1A.toInt(), radius = dp(10).toFloat())
+                                setPadding(dp(14), dp(12), dp(14), dp(12))
+                            }
+                            healthCard.addView(label("Library Health", 14f, true))
+                            healthCard.addView(TextView(this@MainActivity).apply {
+                                text = "Items: ${health.optInt("totalItems")} • Files: ${health.optInt("totalFiles")}\nMissing Files: $missingFilesCount • Missing Meta: $missingMetaCount • Stale Trickplay: $staleTp"
+                                textSize = 12f; setTextColor(MUTED); setPadding(0, dp(4), 0, dp(8))
+                            })
+                            val repairRow = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.HORIZONTAL }
+                            repairRow.addView(action("Prune Missing") {
+                                lifecycleScope.launch {
+                                    runCatching { api.call("native/library", body = JSONObject().put("action", "repairHealth").put("repair", "pruneMissing")) }
+                                        .onSuccess { toast("Pruned missing files"); adminPanel("media") }
+                                        .onFailure { toast(it.message ?: "Repair failed") }
+                                }
+                            })
+                            repairRow.addView(action("Repair Meta") {
+                                lifecycleScope.launch {
+                                    runCatching { api.call("native/library", body = JSONObject().put("action", "repairHealth").put("repair", "refreshMetadata")) }
+                                        .onSuccess { toast("Metadata repaired"); adminPanel("media") }
+                                        .onFailure { toast(it.message ?: "Repair failed") }
+                                }
+                            }.apply { (layoutParams as? LinearLayout.LayoutParams)?.marginStart = dp(8) })
+                            healthCard.addView(repairRow)
+                            host.addView(healthCard, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(10) })
+                        }
 
                         if (libs != null && libs.length() > 0) {
                             val libCard = column().apply {
@@ -4435,6 +4498,164 @@ class MainActivity : AppCompatActivity() {
                             }
                             host.addView(libCard, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(10) })
                         }
+                    }
+                    "playback" -> {
+                        val nativeData = api.call("native/library")
+                        if (screen != "admin-panel" || adminPanelTab != "playback") return@launch
+                        host.removeAllViews()
+                        val streams = nativeData.objects("activeStreams")
+                        val hw = nativeData.optJSONArray("hardwareAcceleration")?.let { arr ->
+                            (0 until arr.length()).joinToString(", ") { arr.optString(it) }
+                        }.orEmpty().ifBlank { "software" }
+                        val diagCard = column().apply {
+                            background = rounded(0xFF1A1A1A.toInt(), radius = dp(10).toFloat())
+                            setPadding(dp(14), dp(12), dp(14), dp(12))
+                        }
+                        diagCard.addView(label("Playback & Hardware Diagnostics", 15f, true))
+                        diagCard.addView(TextView(this@MainActivity).apply {
+                            text = "Hardware Accel: $hw • Active Streams: ${streams.size}"
+                            textSize = 12f; setTextColor(MUTED); setPadding(0, dp(4), 0, dp(8))
+                        })
+                        for (s in streams) {
+                            val row = LinearLayout(this@MainActivity).apply {
+                                orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+                                setPadding(0, dp(4), 0, dp(4))
+                            }
+                            row.addView(TextView(this@MainActivity).apply {
+                                text = "${s.optString("title")} (${s.optString("videoCodec")}/${s.optString("audioCodec")})"
+                                textSize = 12f; setTextColor(Color.WHITE)
+                                layoutParams = LinearLayout.LayoutParams(0, -2, 1f)
+                            })
+                            row.addView(action("Stop") {
+                                lifecycleScope.launch {
+                                    runCatching { api.call("native/library", body = JSONObject().put("action", "stopStream").put("sessionId", s.optString("id"))) }
+                                        .onSuccess { toast("Stopped stream"); adminPanel("playback") }
+                                }
+                            })
+                            diagCard.addView(row)
+                        }
+                        host.addView(diagCard, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(10) })
+
+                        val previews = nativeData.objects("introPreviews")
+                        val previewCard = column().apply {
+                            background = rounded(0xFF1A1A1A.toInt(), radius = dp(10).toFloat())
+                            setPadding(dp(14), dp(12), dp(14), dp(12))
+                        }
+                        previewCard.addView(label("Auto-Intro Previews (${previews.size})", 14f, true))
+                        if (previews.isEmpty()) {
+                            previewCard.addView(TextView(this@MainActivity).apply {
+                                text = "No unpublished intro previews awaiting review."
+                                textSize = 12f; setTextColor(MUTED); setPadding(0, dp(4), 0, 0)
+                            })
+                        }
+                        for (p in previews) {
+                            val fileId = p.optString("fileId")
+                            val startSec = p.optDouble("startSeconds")
+                            val endSec = p.optDouble("endSeconds")
+                            previewCard.addView(TextView(this@MainActivity).apply {
+                                text = "${p.optString("seriesTitle").ifBlank { p.optString("title") }} • ${startSec.toInt()}s–${endSec.toInt()}s (${(p.optDouble("confidence") * 100).toInt()}%)"
+                                textSize = 12f; setTextColor(Color.WHITE); setPadding(0, dp(6), 0, dp(4))
+                            })
+                            val pRow = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.HORIZONTAL }
+                            pRow.addView(action("Approve", primary = true) {
+                                lifecycleScope.launch {
+                                    runCatching {
+                                        api.call("native/library", body = JSONObject()
+                                            .put("action", "introPreviewApprove")
+                                            .put("fileId", fileId)
+                                            .put("startSeconds", startSec)
+                                            .put("endSeconds", endSec))
+                                    }.onSuccess { toast("Intro published"); adminPanel("playback") }
+                                }
+                            })
+                            pRow.addView(action("Dismiss") {
+                                lifecycleScope.launch {
+                                    runCatching { api.call("native/library", body = JSONObject().put("action", "introPreviewDismiss").put("fileId", fileId)) }
+                                        .onSuccess { toast("Dismissed"); adminPanel("playback") }
+                                }
+                            }.apply { (layoutParams as? LinearLayout.LayoutParams)?.marginStart = dp(8) })
+                            previewCard.addView(pRow)
+                        }
+                        host.addView(previewCard, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(10) })
+                    }
+                    "maintenance" -> {
+                        val nativeData = api.call("native/library", params = mapOf("view" to "maintenance"))
+                        if (screen != "admin-panel" || adminPanelTab != "maintenance") return@launch
+                        host.removeAllViews()
+                        val tp = nativeData.optJSONObject("trickplayBackfill")
+                        val cache = nativeData.optJSONObject("cacheStats")
+                        val intro = nativeData.optJSONObject("introDetection")
+                        val backups = nativeData.objects("backups")
+
+                        val jobsCard = column().apply {
+                            background = rounded(0xFF1A1A1A.toInt(), radius = dp(10).toFloat())
+                            setPadding(dp(14), dp(12), dp(14), dp(12))
+                        }
+                        jobsCard.addView(label("Trickplay, Intro Detection & Caches", 15f, true))
+                        val tpText = if (tp?.optBoolean("running") == true) "Running ${tp.optInt("completed")}/${tp.optInt("total")}" else "Idle"
+                        val introText = if (intro?.optBoolean("running") == true) "Running ${intro.optInt("completed")}/${intro.optInt("total")}" else "Idle"
+                        val cacheMb = ((cache?.optLong("trickplayBytes") ?: 0L) + (cache?.optLong("transcodeBytes") ?: 0L) + (cache?.optLong("subtitleCacheBytes") ?: 0L)) / 1048576L
+                        jobsCard.addView(TextView(this@MainActivity).apply {
+                            text = "Trickplay Backfill: $tpText\nIntro Detection: $introText\nCached Media/Temp: ${cacheMb} MB"
+                            textSize = 12f; setTextColor(MUTED); setPadding(0, dp(4), 0, dp(8))
+                        })
+                        val mRow = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.HORIZONTAL }
+                        mRow.addView(action("Backfill Trickplay", primary = true) {
+                            lifecycleScope.launch {
+                                runCatching { api.call("native/library", body = JSONObject().put("action", "backfillTrickplay")) }
+                                    .onSuccess { toast("Trickplay backfill started"); adminPanel("maintenance") }
+                            }
+                        })
+                        mRow.addView(action("Detect Intros") {
+                            lifecycleScope.launch {
+                                runCatching { api.call("native/library", body = JSONObject().put("action", "introDetectionStart")) }
+                                    .onSuccess { toast("Intro detection started"); adminPanel("maintenance") }
+                            }
+                        }.apply { (layoutParams as? LinearLayout.LayoutParams)?.marginStart = dp(8) })
+                        mRow.addView(action("Prune Caches") {
+                            lifecycleScope.launch {
+                                runCatching { api.call("native/library", body = JSONObject().put("action", "pruneCaches")) }
+                                    .onSuccess { toast("Caches pruned"); adminPanel("maintenance") }
+                            }
+                        }.apply { (layoutParams as? LinearLayout.LayoutParams)?.marginStart = dp(8) })
+                        jobsCard.addView(mRow)
+                        host.addView(jobsCard, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(10) })
+
+                        val backupCard = column().apply {
+                            background = rounded(0xFF1A1A1A.toInt(), radius = dp(10).toFloat())
+                            setPadding(dp(14), dp(12), dp(14), dp(12))
+                        }
+                        backupCard.addView(label("SQLite Backups (${backups.size})", 14f, true))
+                        backupCard.addView(action("Create & Verify Backup", primary = true) {
+                            lifecycleScope.launch {
+                                runCatching { api.call("native/library", body = JSONObject().put("action", "backupCreate")) }
+                                    .onSuccess { toast("Backup created and verified"); adminPanel("maintenance") }
+                                    .onFailure { toast(it.message ?: "Backup failed") }
+                            }
+                        }.apply { setPadding(0, dp(8), 0, dp(8)) })
+                        for (b in backups.take(5)) {
+                            val fname = b.optString("filename")
+                            val bRow = LinearLayout(this@MainActivity).apply {
+                                orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+                                setPadding(0, dp(4), 0, dp(4))
+                            }
+                            bRow.addView(TextView(this@MainActivity).apply {
+                                text = fname
+                                textSize = 11.5f; setTextColor(Color.WHITE)
+                                layoutParams = LinearLayout.LayoutParams(0, -2, 1f)
+                            })
+                            bRow.addView(action("Verify") {
+                                lifecycleScope.launch {
+                                    runCatching { api.call("native/library", body = JSONObject().put("action", "backupVerify").put("filename", fname)) }
+                                        .onSuccess { res ->
+                                            val v = res.optJSONObject("verification")
+                                            toast(if (v?.optBoolean("ok") == true) "$fname OK (${v.optInt("tableCount")} tables)" else "Verification failed")
+                                        }
+                                }
+                            })
+                            backupCard.addView(bRow)
+                        }
+                        host.addView(backupCard, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(10) })
                     }
                     "downloads" -> {
                         while (kotlinx.coroutines.currentCoroutineContext()[kotlinx.coroutines.Job]?.isActive == true &&
