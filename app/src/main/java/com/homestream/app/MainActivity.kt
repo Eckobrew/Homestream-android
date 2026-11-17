@@ -269,7 +269,11 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        if (settings.token.isNotBlank()) { verifyProfilePolicy(); return }
+        if (settings.token.isNotBlank()) {
+            lifecycleScope.launch { runCatching { OfflineMediaStore(this@MainActivity, settings).syncPendingProgress(api) } }
+            verifyProfilePolicy()
+            return
+        }
         trailerView?.onResume()
         if (playbackWasLaunched) {
             playbackWasLaunched = false
@@ -2396,11 +2400,44 @@ class MainActivity : AppCompatActivity() {
     private fun myHomeStream() {
         rememberScreen("mine") { myHomeStream() }
         screen = "mine"
+        lifecycleScope.launch { runCatching { Watchlist(this@MainActivity, settings).syncFromServer(api) } }
         fetch("home") { data ->
             heading(if (isTelevision()) "My List" else "My HomeStream", 26f)
             val saved = Watchlist(this, settings).items()
             if (saved.isEmpty()) message("Add titles to My List to watch them later.")
             else mediaRow("My List", saved)
+            if (!isTelevision()) {
+                val offlineStore = OfflineMediaStore(this, settings)
+                val offline = offlineStore.listDownloads()
+                if (offline.isNotEmpty()) {
+                    val offlineSection = column().apply { setPadding(gutter, dp(8), gutter, dp(10)) }
+                    offlineSection.addView(label("Offline Downloads (${offline.size})", 17f, true))
+                    for (entry in offline) {
+                        val row = LinearLayout(this).apply {
+                            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+                            setPadding(0, dp(6), 0, dp(6))
+                        }
+                        row.addView(TextView(this).apply {
+                            text = "${entry.title} (${entry.quality})"
+                            textSize = 13f; setTextColor(Color.WHITE)
+                            layoutParams = LinearLayout.LayoutParams(0, -2, 1f)
+                        })
+                        row.addView(action("Play Offline", primary = true) {
+                            val m = Media(JSONObject().put("id", entry.itemId).put("title", entry.title).put("type", "Movie").put("status", "available"))
+                            startActivity(Intent(this, PlayerActivity::class.java).apply {
+                                putExtra("media", m.json.toString())
+                                putExtra("localPath", entry.localPath)
+                            })
+                        })
+                        row.addView(action("Remove") {
+                            offlineStore.removeDownload(entry.itemId, entry.versionId)
+                            myHomeStream()
+                        }.apply { (layoutParams as? LinearLayout.LayoutParams)?.marginStart = dp(8) })
+                        offlineSection.addView(row)
+                    }
+                    content.addView(offlineSection)
+                }
+            }
             data.optJSONArray("sections")?.let { rows ->
                 for (i in 0 until rows.length()) {
                     val row = rows.getJSONObject(i)
@@ -2440,8 +2477,41 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // Native device download via DownloadManager
+    // Native device download via OfflineMediaStore with quality selection (phone/tablet)
     private fun triggerDownload(item: Media) {
+        if (!isTelevision() && item.playbackId.startsWith("nat-")) {
+            val qualities = arrayOf("Original (Direct)", "1080p MP4", "720p MP4")
+            val keys = arrayOf("original", "1080p", "720p")
+            android.app.AlertDialog.Builder(this)
+                .setTitle("Download Quality — ${item.title}")
+                .setItems(qualities) { _, which ->
+                    val q = keys[which]
+                    fun startOfflineDownload() {
+                        lifecycleScope.launch {
+                            toast("Preparing ${item.title} ($q)…")
+                            runCatching {
+                                OfflineMediaStore(this@MainActivity, settings).downloadDirectItem(
+                                    item.playbackId, item.title, q, api,
+                                    onStatus = { msg -> runOnUiThread { toast(msg) } }
+                                )
+                            }.onSuccess {
+                                toast("Saved offline: ${item.title} ($q)")
+                            }.onFailure { err ->
+                                android.app.AlertDialog.Builder(this@MainActivity)
+                                    .setTitle("Download Failed")
+                                    .setMessage(err.message ?: "Offline download failed")
+                                    .setPositiveButton("Retry") { _, _ -> startOfflineDownload() }
+                                    .setNegativeButton("Close", null)
+                                    .show()
+                            }
+                        }
+                    }
+                    startOfflineDownload()
+                }
+                .setNegativeButton("Cancel", null)
+                .show()
+            return
+        }
         lifecycleScope.launch {
             try {
                 toast("Preparing download: ${item.title}…")

@@ -61,29 +61,55 @@ class OfflineMediaStore(private val context: Context, private val settings: Conn
         quality: String,
         api: HomeStreamApi,
         versionId: String? = null,
+        onStatus: ((String) -> Unit)? = null,
     ): OfflineDownloadEntry = withContext(Dispatchers.IO) {
         val params = mutableMapOf("itemId" to itemId, "receiver" to "android")
         if (!versionId.isNullOrBlank()) params["versionId"] = versionId
-        when (quality) {
-            "1080p" -> { params["maxWidth"] = "1920"; params["maxHeight"] = "1080" }
-            "720p" -> { params["maxWidth"] = "1280"; params["maxHeight"] = "720" }
-        }
         val pb = api.call("playback", params = params)
-        val streamUrl = pb.optString("streamUrl")
-        val contentType = pb.optString("contentType")
-        require(streamUrl.isNotBlank()) { "No playable stream available for offline download" }
-        require(
-            !pb.optBoolean("isTranscoding") &&
-                !streamUrl.contains(".m3u8", ignoreCase = true) &&
-                !contentType.contains("mpegurl", ignoreCase = true)
-        ) { "HLS/transcoded streams are not supported for direct offline download" }
-
         val resolvedVersion = pb.optString("selectedVersionId").takeIf { it.isNotBlank() } ?: versionId
+        val rawStreamUrl = pb.optString("streamUrl")
+        val contentType = pb.optString("contentType")
+
+        val downloadPath = if (itemId.startsWith("nat-") && !resolvedVersion.isNullOrBlank()) {
+            val q = mutableListOf("fileId=${java.net.URLEncoder.encode(resolvedVersion, "UTF-8")}", "download=1")
+            when (quality) {
+                "1080p" -> q.add("maxHeight=1080")
+                "720p" -> q.add("maxHeight=720")
+            }
+            val baseDl = "/api/mobile/v1/native/stream?${q.joinToString("&")}"
+            val prepParams = mutableMapOf("fileId" to resolvedVersion, "download" to "1", "prepare" to "1")
+            when (quality) {
+                "1080p" -> prepParams["maxHeight"] = "1080"
+                "720p" -> prepParams["maxHeight"] = "720"
+            }
+            onStatus?.invoke("Preparing $quality MP4…")
+            var ready = false
+            for (attempt in 0 until 300) {
+                val prep = api.call("native/stream", params = prepParams)
+                when (prep.optString("status")) {
+                    "ready" -> { ready = true; break }
+                    "failed" -> error(prep.optString("error", "Offline conversion failed"))
+                    else -> kotlinx.coroutines.delay(2_000)
+                }
+            }
+            require(ready) { "Timed out waiting for offline $quality MP4 export" }
+            onStatus?.invoke("Downloading $quality MP4…")
+            baseDl
+        } else {
+            require(rawStreamUrl.isNotBlank()) { "No playable stream available for offline download" }
+            require(
+                !pb.optBoolean("isTranscoding") &&
+                    !rawStreamUrl.contains(".m3u8", ignoreCase = true) &&
+                    !contentType.contains("mpegurl", ignoreCase = true)
+            ) { "HLS/transcoded streams are only supported for native MP4 offline downloads" }
+            rawStreamUrl
+        }
+
         val safeBase = "${itemId}_${resolvedVersion ?: "default"}".replace(Regex("[^a-zA-Z0-9_-]"), "_")
         val target = File(offlineDir, "$safeBase.mp4")
         val tempFile = File(offlineDir, "$safeBase.mp4.tmp")
         try {
-            val req = Request.Builder().url(api.absolute(streamUrl)).build()
+            val req = Request.Builder().url(api.absolute(downloadPath)).build()
             api.mediaClient().newCall(req).execute().use { resp ->
                 require(resp.isSuccessful) { "Download failed (${resp.code})" }
                 val respType = resp.header("Content-Type").orEmpty()
@@ -92,6 +118,8 @@ class OfflineMediaStore(private val context: Context, private val settings: Conn
                 tempFile.outputStream().use { out -> body.byteStream().copyTo(out) }
             }
             require(tempFile.exists() && tempFile.length() > 0L) { "Downloaded file was empty" }
+            val headBytes = tempFile.inputStream().use { inp -> ByteArray(16).also { buf -> inp.read(buf, 0, 16) } }
+            require(!headBytes.decodeToString().startsWith("#EXTM3U")) { "Downloaded file was an HLS playlist instead of media" }
             if (target.exists()) target.delete()
             check(tempFile.renameTo(target)) { "Failed to finalize offline download" }
         } finally {
@@ -124,6 +152,14 @@ class OfflineMediaStore(private val context: Context, private val settings: Conn
             val entry = current.optJSONObject(itemId)
             val posMs = entry?.optLong("positionMs", -1L) ?: -1L
             if (posMs <= 0L) {
+                current.remove(itemId)
+                continue
+            }
+            val serverAhead = runCatching {
+                val detail = api.call("media/$itemId").optJSONObject("item")
+                detail != null && (detail.optBoolean("played") || detail.optLong("playbackPositionTicks", 0L) > posMs * 10_000L)
+            }.getOrDefault(false)
+            if (serverAhead) {
                 current.remove(itemId)
                 continue
             }

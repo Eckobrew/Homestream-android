@@ -436,16 +436,19 @@ class PlayerActivity : AppCompatActivity() {
         playbackStarted = true
         runCatching { registerReceiver(noisyReceiver, android.content.IntentFilter(android.media.AudioManager.ACTION_AUDIO_BECOMING_NOISY)) }
         castCtx?.sessionManager?.addSessionManagerListener(sessionListener, CastSession::class.java)
+        val offlinePath = intent.getStringExtra("localPath")?.takeIf { it.isNotBlank() && java.io.File(it).exists() }
         lifecycleScope.launch {
             try {
-                if (api.refreshProfilePolicy()) { clearCastIdle(this@PlayerActivity); finish(); return@launch }
-                val session = castCtx?.sessionManager?.currentCastSession
+                if (offlinePath == null && api.refreshProfilePolicy()) { clearCastIdle(this@PlayerActivity); finish(); return@launch }
+                val session = if (offlinePath == null) castCtx?.sessionManager?.currentCastSession else null
                 if (session?.isConnected == true) cast(session) else {
                     remote?.unregisterCallback(remoteCallback); remote = null; startLocal()
                 }
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
-                showMessage(e.message ?: "Could not confirm profile")
+                val fallbackLocal = OfflineMediaStore(this@PlayerActivity, ServerSettings(this@PlayerActivity)).localFileFor(media.playbackId)
+                if (fallbackLocal != null) startLocal()
+                else showMessage(e.message ?: "Could not confirm profile")
             }
         }
         timer = lifecycleScope.launch {
@@ -766,6 +769,13 @@ class PlayerActivity : AppCompatActivity() {
         }
         setPlaybackPresentation(false)
         negotiation?.cancel(); clearMessages(); showMessage("Preparing playback…")
+        val offlinePath = intent.getStringExtra("localPath")?.takeIf { it.isNotBlank() && java.io.File(it).exists() }
+            ?: OfflineMediaStore(this, ServerSettings(this)).localFileFor(media.playbackId)?.absolutePath
+        if (offlinePath != null) {
+            clearMessages()
+            launchStreamUrl(Uri.fromFile(java.io.File(offlinePath)).toString())
+            return
+        }
         if (media.isDownload || media.source == "youtube") {
             isStreamingDownload = true
             launchStreamUrl(media.downloadUrl)
@@ -1642,7 +1652,9 @@ class PlayerActivity : AppCompatActivity() {
         // A final report must survive Activity destruction (Back/rotation).
         (application as HomeStreamApplication).enqueuePlaybackReport {
             if (launcherScope.isNotBlank()) runCatching { WatchNext.record(applicationContext, launcherMedia, snapshot, launcherDuration, launcherScope) }
-            runCatching { api.progress(activeId, snapshot, paused, stopped, started) }
+            runCatching { api.progress(activeId, snapshot, paused, stopped, started) }.onFailure {
+                OfflineMediaStore(applicationContext, ServerSettings(applicationContext)).queueOfflineProgress(activeId, snapshot)
+            }
         }
     }
     private fun releaseLocal() {
