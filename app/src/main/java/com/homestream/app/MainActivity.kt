@@ -1258,21 +1258,23 @@ class MainActivity : AppCompatActivity() {
             // Handle content sections per tab
             when (tab) {
                 "home" -> {
-                    // Continue watching row
-                    data.optJSONArray("sections")?.let { rows ->
-                        for (i in 0 until rows.length()) {
-                            val row = rows.getJSONObject(i)
-                            if (row.optString("id") == "continue-watching") {
-                                mediaRow(row.optString("title"), row.mediaList("items"), isContinueWatching = true)
-                            }
-                        }
-                        for (i in 0 until rows.length()) {
-                            val row = rows.getJSONObject(i)
-                            if (row.optString("id") != "continue-watching") {
-                                mediaRow(row.optString("title"), row.mediaList("items"))
-                            }
-                        }
-                    }
+                    val rows = data.optJSONArray("sections")
+                    val homeRows = (0 until (rows?.length() ?: 0)).map { rows!!.getJSONObject(it) }
+                        .filter { it.optString("id") != "my-requests" }
+                    val ordered = linkedMapOf<String, JSONObject>()
+                    fun addRow(id: String) { homeRows.find { it.optString("id") == id }?.let { ordered[id] = it } }
+                    addRow("continue-watching")
+                    ordered.values.forEach { row -> mediaRow(row.optString("title"), row.mediaList("items"), isContinueWatching = true) }
+                    val saved = Watchlist(this, settings).items()
+                    if (saved.isNotEmpty()) mediaRow("My List", saved)
+                    ordered.clear()
+                    addRow("top-10")
+                    homeRows.filter { it.optString("id").startsWith("recommended") }.forEach { ordered[it.optString("id")] = it }
+                    listOf("trending-tmdb", "recent-movies", "recent-series").forEach { addRow(it) }
+                    homeRows.filter { it.optString("id") != "continue-watching" }.forEach { ordered.putIfAbsent(it.optString("id"), it) }
+                    ordered.values.forEach { row -> mediaRow(row.optString("title"), row.mediaList("items")) }
+                    // The web home feed appends the same discovery genre rows.
+                    loadCategorySectionsIntoContent("requests")
                 }
                 "series" -> {
                     // Continue watching TV
@@ -1286,7 +1288,7 @@ class MainActivity : AppCompatActivity() {
                         }
                     }
                     // Fetch category suggestions for TV Shows
-                    loadCategorySectionsIntoContent("tv")
+                    loadCategorySectionsIntoContent("series")
                 }
                 "movies" -> {
                     // Continue watching Movies
