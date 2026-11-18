@@ -122,6 +122,7 @@ class MainActivity : AppCompatActivity() {
     private var activeBarSession: NetworkSession? = null
     private var policyReady = false
     private var playbackWasLaunched = false
+    private var playbackProgressChanged = false
     private var lastDetails: Media? = null
     private val gutter get() = dp(if (isTelevision()) 48 else 20)
 
@@ -172,7 +173,9 @@ class MainActivity : AppCompatActivity() {
                 input.setText(text); input.setSelection(cursor.coerceIn(0, text.length))
             }
         }
-        if (saved.loading || saved.screen in listOf("requests", "music", "youtube", "books")) saved.reload?.invoke()
+        val refreshProgress = playbackProgressChanged && saved.screen in listOf("home", "series", "movies")
+        if (refreshProgress) playbackProgressChanged = false
+        if (saved.loading || refreshProgress || saved.screen in listOf("requests", "music", "youtube", "books")) saved.reload?.invoke()
         else root.post { saved.focus?.takeIf { it.isAttachedToWindow }?.requestFocus() }
         return true
     }
@@ -189,7 +192,11 @@ class MainActivity : AppCompatActivity() {
         lifecycleScope.launch {
             repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.RESUMED) {
                 (application as HomeStreamApplication).playbackProgressSaved.collect {
-                    if (policyReady && ::root.isInitialized && screen in listOf("home", "series", "movies")) loadTab(currentTab)
+                    playbackProgressChanged = true
+                    if (policyReady && ::root.isInitialized && screen in listOf("home", "series", "movies")) {
+                        playbackProgressChanged = false
+                        loadTab(currentTab)
+                    }
                 }
             }
         }
@@ -323,6 +330,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        if (playbackWasLaunched) playbackProgressChanged = true
         if (settings.token.isNotBlank()) {
             lifecycleScope.launch { runCatching { OfflineMediaStore(this@MainActivity, settings).syncPendingProgress(api) } }
             verifyProfilePolicy()
