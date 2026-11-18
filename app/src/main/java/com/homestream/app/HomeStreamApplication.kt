@@ -14,6 +14,8 @@ class HomeStreamApplication : Application() {
     // Bounded HTTP requests finish even when the player Activity is destroyed.
     val playbackReports = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
+    val playbackProgressSaved = kotlinx.coroutines.flow.MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+
     private val progressQueue = kotlinx.coroutines.channels.Channel<suspend () -> Unit>(64)
     init {
         playbackReports.launch { for (report in progressQueue) runCatching { report() } }

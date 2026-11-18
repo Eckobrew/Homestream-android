@@ -194,6 +194,8 @@ internal fun HomeStreamApplication.observeCastProgress() {
                             stopped = event.stopped,
                             recordedAtMs = recordedAt,
                         )
+                    }.onSuccess {
+                        if (event.stopped) playbackProgressSaved.tryEmit(Unit)
                     }.onFailure {
                         val label = if (event.stopped) "Cast stop progress" else "Cast progress"
                         android.util.Log.w("HomeStream", "Could not save $label")

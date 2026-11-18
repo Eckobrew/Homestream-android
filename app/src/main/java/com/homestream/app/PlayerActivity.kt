@@ -1907,7 +1907,9 @@ class PlayerActivity : AppCompatActivity() {
         // A final report must survive Activity destruction (Back/rotation).
         (application as HomeStreamApplication).enqueuePlaybackReport {
             if (launcherScope.isNotBlank()) runCatching { WatchNext.record(applicationContext, launcherMedia, snapshot, launcherDuration, launcherScope) }
-            runCatching { api.progress(activeId, snapshot, paused, stopped, started, recordedAt) }.onFailure {
+            runCatching { api.progress(activeId, snapshot, paused, stopped, started, recordedAt) }.onSuccess {
+                if (stopped) (application as HomeStreamApplication).playbackProgressSaved.tryEmit(Unit)
+            }.onFailure {
                 OfflineMediaStore(applicationContext, ServerSettings(applicationContext)).queueOfflineProgress(activeId, snapshot)
             }
         }
