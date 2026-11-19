@@ -569,8 +569,10 @@ class MainActivity : AppCompatActivity() {
                 val remoteSession = activeBarSession
                 if (MusicService.activePlayer?.currentMediaItem != null) {
                     musicControls()
-                } else if (remoteSession != null && remoteSession.isTv) {
-                    startActivity(Intent(this@MainActivity, TvRemoteActivity::class.java).putExtra("deviceId", remoteSession.deviceId))
+                } else if (remoteSession != null) {
+                    startActivity(Intent(this@MainActivity, TvRemoteActivity::class.java).apply {
+                        if (remoteSession.deviceId.isNotBlank()) putExtra("deviceId", remoteSession.deviceId)
+                    })
                 } else if (latestSnapshot.tvDevices.isNotEmpty()) {
                     startActivity(Intent(this@MainActivity, TvRemoteActivity::class.java))
                 }
@@ -760,7 +762,7 @@ class MainActivity : AppCompatActivity() {
             nowPlayingPlayBtn?.visibility = if (controllable) View.VISIBLE else View.GONE
             nowPlayingPlayBtn?.setImageResource(if (networkSession.isPlaying) R.drawable.ic_pause else R.drawable.ic_play_arrow)
             nowPlayingNextBtn?.visibility = if (controllable && (networkSession.canSkipNext || networkSession.mediaType == "video")) View.VISIBLE else View.GONE
-            nowPlayingRemoteBtn?.visibility = if (hasReachableTv || networkSession.isTv) View.VISIBLE else View.GONE
+            nowPlayingRemoteBtn?.visibility = if (hasReachableTv || networkSession.isTv || networkSession.deviceId.isNotBlank()) View.VISIBLE else View.GONE
             bar.visibility = View.VISIBLE
             return
         }
