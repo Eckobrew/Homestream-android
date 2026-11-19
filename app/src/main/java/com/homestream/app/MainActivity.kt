@@ -2133,7 +2133,7 @@ class MainActivity : AppCompatActivity() {
             // Synopsis
             metaSection.addView(TextView(this).apply {
                 text = full.overview; textSize = 13f; setTextColor(0xFFCCCCCC.toInt())
-                setPadding(0, dp(12), 0, dp(14)); setLineSpacing(dp(2).toFloat(), 1f)
+                setPadding(0, dp(10), 0, dp(4)); setLineSpacing(dp(2).toFloat(), 1f)
             })
 
             content.addView(metaSection)
@@ -2144,7 +2144,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun renderDetailsSubTabs(full: Media) {
-        val tabContainer = column().apply { setPadding(gutter, dp(6), gutter, dp(16)) }
+        val tabContainer = column().apply { setPadding(gutter, 0, gutter, dp(16)) }
         val tabHeader = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
 
         val isTv = full.type == "Series"
@@ -2168,7 +2168,7 @@ class MainActivity : AppCompatActivity() {
                     addView(TextView(this@MainActivity).apply {
                         text = title; textSize = 14f; typeface = android.graphics.Typeface.DEFAULT_BOLD
                         setTextColor(if (active) Color.WHITE else MUTED)
-                        setPadding(0, dp(10), 0, dp(10))
+                        setPadding(0, dp(8), 0, dp(6))
                     })
                     setOnClickListener { selectedTab = index; updateTabs(); if (isTelevision()) tabHeader.getChildAt(index)?.requestFocus() }
                 }
@@ -2200,30 +2200,31 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        // Season Selector Pills (Season 1, Season 2, etc.)
-        val seasonPillsScroll = HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false }
-        val seasonPills = LinearLayout(this).apply { setPadding(0, dp(10), 0, dp(14)) }
+        // Netflix-style Season Dropdown
         var currentSeasonIndex = 0
+        val seasonNames = (0 until seasons.length()).map { i ->
+            seasons.getJSONObject(i).optString("name", "Season ${i + 1}")
+        }
+        val seasonDropdown = TextView(this).apply {
+            text = "${seasonNames.firstOrNull() ?: "Season 1"}  ▾"
+            textSize = 13.5f
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
+            setTextColor(Color.WHITE)
+            background = rounded(0xFF262626.toInt(), stroke = 0x33FFFFFF, radius = dp(6).toFloat(), strokeWidth = dp(1))
+            setPadding(dp(14), dp(8), dp(14), dp(8))
+            isClickable = true; isFocusable = true
+        }
+        val seasonBar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, dp(4), 0, dp(8))
+            addView(seasonDropdown)
+        }
 
         val episodesContainer = column()
 
         fun showEpisodesForSeason(seasonIdx: Int) {
             currentSeasonIndex = seasonIdx
-            seasonPills.removeAllViews()
-            for (i in 0 until seasons.length()) {
-                val sObj = seasons.getJSONObject(i)
-                val sName = sObj.optString("name", "Season ${i + 1}")
-                val pill = action(sName, primary = (i == currentSeasonIndex)) {
-                    showEpisodesForSeason(i)
-                }.apply {
-                    textSize = 12f; minHeight = dp(34); minimumHeight = dp(34)
-                    setPadding(dp(12), 0, dp(12), 0)
-                    background = rounded(if (i == currentSeasonIndex) Color.WHITE else 0x33FFFFFF.toInt(), radius = dp(16).toFloat())
-                    setTextColor(if (i == currentSeasonIndex) Color.BLACK else Color.WHITE)
-                    layoutParams = LinearLayout.LayoutParams(-2, dp(34)).apply { marginEnd = dp(8) }
-                }
-                seasonPills.addView(pill)
-            }
+            seasonDropdown.text = "${seasonNames.getOrElse(seasonIdx) { "Season ${seasonIdx + 1}" }}  ▾"
 
             episodesContainer.removeAllViews()
             val seasonObj = seasons.getJSONObject(currentSeasonIndex)
@@ -2347,8 +2348,19 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        seasonPillsScroll.addView(seasonPills)
-        container.addView(seasonPillsScroll)
+        seasonDropdown.setOnClickListener { anchor ->
+            if (seasons.length() <= 1) return@setOnClickListener
+            val popup = android.widget.PopupMenu(this, anchor)
+            seasonNames.forEachIndexed { idx, name ->
+                popup.menu.add(0, idx, idx, name)
+            }
+            popup.setOnMenuItemClickListener { item ->
+                showEpisodesForSeason(item.itemId)
+                true
+            }
+            popup.show()
+        }
+        container.addView(seasonBar)
         container.addView(episodesContainer)
         showEpisodesForSeason(0)
     }
@@ -2370,8 +2382,8 @@ class MainActivity : AppCompatActivity() {
         val viewport = content.parent as? ScrollView
         val scroll = viewport?.scrollY ?: 0
         container.removeAllViews()
-        if (!title.isNullOrBlank()) container.addView(label(title, 16f, true).apply { setPadding(0, dp(10), 0, dp(8)) })
-        if (items.isEmpty()) { container.addView(label("No titles available.", 13f).apply { setTextColor(MUTED) }); return }
+        if (!title.isNullOrBlank()) container.addView(label(title, 15f, true).apply { setPadding(0, dp(4), 0, dp(6)) })
+        if (items.isEmpty()) { container.addView(label("No titles available.", 13f).apply { setTextColor(MUTED); setPadding(0, dp(4), 0, dp(4)) }); return }
         val grid = GridLayout(this).apply { columnCount = if (isTelevision()) 5 else 3 }
         items.forEachIndexed { index, item ->
             val card = column().apply {
@@ -2427,7 +2439,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun renderCollectionTab(full: Media, container: LinearLayout) {
-        detailsGridRequest("media/${Uri.encode(full.id)}/collection", emptyMap(), container, collection = true)
+        val params = if (full.tmdbId > 0) mapOf("tmdbId" to full.tmdbId.toString()) else emptyMap()
+        detailsGridRequest("media/${Uri.encode(full.id)}/collection", params, container, collection = true)
     }
 
     private fun renderMoreLikeThisTab(full: Media, container: LinearLayout) {
