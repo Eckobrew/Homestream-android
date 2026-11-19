@@ -25,6 +25,8 @@ class ProfilesActivity : AppCompatActivity() {
     private val avatars = listOf("fox", "owl", "panda", "cat", "bear", "penguin", "robot", "astronaut")
     private var parentPinConfigured = false
     private var activeProfile: JSONObject? = null
+    private var editMode = false
+    private lateinit var editToggle: TextView
     private val ratingBands = listOf("U", "PG", "12", "15", "18")
     private val gutter get() = dp(if (isTelevision()) 48 else 20)
 
@@ -40,8 +42,23 @@ class ProfilesActivity : AppCompatActivity() {
             setImageResource(R.drawable.ic_arrow_back); imageTintList = android.content.res.ColorStateList.valueOf(Color.WHITE)
             contentDescription = "Back"; background = rounded(0xFF202020.toInt(), radius = dp(24).toFloat())
             setOnClickListener { finish() }; isFocusable = true
-        }, LinearLayout.LayoutParams(dp(48), dp(48)).apply { marginEnd = dp(16) })
-        header.addView(label("HOMESTREAM", if (isTelevision()) 24f else 20f, true).apply { setTextColor(RED) }, LinearLayout.LayoutParams(0, -2, 1f))
+        }, LinearLayout.LayoutParams(dp(42), dp(42)))
+        header.addView(label("HOMESTREAM", if (isTelevision()) 24f else 20f, true).apply {
+            setTextColor(RED); letterSpacing = 0.08f; gravity = Gravity.CENTER
+        }, LinearLayout.LayoutParams(0, -2, 1f))
+        editToggle = TextView(this).apply {
+            text = "Edit"
+            textSize = 14f; typeface = android.graphics.Typeface.DEFAULT_BOLD
+            setTextColor(Color.WHITE)
+            setPadding(dp(12), dp(8), dp(8), dp(8))
+            isClickable = true; isFocusable = true
+            setOnClickListener {
+                editMode = !editMode
+                text = if (editMode) "Done" else "Edit"
+                refresh()
+            }
+        }
+        header.addView(editToggle)
         root.addView(header)
         page = column().apply { setPadding(gutter, dp(12), gutter, dp(28)) }
         root.addView(ScrollView(this).apply { addView(page) }, LinearLayout.LayoutParams(-1, 0, 1f))
@@ -73,38 +90,89 @@ class ProfilesActivity : AppCompatActivity() {
                 val list = response.optJSONArray("profiles")
                 val canManage = response.optBoolean("canManage")
                 page.removeAllViews()
-                page.addView(label("Who’s watching?", if (isTelevision()) 38f else 30f, true).apply { setPadding(dp(6), dp(16), 0, dp(8)) })
-                page.addView(label("Your own favourites, progress and recommendations.", 14f).apply { setTextColor(MUTED); setPadding(dp(6), 0, 0, dp(20)) })
-                val grid = GridLayout(this@ProfilesActivity).apply { columnCount = if (isTelevision()) 4 else 2 }
+                page.gravity = Gravity.CENTER_HORIZONTAL
+                page.addView(label("Who’s watching?", if (isTelevision()) 36f else 22f, true).apply {
+                    gravity = Gravity.CENTER_HORIZONTAL
+                    setPadding(0, dp(if (isTelevision()) 28 else 20), 0, dp(24))
+                })
+                val cols = if (isTelevision()) 4 else 2
+                val grid = GridLayout(this@ProfilesActivity).apply {
+                    columnCount = cols
+                }
                 val current = response.optString("activeProfileId").ifBlank { settings.profile }.ifBlank { list?.optJSONObject(0)?.optString("id").orEmpty() }
+                val avatarSize = if (isTelevision()) 128 else 108
                 for (index in 0 until (list?.length() ?: 0)) {
                     val profile = list!!.getJSONObject(index)
-                    if (profile.optString("id") == current) activeProfile = profile
-                    val cell = column()
+                    val isCurrent = profile.optString("id") == current
+                    if (isCurrent) activeProfile = profile
                     val card = column().apply {
-                        gravity = Gravity.CENTER; setPadding(dp(12), dp(16), dp(12), dp(16)); focusableCard(0xFF141414.toInt())
-                        contentDescription = "${profile.optString("name")}${if (profile.optString("id") == current) ", current profile" else ""}"
+                        gravity = Gravity.CENTER_HORIZONTAL
+                        setPadding(dp(10), dp(10), dp(10), dp(12))
+                        focusableCard(Color.TRANSPARENT)
+                        contentDescription = "${profile.optString("name")}${if (isCurrent) ", current profile" else ""}"
                         setOnClickListener {
-                            selectProfile(profile)
+                            if (editMode) edit(profile, canManage) else selectProfile(profile)
                         }
                     }
                     val stock = profile.optString("avatarId").ifBlank { avatars[index % avatars.size] }
-                    val size = if (isTelevision()) 112 else 88
-                    card.addView(avatarImage(stock, size), LinearLayout.LayoutParams(dp(size), dp(size)))
-                    card.addView(label(profile.optString("name"), 17f, true).apply {
-                        gravity = Gravity.CENTER; maxLines = 2; setPadding(0, dp(10), 0, 0)
+                    val avatarBox = FrameLayout(this@ProfilesActivity).apply {
+                        background = rounded(
+                            0xFF202020.toInt(),
+                            stroke = if (isCurrent) Color.WHITE else Color.TRANSPARENT,
+                            radius = dp(10).toFloat(),
+                            strokeWidth = dp(2)
+                        )
+                        clipToOutline = true
+                    }
+                    avatarBox.addView(avatarImage(stock, avatarSize), FrameLayout.LayoutParams(-1, -1))
+                    if (editMode) {
+                        avatarBox.addView(TextView(this@ProfilesActivity).apply {
+                            text = "✎"
+                            textSize = 24f; setTextColor(Color.WHITE); gravity = Gravity.CENTER
+                            setBackgroundColor(0x99000000.toInt())
+                        }, FrameLayout.LayoutParams(-1, -1))
+                    }
+                    card.addView(avatarBox, LinearLayout.LayoutParams(dp(avatarSize), dp(avatarSize)))
+                    card.addView(label(profile.optString("name"), 15f, isCurrent).apply {
+                        gravity = Gravity.CENTER; maxLines = 1; setPadding(0, dp(8), 0, 0)
+                        setTextColor(if (isCurrent) Color.WHITE else MUTED)
                     })
-                    if (profile.optString("id") == current) card.addView(label("Current profile", 12f).apply { gravity = Gravity.CENTER; setTextColor(MUTED) })
-                    if (profile.optBoolean("isKids")) card.addView(label("Kids · ${profile.optString("kidsRating")}", 13f).apply { gravity = Gravity.CENTER; setTextColor(MUTED) })
-                    cell.addView(card, LinearLayout.LayoutParams(-1, -2))
-                    cell.addView(action("Edit profile") { edit(profile, canManage) }, LinearLayout.LayoutParams(-1, dp(48)))
-                    grid.addView(cell, GridLayout.LayoutParams(GridLayout.spec(index / grid.columnCount), GridLayout.spec(index % grid.columnCount, GridLayout.FILL, 1f)).apply {
-                        width = 0; height = -2; setMargins(dp(6), dp(12), dp(6), dp(12))
+                    if (profile.optBoolean("isKids")) {
+                        card.addView(label("KIDS", 10.5f, true).apply {
+                            gravity = Gravity.CENTER; setTextColor(0xFF38BDF8.toInt()); setPadding(0, dp(2), 0, 0)
+                        })
+                    }
+                    grid.addView(card, GridLayout.LayoutParams(GridLayout.spec(index / cols), GridLayout.spec(index % cols, GridLayout.FILL, 1f)).apply {
+                        width = 0; height = -2; setMargins(dp(6), dp(6), dp(6), dp(10))
                     })
                 }
-                page.addView(grid, LinearLayout.LayoutParams(-1, -2))
-                if (canManage) page.addView(action("+ Add profile", primary = true) { edit(null, true) })
-                else page.addView(label("Sign in with a paired household device to add or link profiles.", 13f).apply { setTextColor(MUTED) })
+                if (canManage) {
+                    val addIndex = list?.length() ?: 0
+                    val addCard = column().apply {
+                        gravity = Gravity.CENTER_HORIZONTAL
+                        setPadding(dp(10), dp(10), dp(10), dp(12))
+                        focusableCard(Color.TRANSPARENT)
+                        setOnClickListener { edit(null, true) }
+                    }
+                    val plusBox = FrameLayout(this@ProfilesActivity).apply {
+                        background = rounded(0xFF1A1A1A.toInt(), stroke = 0x33FFFFFF, radius = dp(10).toFloat(), strokeWidth = dp(1))
+                    }
+                    plusBox.addView(TextView(this@ProfilesActivity).apply {
+                        text = "+"; textSize = 36f; setTextColor(MUTED); gravity = Gravity.CENTER
+                    }, FrameLayout.LayoutParams(-1, -1))
+                    addCard.addView(plusBox, LinearLayout.LayoutParams(dp(avatarSize), dp(avatarSize)))
+                    addCard.addView(label("Add Profile", 14f).apply {
+                        gravity = Gravity.CENTER; setTextColor(MUTED); setPadding(0, dp(8), 0, 0)
+                    })
+                    grid.addView(addCard, GridLayout.LayoutParams(GridLayout.spec(addIndex / cols), GridLayout.spec(addIndex % cols, GridLayout.FILL, 1f)).apply {
+                        width = 0; height = -2; setMargins(dp(6), dp(6), dp(6), dp(10))
+                    })
+                }
+                val gridWrapWidth = if (isTelevision()) -1 else dp(320).coerceAtMost(resources.displayMetrics.widthPixels - dp(24))
+                page.addView(grid, LinearLayout.LayoutParams(gridWrapWidth, -2))
+                if (!canManage) page.addView(label("Sign in with a paired household device to add or link profiles.", 13f).apply {
+                    setTextColor(MUTED); gravity = Gravity.CENTER; setPadding(0, dp(12), 0, 0)
+                })
                 if ((list?.length() ?: 0) == 0) page.addView(label("No profiles yet. Add your first profile to get started.", 15f))
                 if (isTelevision()) page.post {
                     val targets = ArrayList<View>(); page.addFocusables(targets, View.FOCUS_FORWARD)

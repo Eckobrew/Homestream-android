@@ -3114,45 +3114,77 @@ class MainActivity : AppCompatActivity() {
         discoveredLocalUrl: String = "",
         discoveredName: String = ""
     ) {
-        val form = column().apply { setPadding(dp(20), dp(10), dp(20), dp(10)) }
-
-        form.addView(label("Server Address (Local IP or External URL)", 13.5f, true))
-        val extUrlInput = EditText(this).apply {
-            hint = "http://192.168.1.x:3000 or https://homeflix.example.com"
-            setText(prefilledUrl.ifBlank { settings.baseUrl.ifBlank { settings.externalUrl } })
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
-            isSingleLine = true
+        val jDialog = android.app.Dialog(this, android.R.style.Theme_Black_NoTitleBar_Fullscreen)
+        val screenRoot = column().apply {
+            setBackgroundColor(INK)
         }
-        form.addView(extUrlInput, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(10) })
-
-        form.addView(label("External URL (Optional, for remote access away from home)", 12.5f, true))
-        val remoteUrlInput = EditText(this).apply {
-            hint = "https://homeflix.example.com"
-            val initialExt = settings.externalUrl.takeIf { it.isNotBlank() && it != prefilledUrl } ?: ""
-            setText(initialExt)
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
-            isSingleLine = true
+        val topBar = LinearLayout(this).apply {
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(gutter, dp(16), gutter, dp(8))
         }
-        form.addView(remoteUrlInput, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(10) })
+        val cancelBtn = ImageButton(this).apply {
+            setImageResource(R.drawable.ic_arrow_back)
+            imageTintList = ColorStateList.valueOf(Color.WHITE)
+            background = rounded(0xFF202020.toInt(), radius = dp(20).toFloat())
+            contentDescription = "Cancel"
+            setOnClickListener { jDialog.dismiss() }
+        }
+        topBar.addView(cancelBtn, LinearLayout.LayoutParams(dp(40), dp(40)))
+        topBar.addView(label("HOMESTREAM", 20f, true).apply {
+            setTextColor(RED); letterSpacing = 0.08f; gravity = Gravity.CENTER
+        }, LinearLayout.LayoutParams(0, -2, 1f))
+        topBar.addView(View(this), LinearLayout.LayoutParams(dp(40), dp(40)))
+        screenRoot.addView(topBar)
+
+        val form = column().apply {
+            setPadding(gutter, dp(18), gutter, dp(24))
+        }
+        form.addView(label("Sign In", 28f, true).apply { setPadding(0, 0, 0, dp(18)) })
+
+        fun netflixInput(hintText: String, initial: String = "", type: Int = InputType.TYPE_CLASS_TEXT) = EditText(this).apply {
+            hint = hintText
+            setText(initial)
+            setTextColor(Color.WHITE)
+            setHintTextColor(MUTED)
+            textSize = 14f
+            inputType = type
+            isSingleLine = true
+            background = rounded(0xFF242424.toInt(), radius = dp(8).toFloat())
+            setPadding(dp(14), dp(13), dp(14), dp(13))
+        }
+
+        form.addView(label("Server Address", 12.5f, true).apply { setTextColor(MUTED); setPadding(0, 0, 0, dp(6)) })
+        val extUrlInput = netflixInput(
+            "http://192.168.1.x:3000 or https://homeflix.example.com",
+            prefilledUrl.ifBlank { settings.baseUrl.ifBlank { settings.externalUrl } },
+            InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
+        )
+        form.addView(extUrlInput, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(12) })
+
+        form.addView(label("External URL (Optional, for remote access)", 12.5f, true).apply { setTextColor(MUTED); setPadding(0, 0, 0, dp(6)) })
+        val remoteUrlInput = netflixInput(
+            "https://homeflix.example.com",
+            settings.externalUrl.takeIf { it.isNotBlank() && it != prefilledUrl } ?: "",
+            InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
+        )
+        form.addView(remoteUrlInput, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(14) })
 
         val usersBox = column().apply { visibility = View.GONE }
-        val usersLabel = label("Select User", 13.5f, true)
+        val usersLabel = label("Select User", 12.5f, true).apply { setTextColor(MUTED); setPadding(0, 0, 0, dp(6)) }
         val usersContainer = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL; setPadding(0, dp(4), 0, dp(8))
+            orientation = LinearLayout.HORIZONTAL; setPadding(0, dp(2), 0, dp(8))
         }
         val usersScroll = HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(usersContainer) }
         usersBox.addView(usersLabel)
         usersBox.addView(usersScroll)
-        form.addView(usersBox, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
+        form.addView(usersBox, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(10) })
 
-        val usernameInput = EditText(this).apply {
-            hint = "Username"; isSingleLine = true
-        }
-        val passwordInput = EditText(this).apply {
-            hint = "Password"; inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD; isSingleLine = true
-        }
-        form.addView(label("Username", 13.5f, true)); form.addView(usernameInput)
-        form.addView(label("Password", 13.5f, true)); form.addView(passwordInput)
+        val usernameInput = netflixInput("Username")
+        val passwordInput = netflixInput("Password", type = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD)
+        form.addView(label("Username", 12.5f, true).apply { setTextColor(MUTED); setPadding(0, 0, 0, dp(6)) })
+        form.addView(usernameInput, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(12) })
+        form.addView(label("Password", 12.5f, true).apply { setTextColor(MUTED); setPadding(0, 0, 0, dp(6)) })
+        form.addView(passwordInput, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(20) })
 
         // Helper function to fetch users from the entered URL
         var userLookupJob: Job? = null
@@ -3219,16 +3251,30 @@ class MainActivity : AppCompatActivity() {
         })
         if (extUrlInput.text.isNotBlank()) fetchServerUsers(extUrlInput.text.toString())
 
-        val jDialog = AlertDialog.Builder(this)
-            .setTitle("Sign In to HomeStream")
-            .setView(ScrollView(this).apply { addView(form) })
-            .setPositiveButton("Sign In", null)
-            .setNegativeButton("Cancel", null)
-            .create()
+        val signBtn = Button(this).apply {
+            text = "Sign In"
+            textSize = 15f; typeface = android.graphics.Typeface.DEFAULT_BOLD
+            setTextColor(Color.WHITE); isAllCaps = false
+            background = rounded(RED, radius = dp(6).toFloat())
+            minHeight = dp(48); minimumHeight = dp(48)
+        }
+        form.addView(signBtn, LinearLayout.LayoutParams(-1, dp(48)).apply { bottomMargin = dp(12) })
 
-        jDialog.setOnShowListener {
-            val signBtn = jDialog.getButton(AlertDialog.BUTTON_POSITIVE)
-            signBtn.setOnClickListener {
+        val cancelTextBtn = Button(this).apply {
+            text = "Cancel"
+            textSize = 14f
+            setTextColor(MUTED); isAllCaps = false
+            background = rounded(0x18FFFFFF, radius = dp(6).toFloat())
+            minHeight = dp(44); minimumHeight = dp(44)
+            setOnClickListener { jDialog.dismiss() }
+        }
+        form.addView(cancelTextBtn, LinearLayout.LayoutParams(-1, dp(44)))
+
+        val scrollWrap = ScrollView(this).apply { addView(form) }
+        screenRoot.addView(scrollWrap, LinearLayout.LayoutParams(-1, 0, 1f))
+        jDialog.setContentView(screenRoot)
+
+        signBtn.setOnClickListener {
                 val cleanUrl = extUrlInput.text.toString().trim().trimEnd('/')
                 val username = usernameInput.text.toString().trim()
                 val password = passwordInput.text.toString()
@@ -3305,20 +3351,42 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
             }
-        }
         jDialog.show()
     }
 
     private fun setup() {
-        var connectionDialog: AlertDialog? = null
+        var connectionDialog: android.app.Dialog? = null
         val first = settings.baseUrl.isBlank()
         if (first) { shell(); heading("Your cinema. Your collection."); message("Connect to your HomeStream server to begin.") }
-        val form = column().apply { setPadding(dp(20), dp(8), dp(20), dp(8)) }
 
-        // 1. Local Auto-Discovery Section (Jellyfin-style: pick server -> sign in with account)
+        val dialog = android.app.Dialog(this, android.R.style.Theme_Black_NoTitleBar_Fullscreen)
+        val screenRoot = column().apply { setBackgroundColor(INK) }
+        val topBar = LinearLayout(this).apply {
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(gutter, dp(16), gutter, dp(8))
+        }
+        topBar.addView(label("HOMESTREAM", 22f, true).apply {
+            setTextColor(RED); letterSpacing = 0.08f
+        }, LinearLayout.LayoutParams(0, -2, 1f))
+        val closeSetupBtn = TextView(this).apply {
+            text = if (first) "Close" else "Cancel"
+            textSize = 14f; setTextColor(MUTED)
+            setPadding(dp(12), dp(8), dp(4), dp(8))
+            isClickable = true; isFocusable = true
+        }
+        topBar.addView(closeSetupBtn)
+        screenRoot.addView(topBar)
+
+        val form = column().apply { setPadding(gutter, dp(14), gutter, dp(24)) }
+        form.addView(label("Connect to HomeStream", 26f, true).apply { setPadding(0, 0, 0, dp(6)) })
+        form.addView(label("Choose a local server or enter your server address.", 13.5f).apply {
+            setTextColor(MUTED); setPadding(0, 0, 0, dp(18))
+        })
+
+        // 1. Local Auto-Discovery Section
         val discoverySection = column().apply {
-            background = rounded(0x15FFFFFF.toInt(), radius = dp(8).toFloat())
-            setPadding(dp(12), dp(10), dp(12), dp(10))
+            background = rounded(NETFLIX_SURFACE, stroke = NETFLIX_BORDER, radius = dp(10).toFloat(), strokeWidth = dp(1))
+            setPadding(dp(14), dp(12), dp(14), dp(12))
         }
         val discTitleRow = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
         discTitleRow.addView(TextView(this).apply {
@@ -3343,15 +3411,21 @@ class MainActivity : AppCompatActivity() {
         val manualUrlInput = EditText(this).apply {
             hint = "http://192.168.1.x:3000 or https://..."
             setText(settings.baseUrl)
+            setTextColor(Color.WHITE)
+            setHintTextColor(MUTED)
+            textSize = 14f
+            background = rounded(0xFF242424.toInt(), radius = dp(8).toFloat())
+            setPadding(dp(12), dp(11), dp(12), dp(11))
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
             isSingleLine = true
             layoutParams = LinearLayout.LayoutParams(0, -2, 1f)
         }
         val manualConnectBtn = Button(this).apply {
-            text = "Connect"; textSize = 12.5f; setTextColor(Color.BLACK); isAllCaps = false
-            background = rounded(Color.WHITE, radius = dp(8).toFloat())
-            setPadding(dp(14), 0, dp(14), 0)
-            minHeight = dp(40); minimumHeight = dp(40)
+            text = "Connect"; textSize = 13f; typeface = android.graphics.Typeface.DEFAULT_BOLD
+            setTextColor(Color.WHITE); isAllCaps = false
+            background = rounded(RED, radius = dp(8).toFloat())
+            setPadding(dp(16), 0, dp(16), 0)
+            minHeight = dp(44); minimumHeight = dp(44)
             setOnClickListener {
                 val entered = manualUrlInput.text.toString().trim().trimEnd('/')
                 if (entered.isBlank()) { manualUrlInput.error = "Enter a server URL"; return@setOnClickListener }
@@ -3374,13 +3448,22 @@ class MainActivity : AppCompatActivity() {
         form.addView(externalLoginBtn, LinearLayout.LayoutParams(-1, dp(40)).apply { bottomMargin = dp(10) })
 
         var discoveryJob: Job? = null
-        val dialog = AlertDialog.Builder(this).setTitle("Connect HomeStream")
-            .setView(ScrollView(this).apply { addView(form) })
-            .setNegativeButton(if (first) "Close" else "Cancel") { _, _ ->
-                discoveryJob?.cancel()
-                if (first) finish()
-            }
-            .apply { if (!first) setNeutralButton("Disconnect") { _, _ -> discoveryJob?.cancel(); settings.clear(); resetNavigationHistory(); setup() } }.create()
+        closeSetupBtn.setOnClickListener {
+            discoveryJob?.cancel()
+            dialog.dismiss()
+            if (first) finish()
+        }
+        if (!first) {
+            form.addView(Button(this).apply {
+                text = "Disconnect Server"
+                textSize = 13f; setTextColor(RED); isAllCaps = false
+                background = rounded(0x18E50914, radius = dp(8).toFloat())
+                minHeight = dp(42); minimumHeight = dp(42)
+                setOnClickListener { discoveryJob?.cancel(); dialog.dismiss(); settings.clear(); resetNavigationHistory(); setup() }
+            }, LinearLayout.LayoutParams(-1, dp(42)).apply { topMargin = dp(8) })
+        }
+        screenRoot.addView(ScrollView(this).apply { addView(form) }, LinearLayout.LayoutParams(-1, 0, 1f))
+        dialog.setContentView(screenRoot)
 
         connectionDialog = dialog
         dialog.setOnDismissListener { discoveryJob?.cancel() }
