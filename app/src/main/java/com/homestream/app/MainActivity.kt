@@ -1636,32 +1636,29 @@ class MainActivity : AppCompatActivity() {
 
             val canPlay = item.isAvailableForPlayback
             val comingSoon = if (!canPlay) comingSoonLabel(item) else null
-            val playBtn = Button(this).apply {
-                text = when {
-                    comingSoon != null -> comingSoon
-                    canPlay -> if (item.resumeMs > 0) "▶  Resume" else "▶  Play"
-                    item.resumeMs > 0 -> "▶  Resume Stream"
-                    else -> "▶  Stream"
+            if (comingSoon != null) {
+                btnRow.addView(badgePill(comingSoon).apply {
+                    textSize = 12f
+                    setPadding(dp(12), dp(8), dp(12), dp(8))
+                }, LinearLayout.LayoutParams(-2, -2).apply { marginEnd = dp(8) })
+            } else {
+                val playBtn = Button(this).apply {
+                    text = when {
+                        canPlay -> if (item.resumeMs > 0) "▶  Resume" else "▶  Play"
+                        item.resumeMs > 0 -> "▶  Resume Stream"
+                        else -> "▶  Stream"
+                    }
+                    textSize = 14f; typeface = android.graphics.Typeface.DEFAULT_BOLD
+                    setTextColor(if (canPlay) Color.BLACK else Color.WHITE); isAllCaps = false
+                    background = rounded(if (canPlay) Color.WHITE else RED, radius = dp(6).toFloat())
+                    minHeight = dp(42); minimumHeight = dp(42)
+                    setPadding(dp(16), 0, dp(16), 0)
+                    setOnClickListener {
+                        if (canPlay) play(item) else streamMedia(item)
+                    }
                 }
-                textSize = 14f; typeface = android.graphics.Typeface.DEFAULT_BOLD
-                setTextColor(when {
-                    comingSoon != null -> MUTED
-                    canPlay -> Color.BLACK
-                    else -> Color.WHITE
-                }); isAllCaps = false
-                background = rounded(when {
-                    comingSoon != null -> 0xFF262626.toInt()
-                    canPlay -> Color.WHITE
-                    else -> RED
-                }, radius = dp(6).toFloat())
-                isEnabled = comingSoon == null
-                minHeight = dp(42); minimumHeight = dp(42)
-                setPadding(dp(16), 0, dp(16), 0)
-                setOnClickListener {
-                    if (canPlay) play(item) else if (comingSoon == null) streamMedia(item)
-                }
+                btnRow.addView(playBtn, LinearLayout.LayoutParams(0, dp(42), 1f).apply { marginEnd = dp(8) })
             }
-            btnRow.addView(playBtn, LinearLayout.LayoutParams(0, dp(42), 1f).apply { marginEnd = dp(8) })
 
             // Translucent My List Button
             val list = Watchlist(this, settings)
@@ -1751,14 +1748,22 @@ class MainActivity : AppCompatActivity() {
         copy.addView(label(item.overview, 15f).apply { maxLines = 3 })
 
         if (showActions) {
-            val actions = LinearLayout(this).apply { setPadding(0, dp(12), 0, 0) }
+            val actions = LinearLayout(this).apply { setPadding(0, dp(12), 0, 0); gravity = Gravity.CENTER_VERTICAL }
             val canPlay = item.isAvailableForPlayback
-            val playText = if (canPlay) "▶ Play" else "▶ Stream"
-            actions.addView(action(playText, true) {
-                if (canPlay && item.type != "Series") play(item)
-                else if (!canPlay) streamMedia(item)
-                else details(item)
-            })
+            val comingSoon = if (!canPlay) comingSoonLabel(item) else null
+            if (comingSoon != null) {
+                actions.addView(badgePill(comingSoon).apply {
+                    textSize = 12f
+                    setPadding(dp(12), dp(8), dp(12), dp(8))
+                }, LinearLayout.LayoutParams(-2, -2).apply { marginEnd = dp(10) })
+            } else {
+                val playText = if (canPlay) "▶ Play" else "▶ Stream"
+                actions.addView(action(playText, true) {
+                    if (canPlay && item.type != "Series") play(item)
+                    else if (!canPlay) streamMedia(item)
+                    else details(item)
+                })
+            }
             actions.addView(action("More Info") {
                 if (item.source == "youtube") showYouTubeItemDialog(item) else details(item)
             })
@@ -2032,41 +2037,36 @@ class MainActivity : AppCompatActivity() {
             if (duration > 0) badges.addView(TextView(this).apply { text = "  •  ${duration}m"; textSize = 11.5f; setTextColor(MUTED) })
             metaSection.addView(badges)
 
-            // Primary Play / Stream Button
-            val playBtn = Button(this).apply {
-                val canPlay = full.isAvailableForPlayback
-                val comingSoon = if (!canPlay) comingSoonLabel(full) else null
-                val resume = full.resumeMs > 0
-                text = when {
-                    comingSoon != null -> comingSoon
-                    canPlay -> if (resume) "▶  Resume" else "▶  Play"
-                    resume -> "▶  Resume Stream"
-                    else -> "▶  Stream"
-                }
-                textSize = 14f; typeface = android.graphics.Typeface.DEFAULT_BOLD
-                setTextColor(when {
-                    comingSoon != null -> MUTED
-                    canPlay -> Color.BLACK
-                    else -> Color.WHITE
-                }); isAllCaps = false
-                background = rounded(when {
-                    comingSoon != null -> 0xFF262626.toInt()
-                    canPlay -> Color.WHITE
-                    else -> RED
-                }, radius = dp(8).toFloat())
-                isEnabled = comingSoon == null
-                minHeight = dp(46); minimumHeight = dp(46)
-                setOnClickListener {
-                    if (canPlay) {
-                        play(full)
-                    } else if (comingSoon == null) {
-                        streamMedia(full)
+            // Primary Play / Stream Button (omitted for unreleased titles; show Coming Soon badge instead)
+            val canPlay = full.isAvailableForPlayback
+            val comingSoon = if (!canPlay) comingSoonLabel(full) else null
+            var focusTarget: View? = null
+            if (comingSoon != null) {
+                metaSection.addView(badgePill(comingSoon).apply {
+                    textSize = 12.5f
+                    setPadding(dp(14), dp(8), dp(14), dp(8))
+                }, LinearLayout.LayoutParams(-2, -2).apply { bottomMargin = dp(10) })
+            } else {
+                val playBtn = Button(this).apply {
+                    val resume = full.resumeMs > 0
+                    text = when {
+                        canPlay -> if (resume) "▶  Resume" else "▶  Play"
+                        resume -> "▶  Resume Stream"
+                        else -> "▶  Stream"
+                    }
+                    textSize = 14f; typeface = android.graphics.Typeface.DEFAULT_BOLD
+                    setTextColor(if (canPlay) Color.BLACK else Color.WHITE); isAllCaps = false
+                    background = rounded(if (canPlay) Color.WHITE else RED, radius = dp(8).toFloat())
+                    minHeight = dp(46); minimumHeight = dp(46)
+                    setOnClickListener {
+                        if (canPlay) play(full) else streamMedia(full)
                     }
                 }
+                focusTarget = playBtn
+                metaSection.addView(playBtn, LinearLayout.LayoutParams(-1, dp(46)).apply { bottomMargin = dp(8) })
             }
-            metaSection.addView(playBtn, LinearLayout.LayoutParams(-1, dp(46)).apply { bottomMargin = dp(8) })
             if (isTelevision()) {
-                playBtn.post { playBtn.requestFocus() }
+                focusTarget?.post { focusTarget.requestFocus() }
             }
 
             // Secondary Buttons (+ My List, Download)
@@ -2237,12 +2237,15 @@ class MainActivity : AppCompatActivity() {
 
             episodes.forEach { ep ->
                 val canPlayEp = ep.isAvailableForPlayback
+                val epComingSoon = if (!canPlayEp) comingSoonLabel(ep) ?: comingSoonLabel(full) else null
                 val epCard = column().apply {
                     focusableCard(NETFLIX_SURFACE)
                     setPadding(dp(10), dp(10), dp(10), dp(10))
                     setOnClickListener {
                         if (canPlayEp) {
                             play(Media(JSONObject(ep.json.toString()).put("seriesId", full.playbackId).put("seriesName", full.title)))
+                        } else if (epComingSoon != null) {
+                            toast(epComingSoon)
                         } else {
                             streamMedia(ep, full)
                         }
