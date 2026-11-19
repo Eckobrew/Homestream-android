@@ -112,8 +112,7 @@ class PlayerActivity : AppCompatActivity() {
     private var episodes = EpisodeQueue()
     private var episodeJob: Job? = null
     private var titleColumn: LinearLayout? = null
-    private var queueBtn: LinearLayout? = null
-    private var queueLabel: TextView? = null
+    private var queueBtn: android.widget.ImageButton? = null
     private val subtitleAppearance by lazy { SubtitleAppearance(this) }
     private val playbackPrefs by lazy { getSharedPreferences("playback", MODE_PRIVATE) }
     private var autoplay: Boolean
@@ -509,40 +508,38 @@ class PlayerActivity : AppCompatActivity() {
             setOnClickListener { changeEpisode(1) }
         }
         updateEpisodeNavigation()
-        // Bottom-left Netflix-style Episodes / Mix button with 3-line menu icon
-        val qLabel = TextView(this).apply {
-            text = if (media.source == "youtube") "Mix (${episodes.items.size})" else "Episodes"
-            textSize = 13f
-            typeface = android.graphics.Typeface.DEFAULT_BOLD
-            setTextColor(Color.WHITE)
-        }
-        queueLabel = qLabel
-        val qBtn = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
+        // Icon-only 3-line Episodes / Mix button placed right next to Media3's settings button
+        val qBtn = android.widget.ImageButton(this).apply {
             visibility = if (episodes.items.isNotEmpty()) View.VISIBLE else View.GONE
-            background = rounded(0xCC141414.toInt(), stroke = 0x44FFFFFF, radius = dp(8).toFloat(), strokeWidth = dp(1))
-            setPadding(dp(14), dp(8), dp(16), dp(8))
+            setImageResource(R.drawable.ic_menu)
+            imageTintList = ColorStateList.valueOf(Color.WHITE)
+            background = null
+            scaleType = ImageView.ScaleType.CENTER_INSIDE
             isClickable = true
             isFocusable = true
             contentDescription = if (media.source == "youtube") "Mix Playlist" else "Episodes"
-            addView(ImageView(this@PlayerActivity).apply {
-                setImageResource(R.drawable.ic_menu)
-                imageTintList = ColorStateList.valueOf(Color.WHITE)
-            }, LinearLayout.LayoutParams(dp(18), dp(18)).apply { marginEnd = dp(8) })
-            addView(qLabel)
             setOnClickListener { showEpisodeQueue() }
         }
         queueBtn = qBtn
-        frame.addView(qBtn, FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM or Gravity.START).apply {
-            marginStart = dp(20); bottomMargin = dp(88)
-        })
+        val settingsBtn = playerView.findViewById<View>(androidx.media3.ui.R.id.exo_settings)
+        val controlsRow = settingsBtn?.parent as? android.view.ViewGroup
+        if (controlsRow != null) {
+            val idx = controlsRow.indexOfChild(settingsBtn)
+            val lp = settingsBtn.layoutParams ?: android.view.ViewGroup.LayoutParams(dp(44), dp(44))
+            controlsRow.addView(qBtn, idx.coerceAtLeast(0), lp)
+        } else {
+            frame.addView(qBtn, FrameLayout.LayoutParams(dp(44), dp(44), Gravity.BOTTOM or Gravity.END).apply {
+                marginEnd = dp(64); bottomMargin = dp(24)
+            })
+        }
 
         frame.addView(overlay, FrameLayout.LayoutParams(-1, -2, Gravity.TOP))
         playerView.setControllerVisibilityListener(PlayerView.ControllerVisibilityListener { visible ->
             val showOverlay = visible == View.VISIBLE || remote != null
             overlay.visibility = if (showOverlay) View.VISIBLE else View.GONE
-            qBtn.visibility = if (showOverlay && episodes.items.isNotEmpty()) View.VISIBLE else View.GONE
+            if (controlsRow == null) {
+                qBtn.visibility = if (showOverlay && episodes.items.isNotEmpty()) View.VISIBLE else View.GONE
+            }
             updateEpisodeNavigation()
             if (visible == View.VISIBLE) focusPlaybackControl()
         })
@@ -1485,10 +1482,9 @@ class PlayerActivity : AppCompatActivity() {
         updateEpisodeNavigation()
         val hasQueue = episodes.items.isNotEmpty()
         queueBtn?.apply {
-            visibility = if (hasQueue && (playerView.isControllerFullyVisible || remote != null)) View.VISIBLE else View.GONE
+            visibility = if (hasQueue) View.VISIBLE else View.GONE
             contentDescription = if (media.source == "youtube") "Mix Playlist" else "Episodes"
         }
-        queueLabel?.text = if (media.source == "youtube") "Mix (${episodes.items.size})" else "Episodes"
         titleColumn?.apply {
             removeAllViews()
             val series = media.json.optString("seriesName").ifBlank { media.json.optString("seriesTitle") }
@@ -1535,11 +1531,23 @@ class PlayerActivity : AppCompatActivity() {
     private fun showEpisodeQueue() {
         if (episodes.items.isEmpty()) { Toast.makeText(this, "No queue available.", Toast.LENGTH_SHORT).show(); return }
         val isYouTube = media.source == "youtube"
-        val dialog = android.app.Dialog(this, android.R.style.Theme_Black_NoTitleBar_Fullscreen)
-        val root = column().apply {
-            setBackgroundColor(INK)
-            setPadding(dp(20), dp(16), dp(20), dp(16))
+        val dialog = android.app.Dialog(this, android.R.style.Theme_Translucent_NoTitleBar_Fullscreen).apply {
+            window?.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(0x66000000))
         }
+        val backdrop = FrameLayout(this).apply {
+            setOnClickListener { dialog.dismiss() }
+        }
+        val panelWidth = dp(430).coerceAtMost((resources.displayMetrics.widthPixels * 0.90f).toInt())
+        val panelHeight = (resources.displayMetrics.heightPixels * 0.84f).toInt()
+        val root = column().apply {
+            background = rounded(0xEB141414.toInt(), stroke = 0x33FFFFFF, radius = dp(14).toFloat(), strokeWidth = dp(1))
+            elevation = dp(16).toFloat()
+            setPadding(dp(18), dp(14), dp(18), dp(14))
+            isClickable = true
+        }
+        backdrop.addView(root, FrameLayout.LayoutParams(panelWidth, panelHeight, Gravity.CENTER or Gravity.END).apply {
+            marginEnd = dp(16)
+        })
 
         // Netflix-style header bar
         val header = LinearLayout(this).apply {
@@ -1690,7 +1698,7 @@ class PlayerActivity : AppCompatActivity() {
         }
         root.addView(android.widget.ScrollView(this).apply { addView(listHost) }, LinearLayout.LayoutParams(-1, 0, 1f))
         renderList()
-        dialog.setContentView(root)
+        dialog.setContentView(backdrop)
         dialog.show()
     }
 

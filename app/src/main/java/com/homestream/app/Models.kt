@@ -12,6 +12,7 @@ data class Media(val json: JSONObject) {
     val type: String get() = json.optString("type", "Episode")
     val overview: String get() = json.optString("overview")
     val poster: String get() = json.optString("posterUrl")
+        .ifBlank { json.optString("stillUrl") }
         .ifBlank { json.optString("thumbnailUrl") }
         .ifBlank { json.optString("poster") }
         .ifBlank { json.optString("coverUrl") }
