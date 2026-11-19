@@ -45,14 +45,13 @@ class MediaHubTest {
         }
         MainActivity::class.java.getDeclaredField("api").apply { isAccessible = true }.set(activity, HomeStreamApi(settings))
     }
-    @Test fun musicAndDiscoverReplaceRequestedAndSidebarMusicPrecedesYoutube() {
+    @Test fun bottomNavIsUniversalAndExcludesRequested() {
         Robolectric.buildActivity(MainActivity::class.java).setup().use { controller ->
             val activity = controller.get(); ShadowDialog.getLatestDialog().dismiss()
             val nav = activity.findViewById<View>(R.id.phone_bottom_navigation)
             val labels = descendants(nav).filterIsInstance<TextView>().map { it.text.toString() }
-            assertEquals(listOf("Home", "TV Shows", "Movies", "Discover", "Search"), labels)
+            assertEquals(listOf("Home", "YouTube", "Music", "Books", "Settings"), labels)
             val labelsAll = descendants(activity.window.decorView).filterIsInstance<TextView>().map { it.text.toString() }
-            assertTrue(labelsAll.indexOfLast { it == "Music" } < labelsAll.indexOf("YouTube"))
             assertFalse(labelsAll.contains("Requested"))
         }
     }
@@ -76,12 +75,12 @@ class MediaHubTest {
                 fun texts() = descendants(activity.window.decorView).filterIsInstance<TextView>().map { it.text.toString() }
                 fun currentNav() = descendants(activity.window.decorView).last { it.id == R.id.phone_bottom_navigation }
                 val nav = currentNav()
-                assertEquals(listOf("Albums", "Artists", "Songs", "Playlists", "Player"),
+                assertEquals(listOf("Home", "YouTube", "Music", "Books", "Settings"),
                     descendants(nav).filterIsInstance<TextView>().map { it.text.toString() })
                 assertEquals(1, texts().count { it == "Artists" })
                 fun clickMusicTab(label: String) {
-                    val tab = descendants(currentNav()).filterIsInstance<TextView>().first { it.text == label }
-                    (tab.parent as View).performClick()
+                    val tab = descendants(activity.window.decorView).filterIsInstance<TextView>().first { it.text == label }
+                    tab.performClick()
                 }
                 waitUntil { texts().any { it.startsWith("Second album") } }
                 assertTrue(texts().any { it.startsWith("First album") })

@@ -202,9 +202,6 @@ class MainActivity : AppCompatActivity() {
         }
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
-                if (sidebarDrawer?.visibility == View.VISIBLE) {
-                    closeSidebar(); return
-                }
                 if (screen == "music" && musicArtist != null) {
                     musicArtist = null
                     mediaHub("music")
@@ -420,7 +417,6 @@ class MainActivity : AppCompatActivity() {
         if (isTelevision()) televisionShell() else phoneShell()
 
         root.addView(mainContainer, FrameLayout.LayoutParams(-1, -1))
-        setupSidebarDrawer()
         showScene(root)
     }
 
@@ -469,16 +465,15 @@ class MainActivity : AppCompatActivity() {
             setPadding(gutter, dp(6), gutter, dp(4))
         }
 
-        // Hamburger Menu Button (opens sliding sidebar)
-        header.addView(iconButton("Menu", R.drawable.ic_menu) { openSidebar() })
-
         // App Logo (bold red HOMESTREAM)
         val logo = TextView(this).apply {
             text = "HOMESTREAM"; textSize = 20f; setTextColor(RED); typeface = android.graphics.Typeface.DEFAULT_BOLD
-            letterSpacing = 0.08f; setPadding(dp(10), 0, dp(10), 0)
+            letterSpacing = 0.08f; setPadding(dp(4), 0, dp(10), 0)
             setOnClickListener { loadTab("home") }
         }
         header.addView(logo, LinearLayout.LayoutParams(0, -2, 1f))
+
+        header.addView(iconButton("Search", R.drawable.nav_search) { openSearch() })
 
         // Chromecast button
         castButton(this)?.let { header.addView(it, LinearLayout.LayoutParams(dp(40), dp(40))) }
@@ -802,81 +797,23 @@ class MainActivity : AppCompatActivity() {
             setPadding(dp(4), dp(4), dp(4), dp(4))
         }
 
-        val items: List<BottomNavItem> = when (screen) {
-            "youtube" -> listOf(
-                BottomNavItem("Home", R.drawable.nav_home, youtubeSubTab == "home") {
-                    youtubeSubTab = "home"; loadYouTube()
-                },
-                BottomNavItem("Subs", R.drawable.ic_play_arrow, youtubeSubTab == "subscriptions") {
-                    youtubeSubTab = "subscriptions"; loadYouTube()
-                },
-                BottomNavItem("Queue", R.drawable.nav_list, youtubeSubTab == "queue") {
-                    youtubeSubTab = "queue"; loadYouTube()
-                },
-                BottomNavItem("Archive", R.drawable.ic_download, youtubeSubTab == "archive") {
-                    youtubeSubTab = "archive"; loadYouTube()
-                },
-                BottomNavItem("Search", R.drawable.nav_search, youtubeSubTab == "search") {
-                    youtubeSubTab = "search"; loadYouTube()
-                }
-            )
-            "music" -> listOf(
-                BottomNavItem("Albums", R.drawable.nav_music, musicCategory == "albums") {
-                    musicCategory = "albums"; musicArtist = null; selectedPlaylistId = null; mediaHub("music")
-                },
-                BottomNavItem("Artists", R.drawable.nav_profile, musicCategory == "artists") {
-                    musicCategory = "artists"; musicArtist = null; selectedPlaylistId = null; mediaHub("music")
-                },
-                BottomNavItem("Songs", R.drawable.nav_list, musicCategory == "songs") {
-                    musicCategory = "songs"; musicArtist = null; selectedPlaylistId = null; mediaHub("music")
-                },
-                BottomNavItem("Playlists", R.drawable.ic_download, musicCategory == "playlists") {
-                    musicCategory = "playlists"; musicArtist = null; selectedPlaylistId = null; mediaHub("music")
-                },
-                BottomNavItem("Player", R.drawable.ic_play_arrow, false) {
-                    musicControls()
-                }
-            )
-            "books" -> listOf(
-                BottomNavItem("Shelf", R.drawable.nav_list, booksSubTab == "shelf") {
-                    booksSubTab = "shelf"; loadBooks()
-                },
-                BottomNavItem("Queue", R.drawable.ic_download, booksSubTab == "downloads") {
-                    booksSubTab = "downloads"; loadBooks()
-                },
-                BottomNavItem("Search", R.drawable.nav_search, booksSubTab == "discover") {
-                    booksSubTab = "discover"; loadBooks()
-                }
-            )
-            "download-manager" -> listOf(
-                BottomNavItem("qBittorrent", R.drawable.ic_download, downloadManagerSubTab == "torrents") {
-                    downloadManagerSubTab = "torrents"; adminDownloadManager()
-                },
-                BottomNavItem("System Queue", R.drawable.nav_list, downloadManagerSubTab == "system") {
-                    downloadManagerSubTab = "system"; adminDownloadManager()
-                },
-                BottomNavItem("+ Magnet", R.drawable.ic_play_arrow, false) {
-                    showAddTorrentDialog()
-                }
-            )
-            else -> listOf(
-                BottomNavItem("Home", R.drawable.nav_home, currentTab == "home" && screen == "home") {
-                    loadTab("home")
-                },
-                BottomNavItem("TV Shows", R.drawable.nav_series, currentTab == "series" && screen == "series") {
-                    loadTab("series")
-                },
-                BottomNavItem("Movies", R.drawable.nav_movies, currentTab == "movies" && screen == "movies") {
-                    loadTab("movies")
-                },
-                BottomNavItem("Discover", R.drawable.ic_download, (currentTab == "requests" || screen == "requests") && screen != "search") {
-                    loadTab("requests")
-                },
-                BottomNavItem("Search", R.drawable.nav_search, screen == "search") {
-                    openSearch()
-                }
-            )
-        }
+        val items: List<BottomNavItem> = listOf(
+            BottomNavItem("Home", R.drawable.nav_home, screen in listOf("home", "movies", "series", "requests", "search")) {
+                loadTab("home")
+            },
+            BottomNavItem("YouTube", R.drawable.ic_play_arrow, screen == "youtube") {
+                loadYouTube()
+            },
+            BottomNavItem("Music", R.drawable.nav_music, screen == "music") {
+                if (settings.isKids) toast("Music is disabled for Kids profiles") else loadTab("music")
+            },
+            BottomNavItem("Books", R.drawable.nav_list, screen == "books") {
+                if (settings.isKids) toast("Books is disabled for Kids profiles") else loadBooks()
+            },
+            BottomNavItem("Settings", R.drawable.nav_settings, screen == "admin-panel") {
+                openTrackPreferencesDialog()
+            }
+        )
 
         items.forEach { navItem ->
             val item = LinearLayout(this).apply {
@@ -927,349 +864,153 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun televisionShell() {
-        val stage = FrameLayout(this)
-        stage.addView(browseViewport(),
-            FrameLayout.LayoutParams(-1, -1).apply { marginStart = dp(76) })
+        val tvContainer = column()
 
-        val rail = column().apply {
-            id = R.id.tv_navigation_rail; gravity = Gravity.CENTER
-            setPadding(dp(8), dp(12), dp(8), dp(12))
-            background = GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT,
-                intArrayOf(INK, 0xF0080808.toInt(), 0xDD080808.toInt()))
+        // Netflix-style Android TV top navigation bar
+        val topBar = LinearLayout(this).apply {
+            id = R.id.tv_navigation_rail
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(28), dp(14), dp(28), dp(10))
+            background = GradientDrawable(
+                GradientDrawable.Orientation.TOP_BOTTOM,
+                intArrayOf(0xF0080808.toInt(), 0xCC080808.toInt(), 0x00080808)
+            )
         }
 
-        val entries = listOfNotNull(
-            Triple("Home", R.drawable.nav_home, { loadTab("home") }),
-            Triple("Movies", R.drawable.nav_movies, { loadTab("movies") }),
-            Triple("TV Shows", R.drawable.nav_series, { loadTab("series") }),
-            if (!settings.isKids) Triple("Discover", R.drawable.nav_new, { loadTab("requests") }) else null,
-            if (!settings.isKids) Triple("Music", R.drawable.nav_music, { loadTab("music") }) else null,
-            if (!settings.isKids) Triple("YouTube", R.drawable.ic_play_arrow, { loadYouTube() }) else null,
-            if (!settings.isKids) Triple("Books", R.drawable.nav_list, { loadBooks() }) else null,
-            Triple("Settings", R.drawable.nav_settings, { openTrackPreferencesDialog() }),
-        )
-
-        val buttons = entries.map { (title, icon, click) ->
-            action("", click = click).apply {
-                contentDescription = title; tag = title; gravity = Gravity.CENTER_VERTICAL
-                isSelected = when (title) {
-                    "Home" -> screen == "home" && currentTab == "home"
-                    "Movies" -> (screen == "movies" || (currentTab == "movies" && screen == "home"))
-                    "TV Shows" -> (screen == "series" || (currentTab == "series" && screen == "home"))
-                    "YouTube" -> screen == "youtube"
-                    "Discover" -> currentTab == "requests" || screen == "requests"
-                    "Music" -> currentTab == "music" || screen == "music"
-                    "Books" -> screen == "books" || currentTab == "books"
-                    "Search" -> screen == "search"
-                    "My List" -> screen == "mine"
-                    "More" -> screen.startsWith("catalog-") || screen.startsWith("categories-") || screen == "downloads"
-                    else -> false
-                }
-                setCompoundDrawablesWithIntrinsicBounds(icon, 0, 0, 0); compoundDrawablePadding = 0
-                setPadding(dp(10), 0, dp(10), 0)
-                setDefaultFocusHighlightEnabled(false)
-                background = android.graphics.drawable.StateListDrawable().apply {
-                    addState(intArrayOf(android.R.attr.state_focused), rounded(0xFF383838.toInt(), Color.WHITE))
-                    addState(intArrayOf(android.R.attr.state_selected), rounded(0x33E50914, RED))
-                    addState(intArrayOf(), rounded(Color.TRANSPARENT))
-                }
-                setTextColor(Color.WHITE)
-                layoutParams = LinearLayout.LayoutParams(dp(44), dp(44)).apply { gravity = Gravity.CENTER_HORIZONTAL; bottomMargin = dp(4) }
-                rail.addView(this)
-            }
-        }
-
-        val railViewport = ScrollView(this).apply { isVerticalScrollBarEnabled = false; addView(rail) }
-        stage.addView(railViewport, FrameLayout.LayoutParams(dp(76), -1, Gravity.START))
-        stage.viewTreeObserver.addOnGlobalFocusChangeListener { _, focused ->
-            var parent: android.view.ViewParent? = focused?.parent
-            var inside = focused === rail
-            while (parent != null) { if (parent === rail) inside = true; parent = parent.parent }
-            val width = dp(if (inside) 210 else 76)
-            if (railViewport.layoutParams.width != width) {
-                railViewport.layoutParams = (railViewport.layoutParams as FrameLayout.LayoutParams).apply { this.width = width }
-                buttons.forEach { button ->
-                    button.text = if (inside) button.tag.toString() else ""
-                    button.compoundDrawablePadding = if (inside) dp(18) else 0
-                    button.setPadding(dp(if (inside) 12 else 10), 0, dp(if (inside) 8 else 10), 0)
-                    button.layoutParams = (button.layoutParams as LinearLayout.LayoutParams).apply { this.width = if (inside) -1 else dp(44) }
-                }
-            }
-        }
-
-        val tvSearchBtn = android.widget.ImageButton(this).apply {
-            contentDescription = "Search"
-            setImageResource(R.drawable.nav_search)
-            imageTintList = ColorStateList.valueOf(Color.WHITE)
-            setDefaultFocusHighlightEnabled(false)
-            background = android.graphics.drawable.StateListDrawable().apply {
-                addState(intArrayOf(android.R.attr.state_focused), rounded(0xFF383838.toInt(), Color.WHITE))
-                addState(intArrayOf(), rounded(0x99161616.toInt(), 0x55FFFFFF))
-            }
-            setPadding(dp(10), dp(10), dp(10), dp(10))
-            setOnClickListener { openSearch() }
-        }
-        stage.addView(tvSearchBtn, FrameLayout.LayoutParams(dp(44), dp(44), Gravity.TOP or Gravity.END).apply {
-            setMargins(dp(16), dp(16), dp(24), dp(16))
-        })
-
-        mainContainer.addView(stage, LinearLayout.LayoutParams(-1, 0, 1f))
-    }
-
-    // -----------------------------------------------------------------------------------------
-    // Sidebar Drawer (Matching HomeStream Web App Sidebar.tsx)
-    // -----------------------------------------------------------------------------------------
-    private fun setupSidebarDrawer() {
-        val drawer = FrameLayout(this).apply {
-            visibility = View.GONE
-            setBackgroundColor(0x88000000.toInt())
-            setOnClickListener { closeSidebar() }
-        }
-
-        val panelWidth = dp(290).coerceAtMost((resources.displayMetrics.widthPixels * 0.85f).toInt())
-        val panel = column().apply {
-            setBackgroundColor(0xFF121212.toInt())
+        // Top-left Profile Dropdown Selector (rounded square avatar + chevron, like Netflix TV)
+        val profileDropdown = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
             isClickable = true
-            setPadding(dp(18), dp(24), dp(18), dp(24))
-        }
-
-        // Header: Logo + Jellyfin Library Indicator + Close button
-        val head = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL; setPadding(0, 0, 0, dp(20)) }
-        val logoBox = FrameLayout(this).apply {
-            background = GradientDrawable().apply {
-                setColor(RED); cornerRadius = dp(8).toFloat()
+            isFocusable = true
+            setDefaultFocusHighlightEnabled(false)
+            setPadding(dp(6), dp(5), dp(8), dp(5))
+            background = android.graphics.drawable.StateListDrawable().apply {
+                addState(intArrayOf(android.R.attr.state_focused), rounded(0x44FFFFFF, Color.WHITE, radius = dp(10).toFloat(), strokeWidth = dp(2)))
+                addState(intArrayOf(), rounded(Color.TRANSPARENT, radius = dp(10).toFloat()))
             }
-            addView(TextView(this@MainActivity).apply {
-                text = "H"; textSize = 18f; typeface = android.graphics.Typeface.DEFAULT_BOLD
-                setTextColor(Color.WHITE); gravity = Gravity.CENTER
+            contentDescription = "Profile selector"
+        }
+        val avatarSquare = FrameLayout(this).apply {
+            background = rounded(RED, radius = dp(6).toFloat())
+            addView(ImageView(this@MainActivity).apply {
+                setImageResource(R.drawable.nav_profile)
+                imageTintList = ColorStateList.valueOf(Color.WHITE)
+                setPadding(dp(5), dp(5), dp(5), dp(5))
             }, FrameLayout.LayoutParams(-1, -1))
         }
-        head.addView(logoBox, LinearLayout.LayoutParams(dp(36), dp(36)))
-
-        val titleCol = column().apply { setPadding(dp(12), 0, 0, 0) }
-        titleCol.addView(label("HomeStream", 16f, true))
-        val status = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
-        status.addView(View(this).apply {
-            background = GradientDrawable().apply { setColor(0xFF10B981.toInt()); shape = GradientDrawable.OVAL }
-        }, LinearLayout.LayoutParams(dp(7), dp(7)))
-        status.addView(TextView(this).apply {
-            text = "  Media Library"; textSize = 10f; setTextColor(MUTED)
+        profileDropdown.addView(avatarSquare, LinearLayout.LayoutParams(dp(28), dp(28)))
+        profileDropdown.addView(TextView(this).apply {
+            text = " ▾"
+            textSize = 13f
+            setTextColor(0xFFCCCCCC.toInt())
         })
-        titleCol.addView(status)
-        head.addView(titleCol, LinearLayout.LayoutParams(0, -2, 1f))
-
-        val closeBtn = ImageView(this).apply {
-            setImageResource(R.drawable.ic_close); imageTintList = ColorStateList.valueOf(MUTED)
-            setPadding(dp(8), dp(8), dp(8), dp(8))
-            isClickable = true; setOnClickListener { closeSidebar() }
-        }
-        head.addView(closeBtn, LinearLayout.LayoutParams(dp(36), dp(36)))
-        panel.addView(head)
-
-        // Home Feed Button
-        val homeFeedBtn = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
-            background = rounded(if (screen == "home") RED else 0x22FFFFFF.toInt())
-            setPadding(dp(14), dp(12), dp(14), dp(12))
-            isClickable = true
-            setOnClickListener { closeSidebar(); loadTab("home") }
-        }
-        homeFeedBtn.addView(ImageView(this).apply {
-            setImageResource(R.drawable.nav_home); imageTintList = ColorStateList.valueOf(Color.WHITE)
-        }, LinearLayout.LayoutParams(dp(22), dp(22)))
-        val homeFeedText = column().apply { setPadding(dp(12), 0, 0, 0) }
-        homeFeedText.addView(label("Home Streaming Feed", 14f, true))
-        homeFeedText.addView(TextView(this).apply { text = "Netflix-style rows & categories"; textSize = 11f; setTextColor(MUTED) })
-        homeFeedBtn.addView(homeFeedText)
-        panel.addView(homeFeedBtn, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
-
-        // Dedicated Hubs Section: Movies, TV Shows, Music, YouTube, Books + Admin
-        val videoHubs = listOf(
-            Triple("Movies", "Featured rows & movies feed", "movies" to R.drawable.nav_movies),
-            Triple("TV Shows", "Featured series & TV feed", "series" to R.drawable.nav_series)
-        )
-        videoHubs.forEach { (title, desc, pair) ->
-            val (tabKey, iconRes) = pair
-            val active = (screen == tabKey || currentTab == tabKey)
-            val hubBtn = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
-                background = rounded(if (active) RED else 0x22FFFFFF.toInt())
-                setPadding(dp(14), dp(12), dp(14), dp(12))
-                isClickable = true
-                setOnClickListener { closeSidebar(); loadTab(tabKey) }
+        profileDropdown.setOnClickListener { anchor ->
+            val popup = android.widget.PopupMenu(this, anchor)
+            if (settings.canUseProfiles) popup.menu.add(0, 1, 0, "Switch Profile")
+            if (!settings.isKids) {
+                popup.menu.add(0, 2, 1, "YouTube")
+                popup.menu.add(0, 3, 2, "Books")
+                popup.menu.add(0, 4, 3, "Downloads")
             }
-            hubBtn.addView(ImageView(this).apply {
-                setImageResource(iconRes); imageTintList = ColorStateList.valueOf(Color.WHITE)
-            }, LinearLayout.LayoutParams(dp(22), dp(22)))
-            val hubText = column().apply { setPadding(dp(12), 0, 0, 0); layoutParams = LinearLayout.LayoutParams(0, -2, 1f) }
-            hubText.addView(label(title, 14f, true))
-            hubText.addView(TextView(this).apply { text = desc; textSize = 11f; setTextColor(MUTED) })
-            hubBtn.addView(hubText)
-            hubBtn.addView(badgePill("HUB"))
-            panel.addView(hubBtn, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
-        }
-
-        if (!settings.isKids) {
-            // Music Hub
-            val musicBtn = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
-                background = rounded(if (screen == "music" || currentTab == "music") 0xFF1DB954.toInt() else 0x22FFFFFF.toInt())
-                setPadding(dp(14), dp(12), dp(14), dp(12))
-                isClickable = true
-                setOnClickListener { closeSidebar(); loadTab("music") }
-            }
-            musicBtn.addView(ImageView(this).apply {
-                setImageResource(R.drawable.nav_music); imageTintList = ColorStateList.valueOf(Color.WHITE)
-            }, LinearLayout.LayoutParams(dp(22), dp(22)))
-            val musicText = column().apply { setPadding(dp(12), 0, 0, 0); layoutParams = LinearLayout.LayoutParams(0, -2, 1f) }
-            musicText.addView(label("Music", 14f, true))
-            musicText.addView(TextView(this).apply { text = "Albums, artists & music player"; textSize = 11f; setTextColor(MUTED) })
-            musicBtn.addView(musicText)
-            musicBtn.addView(badgePill("HUB"))
-            panel.addView(musicBtn, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
-
-            // YouTube Hub
-            val ytBtn = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
-                background = rounded(if (screen == "youtube") RED else 0x22FFFFFF.toInt())
-                setPadding(dp(14), dp(12), dp(14), dp(12))
-                isClickable = true
-                setOnClickListener { closeSidebar(); loadYouTube() }
-            }
-            ytBtn.addView(ImageView(this).apply {
-                setImageResource(R.drawable.ic_play_arrow); imageTintList = ColorStateList.valueOf(Color.WHITE)
-            }, LinearLayout.LayoutParams(dp(22), dp(22)))
-            val ytText = column().apply { setPadding(dp(12), 0, 0, 0); layoutParams = LinearLayout.LayoutParams(0, -2, 1f) }
-            ytText.addView(label("YouTube", 14f, true))
-            ytText.addView(TextView(this).apply { text = "Continue watching, podcasts & trending"; textSize = 11f; setTextColor(MUTED) })
-            ytBtn.addView(ytText)
-            ytBtn.addView(badgePill("HUB"))
-            panel.addView(ytBtn, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
-
-            // Books Hub
-            val booksBtn = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
-                background = rounded(if (screen == "books" || currentTab == "books") RED else 0x22FFFFFF.toInt())
-                setPadding(dp(14), dp(12), dp(14), dp(12))
-                isClickable = true
-                setOnClickListener { closeSidebar(); loadBooks() }
-            }
-            booksBtn.addView(ImageView(this).apply {
-                setImageResource(R.drawable.nav_list); imageTintList = ColorStateList.valueOf(Color.WHITE)
-            }, LinearLayout.LayoutParams(dp(22), dp(22)))
-            val booksText = column().apply { setPadding(dp(12), 0, 0, 0); layoutParams = LinearLayout.LayoutParams(0, -2, 1f) }
-            booksText.addView(label("Books", 14f, true))
-            booksText.addView(TextView(this).apply { text = "Bookshelf, 1-page reader & requests"; textSize = 11f; setTextColor(MUTED) })
-            booksBtn.addView(booksText)
-            booksBtn.addView(badgePill("HUB"))
-            panel.addView(booksBtn, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = if (settings.isAdmin) dp(8) else dp(20) })
-
-            if (settings.isAdmin) {
-                val dlMgrBtn = LinearLayout(this).apply {
-                    orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
-                    background = rounded(if (screen == "admin-panel" || screen == "download-manager") RED else 0x22FFFFFF.toInt())
-                    setPadding(dp(14), dp(12), dp(14), dp(12))
-                    isClickable = true
-                    setOnClickListener {
-                        closeSidebar()
-                        if (isTelevision()) adminDownloadManager() else adminPanel("media")
-                    }
+            popup.menu.add(0, 5, 4, "Server Connection")
+            popup.setOnMenuItemClickListener { item ->
+                when (item.itemId) {
+                    1 -> profiles()
+                    2 -> loadYouTube()
+                    3 -> loadBooks()
+                    4 -> loadDownloads()
+                    5 -> openServerSettingsDialog()
                 }
-                dlMgrBtn.addView(ImageView(this).apply {
-                    setImageResource(R.drawable.ic_download); imageTintList = ColorStateList.valueOf(Color.WHITE)
-                }, LinearLayout.LayoutParams(dp(22), dp(22)))
-                val dlMgrText = column().apply { setPadding(dp(12), 0, 0, 0); layoutParams = LinearLayout.LayoutParams(0, -2, 1f) }
-                dlMgrText.addView(label(if (isTelevision()) "Download Manager" else "Admin Panel", 14f, true))
-                dlMgrText.addView(TextView(this).apply {
-                    text = if (isTelevision()) "qBittorrent & system queues" else "Modules, media & downloads"
-                    textSize = 11f; setTextColor(MUTED)
-                })
-                dlMgrBtn.addView(dlMgrText)
-                dlMgrBtn.addView(badgePill("ADMIN"))
-                panel.addView(dlMgrBtn, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(20) })
+                true
             }
+            popup.show()
+        }
+        topBar.addView(profileDropdown, LinearLayout.LayoutParams(-2, -2))
+
+        // Centered Netflix pill tabs: Search (icon), Home, Movies, TV Shows, Music, Settings
+        val centerWrap = FrameLayout(this)
+        val tabsStrip = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
         }
 
-        // Divider
-        panel.addView(View(this).apply {
-            setBackgroundColor(0x22FFFFFF.toInt())
-        }, LinearLayout.LayoutParams(-1, dp(1)).apply { setMargins(0, dp(12), 0, dp(16)) })
+        val searchTab = android.widget.ImageButton(this).apply {
+            contentDescription = "Search"
+            tag = "Search"
+            isSelected = screen == "search"
+            setImageResource(R.drawable.nav_search)
+            imageTintList = ColorStateList.valueOf(if (screen == "search") Color.WHITE else 0xFFCCCCCC.toInt())
+            setDefaultFocusHighlightEnabled(false)
+            background = android.graphics.drawable.StateListDrawable().apply {
+                addState(intArrayOf(android.R.attr.state_focused), rounded(0x44FFFFFF, Color.WHITE, radius = dp(20).toFloat(), strokeWidth = dp(2)))
+                addState(intArrayOf(android.R.attr.state_selected), rounded(0x33FFFFFF, radius = dp(20).toFloat()))
+                addState(intArrayOf(), rounded(Color.TRANSPARENT, radius = dp(20).toFloat()))
+            }
+            setPadding(dp(10), dp(7), dp(10), dp(7))
+            setOnClickListener { openSearch() }
+        }
+        tabsStrip.addView(searchTab, LinearLayout.LayoutParams(dp(40), dp(36)).apply { marginEnd = dp(4) })
 
-        // Settings Section Header
-        panel.addView(TextView(this).apply {
-            text = "SETTINGS & CONNECTION"; textSize = 11f; typeface = android.graphics.Typeface.DEFAULT_BOLD
-            setTextColor(MUTED); setPadding(0, 0, 0, dp(10))
+        val tvTabs = listOf(
+            "Home" to { loadTab("home") },
+            "Movies" to { loadTab("movies") },
+            "TV Shows" to { loadTab("series") },
+            "Music" to { if (settings.isKids) toast("Music is disabled for Kids profiles") else loadTab("music") },
+            "Settings" to { openTrackPreferencesDialog() }
+        )
+
+        tvTabs.forEach { (title, click) ->
+            val active = when (title) {
+                "Home" -> screen == "home" && currentTab == "home"
+                "Movies" -> screen == "movies" || (currentTab == "movies" && screen == "home")
+                "TV Shows" -> screen == "series" || (currentTab == "series" && screen == "home")
+                "Music" -> currentTab == "music" || screen == "music"
+                "Settings" -> screen == "admin-panel"
+                else -> false
+            }
+            val tabBtn = Button(this).apply {
+                text = title
+                textSize = 14.5f
+                typeface = if (active) android.graphics.Typeface.DEFAULT_BOLD else android.graphics.Typeface.DEFAULT
+                setTextColor(if (active) Color.WHITE else 0xFFCCCCCC.toInt())
+                isAllCaps = false
+                isSingleLine = true
+                minWidth = 0; minimumWidth = 0; minHeight = 0; minimumHeight = 0
+                gravity = Gravity.CENTER
+                isClickable = true
+                isFocusable = true
+                setDefaultFocusHighlightEnabled(false)
+                contentDescription = title
+                tag = title
+                isSelected = active
+                setPadding(dp(16), dp(7), dp(16), dp(7))
+                background = android.graphics.drawable.StateListDrawable().apply {
+                    addState(intArrayOf(android.R.attr.state_focused), rounded(0x44FFFFFF, Color.WHITE, radius = dp(20).toFloat(), strokeWidth = dp(2)))
+                    addState(intArrayOf(android.R.attr.state_selected), rounded(0x33FFFFFF, radius = dp(20).toFloat()))
+                    addState(intArrayOf(), rounded(Color.TRANSPARENT, radius = dp(20).toFloat()))
+                }
+                setOnClickListener { click() }
+            }
+            tabsStrip.addView(tabBtn, LinearLayout.LayoutParams(-2, -2).apply { marginEnd = dp(4) })
+        }
+
+        centerWrap.addView(tabsStrip, FrameLayout.LayoutParams(-2, -2, Gravity.CENTER))
+        topBar.addView(centerWrap, LinearLayout.LayoutParams(0, -2, 1f))
+
+        // Top-right HomeStream red monogram (like Netflix's red N)
+        topBar.addView(TextView(this).apply {
+            text = "H"
+            textSize = 22f
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
+            setTextColor(RED)
+            setPadding(dp(10), 0, dp(4), 0)
         })
 
-        // Server Settings Button (with External URL configuration)
-        val settingsBtn = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
-            background = rounded(0x18FFFFFF.toInt())
-            setPadding(dp(14), dp(12), dp(14), dp(12))
-            isClickable = true
-            setOnClickListener { closeSidebar(); openServerSettingsDialog() }
-        }
-        settingsBtn.addView(ImageView(this).apply {
-            setImageResource(R.drawable.nav_settings); imageTintList = ColorStateList.valueOf(Color.WHITE)
-        }, LinearLayout.LayoutParams(dp(20), dp(20)))
-        val settingsText = column().apply { setPadding(dp(12), 0, 0, 0); layoutParams = LinearLayout.LayoutParams(0, -2, 1f) }
-        settingsText.addView(label("Server Settings", 13.5f, true))
-        settingsText.addView(TextView(this).apply {
-            val mode = if (settings.localUrl.isNotBlank() && settings.externalUrl.isNotBlank()) "Dual URL (Local + Remote)"
-                else if (settings.externalUrl.isNotBlank()) "External URL" else "Local Server"
-            text = mode; textSize = 11f; setTextColor(MUTED)
-        })
-        settingsBtn.addView(settingsText)
-        panel.addView(settingsBtn, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
-
-        // Playback & Track Preferences Button (per-profile audio/subtitle defaults + autoplay)
-        val prefsBtn = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
-            background = rounded(0x18FFFFFF.toInt())
-            setPadding(dp(14), dp(12), dp(14), dp(12))
-            isClickable = true
-            setOnClickListener { closeSidebar(); openTrackPreferencesDialog() }
-        }
-        prefsBtn.addView(ImageView(this).apply {
-            setImageResource(R.drawable.nav_settings); imageTintList = ColorStateList.valueOf(Color.WHITE)
-        }, LinearLayout.LayoutParams(dp(20), dp(20)))
-        val prefsText = column().apply { setPadding(dp(12), 0, 0, 0); layoutParams = LinearLayout.LayoutParams(0, -2, 1f) }
-        prefsText.addView(label("Playback & Track Prefs", 13.5f, true))
-        prefsText.addView(TextView(this).apply {
-            text = "Audio, subtitles & autoplay"; textSize = 11f; setTextColor(MUTED)
-        })
-        prefsBtn.addView(prefsText)
-        panel.addView(prefsBtn, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
-
-        // Switch Profile Button
-        val profileBtn = LinearLayout(this).apply {
-            visibility = if (settings.canUseProfiles) View.VISIBLE else View.GONE
-            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
-            background = rounded(0x18FFFFFF.toInt())
-            setPadding(dp(14), dp(12), dp(14), dp(12))
-            isClickable = true
-            setOnClickListener { closeSidebar(); profiles() }
-        }
-        profileBtn.addView(ImageView(this).apply {
-            setImageResource(R.drawable.nav_profile); imageTintList = ColorStateList.valueOf(Color.WHITE)
-        }, LinearLayout.LayoutParams(dp(20), dp(20)))
-        val profText = column().apply { setPadding(dp(12), 0, 0, 0) }
-        profText.addView(label("Profiles", 13.5f, true))
-        profText.addView(TextView(this).apply { text = "Switch user profile"; textSize = 11f; setTextColor(MUTED) })
-        profileBtn.addView(profText)
-        panel.addView(profileBtn, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
-
-        drawer.addView(panel, FrameLayout.LayoutParams(panelWidth, -1, Gravity.START))
-        root.addView(drawer, FrameLayout.LayoutParams(-1, -1))
-        sidebarDrawer = drawer
-    }
-
-    private fun openSidebar() {
-        sidebarDrawer?.visibility = View.VISIBLE
-    }
-
-    private fun closeSidebar() {
-        sidebarDrawer?.visibility = View.GONE
+        tvContainer.addView(topBar, LinearLayout.LayoutParams(-1, -2))
+        tvContainer.addView(browseViewport(), LinearLayout.LayoutParams(-1, 0, 1f))
+        mainContainer.addView(tvContainer, LinearLayout.LayoutParams(-1, 0, 1f))
     }
 
     // -----------------------------------------------------------------------------------------
@@ -1399,14 +1140,14 @@ class MainActivity : AppCompatActivity() {
             slot.removeAllViews()
             slot.setTag(R.id.browse_signature, data.toString())
             if (sections.length() == 0) return
-            slot.addView(label("Browse categories", 20f, true).apply { setPadding(gutter, dp(20), gutter, dp(8)) })
+            slot.addView(label("Browse categories", 20f, true).apply { setPadding(gutter, dp(10), gutter, dp(4)) })
             val virtualHost = column()
             slot.addView(virtualHost)
             // Keep lightweight row slots; instantiate artwork/cards only while on screen.
             val slots = (0 until minOf(64, sections.length())).map { index ->
                 val section = sections.getJSONObject(index)
                 column().apply {
-                    minimumHeight = dp(if (isTelevision()) 240 else 290)
+                    minimumHeight = dp(if (isTelevision()) 136 else 210)
                     setTag(R.id.browse_key, "category:${section.optString("id")}")
                     virtualHost.addView(this, LinearLayout.LayoutParams(-1, -2))
                 }
@@ -1495,7 +1236,7 @@ class MainActivity : AppCompatActivity() {
             heroRotationJob = lifecycleScope.launch {
                 while (isActive) {
                     delay(7000)
-                    if (screen != "home" || content.findViewById<View>(R.id.featured_card) == null) {
+                    if (screen !in listOf("home", "movies", "series") || content.findViewById<View>(R.id.featured_card) == null) {
                         break
                     }
                     val featured = content.findViewById<View>(R.id.featured_card)
@@ -1517,7 +1258,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun hero(item: Media, showActions: Boolean = true) {
-        if (screen != "home" && screen != "youtube") return
+        if (screen !in listOf("home", "movies", "series", "youtube")) return
         content.findViewById<View>(R.id.featured_card)?.let { content.removeView(it) }
         if (isTelevision()) {
             televisionHero(item, showActions)
@@ -1724,6 +1465,8 @@ class MainActivity : AppCompatActivity() {
         val frame = FrameLayout(this).apply {
             id = R.id.featured_card
             clipToOutline = true
+            elevation = dp(8).toFloat()
+            background = rounded(NETFLIX_SURFACE, stroke = 0x33FFFFFF, radius = dp(16).toFloat(), strokeWidth = dp(1))
         }
         frame.addView(ImageView(this).apply {
             scaleType = ImageView.ScaleType.CENTER_CROP
@@ -1743,11 +1486,11 @@ class MainActivity : AppCompatActivity() {
             )
         }, FrameLayout.LayoutParams(-1, -1))
 
-        val copy = column().apply { setPadding(gutter, dp(32), dp(16), dp(24)) }
-        copy.addView(label("H O M E S T R E A M   •   FEATURED", 12f, true).apply { setTextColor(MUTED) })
-        copy.addView(label(item.title, 36f, true).apply { maxLines = 2 })
-        copy.addView(label(item.metadata, 14f).apply { setPadding(0, dp(8), 0, dp(8)); setTextColor(MUTED) })
-        copy.addView(label(item.overview, 15f).apply { maxLines = 3 })
+        val copy = column().apply { setPadding(dp(28), dp(16), dp(16), dp(18)) }
+        copy.addView(label("H O M E S T R E A M   •   FEATURED", 11f, true).apply { setTextColor(MUTED) })
+        copy.addView(label(item.title, 30f, true).apply { maxLines = 2 })
+        copy.addView(label(item.metadata, 13f).apply { setPadding(0, dp(4), 0, dp(4)); setTextColor(MUTED) })
+        copy.addView(label(item.overview, 13.5f).apply { maxLines = 2 })
 
         if (showActions) {
             val actions = LinearLayout(this).apply { setPadding(0, dp(12), 0, 0); gravity = Gravity.CENTER_VERTICAL }
@@ -1772,11 +1515,13 @@ class MainActivity : AppCompatActivity() {
             copy.addView(actions)
         }
 
-        val copyWidth = dp(((resources.configuration.screenWidthDp - 68) * .56f).toInt())
-        frame.addView(copy, FrameLayout.LayoutParams(copyWidth, -2, Gravity.CENTER_VERTICAL))
+        val copyWidth = dp(((resources.configuration.screenWidthDp - 80) * .54f).toInt())
+        frame.addView(copy, FrameLayout.LayoutParams(copyWidth, -2, Gravity.BOTTOM or Gravity.START))
 
-        val height = dp((resources.configuration.screenHeightDp * .70f).toInt().coerceIn(330, 480))
-        content.addView(frame, 0, LinearLayout.LayoutParams(-1, height))
+        val height = dp((resources.configuration.screenHeightDp * .50f).toInt().coerceIn(250, 340))
+        content.addView(frame, 0, LinearLayout.LayoutParams(-1, height).apply {
+            setMargins(dp(28), dp(2), dp(28), dp(8))
+        })
     }
 
     // -----------------------------------------------------------------------------------------
@@ -1789,16 +1534,16 @@ class MainActivity : AppCompatActivity() {
     private fun mediaRow(title: String, items: List<Media>, isContinueWatching: Boolean = false, parent: LinearLayout = content) {
         if (items.isEmpty()) return
         val isTopTen = title.contains("Top 10", ignoreCase = true)
-        parent.addView(label(title, 18f, true).apply {
-            setPadding(gutter, dp(18), gutter, dp(8))
+        parent.addView(label(title, if (isTelevision()) 16f else 18f, true).apply {
+            setPadding(gutter, dp(if (isTelevision()) 6 else 10), gutter, dp(if (isTelevision()) 2 else 4))
             setTag(R.id.browse_key, "heading:$title"); setTag(R.id.browse_signature, title)
         })
-        val row = LinearLayout(this).apply { setPadding(gutter, dp(4), gutter, dp(10)); clipChildren = false }
+        val row = LinearLayout(this).apply { setPadding(gutter, dp(2), gutter, dp(if (isTelevision()) 2 else 6)); clipChildren = false }
 
         items.forEachIndexed { index, item ->
             val card = column().apply {
                 if (isTelevision()) {
-                    setPadding(dp(4), dp(4), dp(4), dp(6))
+                    setPadding(dp(4), dp(3), dp(4), dp(4))
                     focusableCard(Color.TRANSPARENT)
                 } else {
                     isFocusable = true; isClickable = true
@@ -1809,6 +1554,9 @@ class MainActivity : AppCompatActivity() {
                 val focusStyle = onFocusChangeListener
                 setOnFocusChangeListener { view, focused ->
                     focusStyle?.onFocusChange(view, focused)
+                    if (isTelevision()) {
+                        view.animate().scaleX(if (focused) 1.07f else 1f).scaleY(if (focused) 1.07f else 1f).setDuration(140).start()
+                    }
                     if (focused) prefetchDetails(item)
                 }
                 setOnTouchListener { _, event ->
@@ -1903,8 +1651,8 @@ class MainActivity : AppCompatActivity() {
                 posterContainer.addView(pBar, FrameLayout.LayoutParams(-1, dp(3), Gravity.BOTTOM))
             }
 
-            val cardWidth = dp(if (isTelevision()) (if (isYouTube || isContinueWatching) 220 else 200) else if (isYouTube || isContinueWatching) 176 else 112)
-            val cardHeight = dp(if (isTelevision()) (if (isYouTube || isContinueWatching) 124 else 115) else if (isYouTube || isContinueWatching) 99 else 166)
+            val cardWidth = dp(if (isTelevision()) (if (isYouTube || isContinueWatching) 186 else 168) else if (isYouTube || isContinueWatching) 176 else 112)
+            val cardHeight = dp(if (isTelevision()) (if (isYouTube || isContinueWatching) 105 else 96) else if (isYouTube || isContinueWatching) 99 else 166)
 
             if (isTopTen && !isTelevision() && index < 10) {
                 // Netflix Top 10 overlapping rank badge
@@ -2026,7 +1774,7 @@ class MainActivity : AppCompatActivity() {
             content.addView(headerArea, LinearLayout.LayoutParams(-1, dp(230)))
 
             // 2. Metadata Block
-            val metaSection = column().apply { setPadding(gutter, dp(14), gutter, dp(12)) }
+            val metaSection = column().apply { setPadding(gutter, dp(14), gutter, dp(4)) }
             metaSection.addView(label(full.title, 24f, true))
 
             val badges = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL; setPadding(0, dp(6), 0, dp(10)) }
@@ -2131,10 +1879,12 @@ class MainActivity : AppCompatActivity() {
             }
 
             // Synopsis
-            metaSection.addView(TextView(this).apply {
-                text = full.overview; textSize = 13f; setTextColor(0xFFCCCCCC.toInt())
-                setPadding(0, dp(10), 0, dp(4)); setLineSpacing(dp(2).toFloat(), 1f)
-            })
+            if (full.overview.isNotBlank()) {
+                metaSection.addView(TextView(this).apply {
+                    text = full.overview; textSize = 13f; setTextColor(0xFFCCCCCC.toInt())
+                    setPadding(0, dp(8), 0, 0); setLineSpacing(dp(2).toFloat(), 1f)
+                })
+            }
 
             content.addView(metaSection)
 
@@ -2144,7 +1894,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun renderDetailsSubTabs(full: Media) {
-        val tabContainer = column().apply { setPadding(gutter, 0, gutter, dp(16)) }
+        val tabContainer = column().apply { setPadding(gutter, 0, gutter, dp(12)) }
         val tabHeader = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
 
         val isTv = full.type == "Series"
@@ -2168,7 +1918,7 @@ class MainActivity : AppCompatActivity() {
                     addView(TextView(this@MainActivity).apply {
                         text = title; textSize = 14f; typeface = android.graphics.Typeface.DEFAULT_BOLD
                         setTextColor(if (active) Color.WHITE else MUTED)
-                        setPadding(0, dp(8), 0, dp(6))
+                        setPadding(0, dp(6), 0, dp(2))
                     })
                     setOnClickListener { selectedTab = index; updateTabs(); if (isTelevision()) tabHeader.getChildAt(index)?.requestFocus() }
                 }
@@ -2382,12 +2132,12 @@ class MainActivity : AppCompatActivity() {
         val viewport = content.parent as? ScrollView
         val scroll = viewport?.scrollY ?: 0
         container.removeAllViews()
-        if (!title.isNullOrBlank()) container.addView(label(title, 15f, true).apply { setPadding(0, dp(4), 0, dp(6)) })
+        if (!title.isNullOrBlank()) container.addView(label(title, 15f, true).apply { setPadding(0, dp(2), 0, dp(2)) })
         if (items.isEmpty()) { container.addView(label("No titles available.", 13f).apply { setTextColor(MUTED); setPadding(0, dp(4), 0, dp(4)) }); return }
         val grid = GridLayout(this).apply { columnCount = if (isTelevision()) 5 else 3 }
         items.forEachIndexed { index, item ->
             val card = column().apply {
-                setPadding(dp(4), dp(4), dp(4), dp(6)); focusableCard()
+                setPadding(dp(4), dp(2), dp(4), dp(6)); focusableCard()
                 contentDescription = item.title
                 setOnClickListener { details(item) }
                 val style = onFocusChangeListener
@@ -2404,7 +2154,7 @@ class MainActivity : AppCompatActivity() {
             card.addView(poster, LinearLayout.LayoutParams(-1, dp(145))); posterAspect(poster)
             card.addView(label(item.title, 11f, true).apply { maxLines = 2; setPadding(dp(2), dp(5), dp(2), 0) })
             grid.addView(card, GridLayout.LayoutParams(GridLayout.spec(index / grid.columnCount), GridLayout.spec(index % grid.columnCount, GridLayout.FILL, 1f)).apply {
-                width = 0; height = -2; setMargins(dp(3), dp(6), dp(3), dp(6))
+                width = 0; height = -2; setMargins(dp(3), dp(2), dp(3), dp(6))
             })
         }
         container.addView(grid, LinearLayout.LayoutParams(-1, -2))
@@ -2423,7 +2173,7 @@ class MainActivity : AppCompatActivity() {
             val row = LinearLayout(this)
             repeat(if (isTelevision()) 5 else 3) {
                 row.addView(View(this).apply { background = rounded(0xFF202020.toInt()) },
-                    LinearLayout.LayoutParams(0, dp(150), 1f).apply { setMargins(dp(4), dp(12), dp(4), dp(6)) })
+                    LinearLayout.LayoutParams(0, dp(150), 1f).apply { setMargins(dp(4), dp(4), dp(4), dp(6)) })
             }
             container.addView(row, LinearLayout.LayoutParams(-1, -2))
         }
@@ -2917,7 +2667,11 @@ class MainActivity : AppCompatActivity() {
 
     private val profilePage = registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()) { result ->
         if (result.resultCode == android.app.Activity.RESULT_OK) {
-            policyReady = false; catalogCache.clear(); resetNavigationHistory(); verifyProfilePolicy()
+            when (result.data?.getStringExtra("action")) {
+                "admin" -> adminPanel()
+                "connection" -> openServerSettingsDialog()
+                else -> { policyReady = false; catalogCache.clear(); resetNavigationHistory(); verifyProfilePolicy() }
+            }
         }
     }
 
@@ -3804,10 +3558,8 @@ class MainActivity : AppCompatActivity() {
             })
             content.addView(heroHeader)
 
-            if (isTelevision()) {
-                hubFilters(listOf("albums" to "Albums", "artists" to "Artists", "songs" to "Songs", "playlists" to "Playlists"), musicCategory) {
-                    musicCategory = it; musicArtist = null; selectedPlaylistId = null; mediaHub(tab)
-                }
+            hubFilters(listOf("albums" to "Albums", "artists" to "Artists", "songs" to "Songs", "playlists" to "Playlists"), musicCategory) {
+                musicCategory = it; musicArtist = null; selectedPlaylistId = null; mediaHub(tab)
             }
         } else {
             val titleBar = LinearLayout(this).apply {
@@ -4993,39 +4745,97 @@ class MainActivity : AppCompatActivity() {
         currentTab = "admin-panel"; screen = "admin-panel"
         shell()
 
+        fun adminCard(titleText: String? = null, subtitleText: String? = null): LinearLayout = column().apply {
+            background = rounded(NETFLIX_SURFACE, stroke = NETFLIX_BORDER, radius = dp(14).toFloat(), strokeWidth = dp(1))
+            setPadding(dp(16), dp(14), dp(16), dp(14))
+            if (!titleText.isNullOrBlank()) {
+                addView(label(titleText, 15.5f, true))
+            }
+            if (!subtitleText.isNullOrBlank()) {
+                addView(TextView(this@MainActivity).apply {
+                    text = subtitleText; textSize = 12f; setTextColor(MUTED); setPadding(0, dp(2), 0, dp(10))
+                })
+            } else if (!titleText.isNullOrBlank()) {
+                addView(View(this@MainActivity), LinearLayout.LayoutParams(-1, dp(8)))
+            }
+        }
+
+        fun statRow(stats: List<Triple<String, String, Int>>): LinearLayout = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            stats.forEachIndexed { idx, (value, caption, color) ->
+                val tile = column().apply {
+                    background = rounded(NETFLIX_ELEVATED, stroke = NETFLIX_BORDER, radius = dp(10).toFloat(), strokeWidth = dp(1))
+                    setPadding(dp(12), dp(10), dp(12), dp(10))
+                    gravity = Gravity.CENTER_HORIZONTAL
+                    addView(TextView(this@MainActivity).apply {
+                        text = value; textSize = 17f; typeface = android.graphics.Typeface.DEFAULT_BOLD
+                        setTextColor(color); gravity = Gravity.CENTER; maxLines = 1
+                    })
+                    addView(TextView(this@MainActivity).apply {
+                        text = caption; textSize = 10.5f; setTextColor(MUTED); gravity = Gravity.CENTER; maxLines = 1
+                        setPadding(0, dp(2), 0, 0)
+                    })
+                }
+                addView(tile, LinearLayout.LayoutParams(0, -2, 1f).apply {
+                    if (idx < stats.lastIndex) marginEnd = dp(8)
+                })
+            }
+        }
+
+        fun adminBtn(textLabel: String, primary: Boolean = false, onClick: () -> Unit): TextView = TextView(this).apply {
+            text = textLabel; textSize = 12.5f; typeface = android.graphics.Typeface.DEFAULT_BOLD
+            setTextColor(Color.WHITE); gravity = Gravity.CENTER; isSingleLine = true
+            background = rounded(
+                if (primary) RED else NETFLIX_ELEVATED,
+                stroke = if (primary) RED else NETFLIX_BORDER,
+                radius = dp(8).toFloat(),
+                strokeWidth = dp(1)
+            )
+            setPadding(dp(14), dp(10), dp(14), dp(10))
+            isClickable = true; isFocusable = true
+            setOnClickListener { onClick() }
+        }
+
+        fun divider(): View = View(this).apply {
+            setBackgroundColor(0x18FFFFFF.toInt())
+            layoutParams = LinearLayout.LayoutParams(-1, dp(1)).apply { setMargins(0, dp(8), 0, dp(8)) }
+        }
+
         val headerRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
-            setPadding(gutter, dp(10), gutter, dp(8))
+            setPadding(gutter, dp(12), gutter, dp(10))
         }
         val titleCol = column().apply { layoutParams = LinearLayout.LayoutParams(0, -2, 1f) }
-        titleCol.addView(label("Server Control Center", 22f, true))
+        titleCol.addView(label("Admin Settings", 24f, true))
         titleCol.addView(TextView(this).apply {
-            text = "ADMIN ONLY • MODULES, MEDIA & SYSTEM"
-            textSize = 10.5f; typeface = android.graphics.Typeface.DEFAULT_BOLD; setTextColor(RED)
+            text = "SERVER, LIBRARIES & SYSTEM"
+            textSize = 10.5f; typeface = android.graphics.Typeface.DEFAULT_BOLD; letterSpacing = 0.06f; setTextColor(RED)
         })
         headerRow.addView(titleCol)
-        headerRow.addView(action("Refresh") { adminPanel(adminPanelTab) }.apply {
-            textSize = 12f; setPadding(dp(12), dp(6), dp(12), dp(6))
-        })
+        headerRow.addView(adminBtn("Refresh") { adminPanel(adminPanelTab) })
         content.addView(headerRow)
 
         val pillRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            setPadding(gutter, dp(4), gutter, dp(12))
+            setPadding(gutter, dp(2), gutter, dp(14))
         }
-        pillRow.addView(categoryPill("Libraries", active = adminPanelTab == "media") { adminPanel("media") })
-        pillRow.addView(categoryPill("Playback", active = adminPanelTab == "playback") { adminPanel("playback") })
-        pillRow.addView(categoryPill("Maintenance", active = adminPanelTab == "maintenance") { adminPanel("maintenance") })
-        pillRow.addView(categoryPill("Modules", active = adminPanelTab == "modules") { adminPanel("modules") })
-        pillRow.addView(categoryPill("Downloads", active = adminPanelTab == "downloads") { adminPanel("downloads") })
-        pillRow.addView(categoryPill("System & Profiles", active = adminPanelTab == "system") { adminPanel("system") })
+        listOf(
+            "media" to "Libraries",
+            "playback" to "Playback",
+            "maintenance" to "Maintenance",
+            "modules" to "Modules",
+            "downloads" to "Downloads",
+            "system" to "System"
+        ).forEach { (key, labelTxt) ->
+            pillRow.addView(categoryPill(labelTxt, active = adminPanelTab == key) { adminPanel(key) })
+        }
         content.addView(HorizontalScrollView(this).apply {
             isHorizontalScrollBarEnabled = false
             addView(pillRow)
         })
 
-        val host = column().apply { setPadding(gutter, dp(4), gutter, dp(96)) }
-        host.addView(TextView(this).apply { text = "Loading…"; textSize = 12f; setTextColor(MUTED) })
+        val host = column().apply { setPadding(gutter, 0, gutter, dp(96)) }
+        host.addView(TextView(this).apply { text = "Loading…"; textSize = 13f; setTextColor(MUTED); setPadding(0, dp(8), 0, 0) })
         content.addView(host)
 
         work = lifecycleScope.launch {
@@ -5043,7 +4853,7 @@ class MainActivity : AppCompatActivity() {
                             "slskd" to "music_books", "spotify" to "music_books", "bookshelf" to "music_books",
                             "qbittorrent" to "downloaders",
                         )
-                        val catPills = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, 0, 0, dp(8)) }
+                        val catPills = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, 0, 0, dp(10)) }
                         listOf("all" to "All", "media" to "Media & Arr", "music_books" to "Music & Books", "downloaders" to "Downloaders", "configured" to "Configured").forEach { (k, labelTxt) ->
                             catPills.addView(categoryPill(labelTxt, active = adminModuleCategory == k) {
                                 adminModuleCategory = k; adminPanel("modules")
@@ -5057,17 +4867,18 @@ class MainActivity : AppCompatActivity() {
                                 else -> catMap[item.optString("id")] == adminModuleCategory
                             }
                         }
-                        host.addView(label("$configured of ${list.size} modules connected (${filtered.size} shown)", 12f).apply {
-                            setTextColor(MUTED); setPadding(0, 0, 0, dp(8))
-                        })
+                        host.addView(statRow(listOf(
+                            Triple("$configured/${list.size}", "Connected", 0xFF34D399.toInt()),
+                            Triple("${filtered.size}", "Showing", Color.WHITE)
+                        )), LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(12) })
+
                         val downloadsPath = data.optString("downloadsPath")
                         val booksPath = data.optString("booksPath", "/books")
                         val musicPath = data.optString("musicPath", "/music")
                         filtered.forEach { integration ->
                             val isConfigured = integration.optBoolean("configured")
-                            val card = column().apply {
-                                background = rounded(0xFF1A1A1A.toInt(), radius = dp(10).toFloat())
-                                setPadding(dp(14), dp(12), dp(14), dp(12))
+                            val card = adminCard().apply {
+                                isClickable = true; isFocusable = true
                                 setOnClickListener { editIntegration(integration, downloadsPath, booksPath, musicPath) }
                             }
                             val topRow = LinearLayout(this@MainActivity).apply {
@@ -5077,17 +4888,19 @@ class MainActivity : AppCompatActivity() {
                                 layoutParams = LinearLayout.LayoutParams(0, -2, 1f)
                             })
                             topRow.addView(TextView(this@MainActivity).apply {
-                                text = if (isConfigured) "Configured" else "Not connected"
-                                textSize = 11f
+                                text = if (isConfigured) "● Connected" else "○ Not set"
+                                textSize = 11f; typeface = android.graphics.Typeface.DEFAULT_BOLD
                                 setTextColor(if (isConfigured) 0xFF34D399.toInt() else MUTED)
+                                background = rounded(if (isConfigured) 0x1A34D399 else NETFLIX_ELEVATED, radius = dp(12).toFloat())
+                                setPadding(dp(10), dp(4), dp(10), dp(4))
                             })
                             card.addView(topRow)
-                            val urlText = integration.optString("url").ifBlank { "No URL configured" }
+                            val urlText = integration.optString("url").ifBlank { "Tap to add URL & credentials" }
                             card.addView(TextView(this@MainActivity).apply {
-                                text = "$urlText • Tap to configure or test"
-                                textSize = 11.5f; setTextColor(MUTED); setPadding(0, dp(4), 0, 0)
+                                text = urlText
+                                textSize = 12f; setTextColor(MUTED); setPadding(0, dp(6), 0, 0)
                             })
-                            host.addView(card, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
+                            host.addView(card, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(10) })
                         }
                     }
                     "media" -> {
@@ -5102,98 +4915,85 @@ class MainActivity : AppCompatActivity() {
                         val stats = nativeData.optJSONObject("stats")
                         val streams = nativeData.optJSONArray("activeStreams")
 
-                        val engineCard = column().apply {
-                            background = rounded(0xFF1A1A1A.toInt(), radius = dp(10).toFloat())
-                            setPadding(dp(14), dp(12), dp(14), dp(12))
-                        }
-                        engineCard.addView(label("Native Media Engine", 15f, true))
-                        engineCard.addView(TextView(this@MainActivity).apply {
-                            text = "Active Engine: ${engine.uppercase()} • Indexed Items: ${items?.length() ?: 0}\n" +
-                                "Active Streams: ${streams?.length() ?: 0} • Watch Time: ${stats?.optDouble("totalWatchHours", 0.0) ?: 0.0}h"
-                            textSize = 12f; setTextColor(MUTED); setPadding(0, dp(6), 0, dp(10))
-                        })
+                        host.addView(statRow(listOf(
+                            Triple("${items?.length() ?: 0}", "Indexed", Color.WHITE),
+                            Triple("${streams?.length() ?: 0}", "Streams", 0xFF34D399.toInt()),
+                            Triple("${stats?.optDouble("totalWatchHours", 0.0)?.toInt() ?: 0}h", "Watched", Color.WHITE)
+                        )), LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(12) })
+
+                        val engineCard = adminCard("Media Engine (${engine.uppercase()})", "Scan folders or refresh TMDB metadata across your libraries.")
                         val btnRow = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.HORIZONTAL }
-                        btnRow.addView(action("Scan Libraries", primary = true) {
+                        btnRow.addView(adminBtn("Scan Libraries", primary = true) {
                             lifecycleScope.launch {
                                 toast("Scanning native libraries...")
-                                runCatching {
-                                    api.call("native/library", body = JSONObject().put("action", "scan"))
-                                }.onSuccess {
-                                    toast("Library scan started")
-                                    adminPanel("media")
-                                }.onFailure { toast(it.message ?: "Scan failed") }
+                                runCatching { api.call("native/library", body = JSONObject().put("action", "scan")) }
+                                    .onSuccess { toast("Library scan started"); adminPanel("media") }
+                                    .onFailure { toast(it.message ?: "Scan failed") }
                             }
-                        })
-                        btnRow.addView(action("Refresh Metadata") {
+                        }, LinearLayout.LayoutParams(0, -2, 1f).apply { marginEnd = dp(8) })
+                        btnRow.addView(adminBtn("Refresh Metadata") {
                             lifecycleScope.launch {
                                 runCatching { api.call("native/library", body = JSONObject().put("action", "refreshMetadata")) }
                                     .onSuccess { toast("Metadata refreshed"); adminPanel("media") }
                                     .onFailure { toast(it.message ?: "Refresh failed") }
                             }
-                        }.apply {
-                            (layoutParams as? LinearLayout.LayoutParams)?.marginStart = dp(8)
-                        })
+                        }, LinearLayout.LayoutParams(0, -2, 1f))
                         engineCard.addView(btnRow)
-                        host.addView(engineCard, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(10) })
+                        host.addView(engineCard, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(12) })
 
                         val health = nativeData.optJSONObject("health")
                         if (health != null) {
                             val missingFilesCount = health.optJSONArray("missingFiles")?.length() ?: 0
                             val missingMetaCount = health.optJSONArray("missingMetadata")?.length() ?: 0
                             val staleTp = health.optInt("missingOrStaleTrickplay", 0)
-                            val healthCard = column().apply {
-                                background = rounded(0xFF1A1A1A.toInt(), radius = dp(10).toFloat())
-                                setPadding(dp(14), dp(12), dp(14), dp(12))
-                            }
-                            healthCard.addView(label("Library Health", 14f, true))
-                            healthCard.addView(TextView(this@MainActivity).apply {
-                                text = "Items: ${health.optInt("totalItems")} • Files: ${health.optInt("totalFiles")}\nMissing Files: $missingFilesCount • Missing Meta: $missingMetaCount • Stale Trickplay: $staleTp"
-                                textSize = 12f; setTextColor(MUTED); setPadding(0, dp(4), 0, dp(8))
-                            })
+                            val healthCard = adminCard("Library Health", "${health.optInt("totalItems")} items • ${health.optInt("totalFiles")} files indexed")
+                            healthCard.addView(statRow(listOf(
+                                Triple("$missingFilesCount", "Missing Files", if (missingFilesCount > 0) 0xFFFBBF24.toInt() else 0xFF34D399.toInt()),
+                                Triple("$missingMetaCount", "Missing Meta", if (missingMetaCount > 0) 0xFFFBBF24.toInt() else 0xFF34D399.toInt()),
+                                Triple("$staleTp", "Trickplay", if (staleTp > 0) 0xFFFBBF24.toInt() else 0xFF34D399.toInt())
+                            )), LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(10) })
                             val repairRow = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.HORIZONTAL }
-                            repairRow.addView(action("Prune Missing") {
+                            repairRow.addView(adminBtn("Prune Missing") {
                                 lifecycleScope.launch {
                                     runCatching { api.call("native/library", body = JSONObject().put("action", "repairHealth").put("repair", "pruneMissing")) }
                                         .onSuccess { toast("Pruned missing files"); adminPanel("media") }
                                         .onFailure { toast(it.message ?: "Repair failed") }
                                 }
-                            })
-                            repairRow.addView(action("Repair Meta") {
+                            }, LinearLayout.LayoutParams(0, -2, 1f).apply { marginEnd = dp(8) })
+                            repairRow.addView(adminBtn("Repair Meta") {
                                 lifecycleScope.launch {
                                     runCatching { api.call("native/library", body = JSONObject().put("action", "repairHealth").put("repair", "refreshMetadata")) }
                                         .onSuccess { toast("Metadata repaired"); adminPanel("media") }
                                         .onFailure { toast(it.message ?: "Repair failed") }
                                 }
-                            }.apply { (layoutParams as? LinearLayout.LayoutParams)?.marginStart = dp(8) })
+                            }, LinearLayout.LayoutParams(0, -2, 1f))
                             healthCard.addView(repairRow)
-                            host.addView(healthCard, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(10) })
+                            host.addView(healthCard, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(12) })
                         }
 
                         if (libs != null && libs.length() > 0) {
-                            val libCard = column().apply {
-                                background = rounded(0xFF1A1A1A.toInt(), radius = dp(10).toFloat())
-                                setPadding(dp(14), dp(12), dp(14), dp(12))
-                            }
-                            libCard.addView(label("Configured Libraries (${libs.length()})", 14f, true))
+                            val libCard = adminCard("Configured Libraries (${libs.length()})")
                             for (i in 0 until libs.length()) {
                                 val lib = libs.optJSONObject(i) ?: continue
                                 val paths = lib.optJSONArray("paths")?.let { arr ->
                                     (0 until arr.length()).joinToString(", ") { arr.optString(it) }
                                 } ?: ""
+                                if (i > 0) libCard.addView(divider())
+                                libCard.addView(label("${lib.optString("name")} (${lib.optString("type")})", 13.5f, true))
                                 libCard.addView(TextView(this@MainActivity).apply {
-                                    text = "• ${lib.optString("name")} (${lib.optString("type")}): $paths"
-                                    textSize = 12f; setTextColor(MUTED); setPadding(0, dp(4), 0, 0)
+                                    text = paths.ifBlank { "No paths" }
+                                    textSize = 11.5f; setTextColor(MUTED); setPadding(0, dp(2), 0, 0)
                                 })
                             }
-                            host.addView(libCard, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(10) })
+                            host.addView(libCard, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(12) })
                         }
                     }
                     "playback" -> {
                         val nativeData = api.call("native/library")
                         if (screen != "admin-panel" || adminPanelTab != "playback") return@launch
                         host.removeAllViews()
-                        val pbPills = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, 0, 0, dp(8)) }
-                        listOf("all" to "All", "streams" to "Active Streams", "transcoding" to "Transcoding", "languages" to "Languages", "features" to "Features", "previews" to "Intro Previews").forEach { (k, labelTxt) ->
+                        val pbPills = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, 0, 0, dp(10)) }
+                        listOf("all" to "All", "streams" to "Streams", "transcoding" to "Transcoding", "languages" to "Languages", "features" to "Features", "previews" to "Intros").forEach { (k, labelTxt) ->
                             pbPills.addView(categoryPill(labelTxt, active = adminPlaybackCategory == k) {
                                 adminPlaybackCategory = k; adminPanel("playback")
                             })
@@ -5204,102 +5004,109 @@ class MainActivity : AppCompatActivity() {
                         val hw = nativeData.optJSONArray("hardwareAcceleration")?.let { arr ->
                             (0 until arr.length()).joinToString(", ") { arr.optString(it) }
                         }.orEmpty().ifBlank { "software" }
-                        val diagCard = column().apply {
-                            background = rounded(0xFF1A1A1A.toInt(), radius = dp(10).toFloat())
-                            setPadding(dp(14), dp(12), dp(14), dp(12))
-                        }
-                        diagCard.addView(label("Playback & Hardware Diagnostics", 15f, true))
-                        diagCard.addView(TextView(this@MainActivity).apply {
-                            text = "Hardware Accel: $hw • Active Streams: ${streams.size}"
-                            textSize = 12f; setTextColor(MUTED); setPadding(0, dp(4), 0, dp(8))
-                        })
-                        for (s in streams) {
-                            val row = LinearLayout(this@MainActivity).apply {
-                                orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
-                                setPadding(0, dp(4), 0, dp(4))
-                            }
-                            row.addView(TextView(this@MainActivity).apply {
-                                text = "${s.optString("title")} (${s.optString("videoCodec")}/${s.optString("audioCodec")})"
-                                textSize = 12f; setTextColor(Color.WHITE)
-                                layoutParams = LinearLayout.LayoutParams(0, -2, 1f)
-                            })
-                            row.addView(action("Stop") {
-                                lifecycleScope.launch {
-                                    runCatching { api.call("native/library", body = JSONObject().put("action", "stopStream").put("sessionId", s.optString("id"))) }
-                                        .onSuccess { toast("Stopped stream"); adminPanel("playback") }
-                                }
-                            })
-                            diagCard.addView(row)
-                        }
                         if (adminPlaybackCategory == "all" || adminPlaybackCategory == "streams") {
-                            host.addView(diagCard, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(10) })
+                            val diagCard = adminCard("Active Streams (${streams.size})", "Hardware acceleration: $hw")
+                            if (streams.isEmpty()) {
+                                diagCard.addView(TextView(this@MainActivity).apply {
+                                    text = "No active playback streams right now."; textSize = 12f; setTextColor(MUTED)
+                                })
+                            }
+                            streams.forEachIndexed { idx, s ->
+                                if (idx > 0) diagCard.addView(divider())
+                                val row = LinearLayout(this@MainActivity).apply {
+                                    orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+                                }
+                                row.addView(TextView(this@MainActivity).apply {
+                                    text = "${s.optString("title")}\n${s.optString("videoCodec")}/${s.optString("audioCodec")}"
+                                    textSize = 12.5f; setTextColor(Color.WHITE)
+                                    layoutParams = LinearLayout.LayoutParams(0, -2, 1f)
+                                })
+                                row.addView(adminBtn("Stop") {
+                                    lifecycleScope.launch {
+                                        runCatching { api.call("native/library", body = JSONObject().put("action", "stopStream").put("sessionId", s.optString("id"))) }
+                                            .onSuccess { toast("Stopped stream"); adminPanel("playback") }
+                                    }
+                                })
+                                diagCard.addView(row)
+                            }
+                            host.addView(diagCard, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(12) })
                         }
 
                         val previews = nativeData.objects("introPreviews")
-                        val previewCard = column().apply {
-                            background = rounded(0xFF1A1A1A.toInt(), radius = dp(10).toFloat())
-                            setPadding(dp(14), dp(12), dp(14), dp(12))
-                        }
-                        previewCard.addView(label("Auto-Intro Previews (${previews.size})", 14f, true))
-                        if (previews.isEmpty()) {
-                            previewCard.addView(TextView(this@MainActivity).apply {
-                                text = "No unpublished intro previews awaiting review."
-                                textSize = 12f; setTextColor(MUTED); setPadding(0, dp(4), 0, 0)
-                            })
-                        }
-                        for (p in previews) {
-                            val fileId = p.optString("fileId")
-                            val startSec = p.optDouble("startSeconds")
-                            val endSec = p.optDouble("endSeconds")
-                            previewCard.addView(TextView(this@MainActivity).apply {
-                                text = "${p.optString("seriesTitle").ifBlank { p.optString("title") }} • ${startSec.toInt()}s–${endSec.toInt()}s (${(p.optDouble("confidence") * 100).toInt()}%)"
-                                textSize = 12f; setTextColor(Color.WHITE); setPadding(0, dp(6), 0, dp(4))
-                            })
-                            val pRow = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.HORIZONTAL }
-                            pRow.addView(action("Approve", primary = true) {
-                                lifecycleScope.launch {
-                                    runCatching {
-                                        api.call("native/library", body = JSONObject()
-                                            .put("action", "introPreviewApprove")
-                                            .put("fileId", fileId)
-                                            .put("startSeconds", startSec)
-                                            .put("endSeconds", endSec))
-                                    }.onSuccess { toast("Intro published"); adminPanel("playback") }
-                                }
-                            })
-                            pRow.addView(action("Dismiss") {
-                                lifecycleScope.launch {
-                                    runCatching { api.call("native/library", body = JSONObject().put("action", "introPreviewDismiss").put("fileId", fileId)) }
-                                        .onSuccess { toast("Dismissed"); adminPanel("playback") }
-                                }
-                            }.apply { (layoutParams as? LinearLayout.LayoutParams)?.marginStart = dp(8) })
-                            previewCard.addView(pRow)
-                        }
                         if (adminPlaybackCategory == "all" || adminPlaybackCategory == "previews") {
-                            host.addView(previewCard, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(10) })
+                            val previewCard = adminCard("Auto-Intro Previews (${previews.size})", "Review detected show intros before publishing.")
+                            if (previews.isEmpty()) {
+                                previewCard.addView(TextView(this@MainActivity).apply {
+                                    text = "No unpublished intro previews awaiting review."
+                                    textSize = 12f; setTextColor(MUTED)
+                                })
+                            }
+                            previews.forEachIndexed { idx, p ->
+                                if (idx > 0) previewCard.addView(divider())
+                                val fileId = p.optString("fileId")
+                                val startSec = p.optDouble("startSeconds")
+                                val endSec = p.optDouble("endSeconds")
+                                previewCard.addView(label("${p.optString("seriesTitle").ifBlank { p.optString("title") }}", 13.5f, true))
+                                previewCard.addView(TextView(this@MainActivity).apply {
+                                    text = "${startSec.toInt()}s – ${endSec.toInt()}s  •  ${(p.optDouble("confidence") * 100).toInt()}% confidence"
+                                    textSize = 11.5f; setTextColor(MUTED); setPadding(0, dp(2), 0, dp(8))
+                                })
+                                val pRow = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.HORIZONTAL }
+                                pRow.addView(adminBtn("Approve", primary = true) {
+                                    lifecycleScope.launch {
+                                        runCatching {
+                                            api.call("native/library", body = JSONObject()
+                                                .put("action", "introPreviewApprove")
+                                                .put("fileId", fileId)
+                                                .put("startSeconds", startSec)
+                                                .put("endSeconds", endSec))
+                                        }.onSuccess { toast("Intro published"); adminPanel("playback") }
+                                    }
+                                }, LinearLayout.LayoutParams(0, -2, 1f).apply { marginEnd = dp(8) })
+                                pRow.addView(adminBtn("Dismiss") {
+                                    lifecycleScope.launch {
+                                        runCatching { api.call("native/library", body = JSONObject().put("action", "introPreviewDismiss").put("fileId", fileId)) }
+                                            .onSuccess { toast("Dismissed"); adminPanel("playback") }
+                                    }
+                                }, LinearLayout.LayoutParams(0, -2, 1f))
+                                previewCard.addView(pRow)
+                            }
+                            host.addView(previewCard, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(12) })
                         }
 
                         val sObj = nativeData.optJSONObject("settings") ?: JSONObject()
-                        val settingsCard = column().apply {
-                            background = rounded(0xFF1A1A1A.toInt(), radius = dp(10).toFloat())
-                            setPadding(dp(14), dp(12), dp(14), dp(12))
-                        }
-                        settingsCard.addView(label("Server Playback & Transcode Settings", 14f, true))
-                        settingsCard.addView(TextView(this@MainActivity).apply {
-                            text = "Shared server defaults (phone admin)"
-                            textSize = 11.5f; setTextColor(MUTED); setPadding(0, dp(2), 0, dp(8))
-                        })
+                        val settingsCard = adminCard("Playback & Transcode Defaults", "Shared server defaults for all devices.")
 
                         fun adminField(title: String, initial: String, numeric: Boolean = false, visible: Boolean = true): EditText {
                             settingsCard.addView(TextView(this@MainActivity).apply {
-                                text = title; textSize = 11.5f; setTextColor(MUTED); setPadding(0, dp(6), 0, dp(2))
+                                text = title; textSize = 11.5f; typeface = android.graphics.Typeface.DEFAULT_BOLD
+                                setTextColor(MUTED); setPadding(0, dp(8), 0, dp(4))
                                 visibility = if (visible) View.VISIBLE else View.GONE
                             })
                             return EditText(this@MainActivity).apply {
                                 setText(initial)
                                 setTextColor(Color.WHITE)
+                                textSize = 13.5f
                                 setSingleLine(true)
+                                background = rounded(NETFLIX_ELEVATED, stroke = NETFLIX_BORDER, radius = dp(8).toFloat(), strokeWidth = dp(1))
+                                setPadding(dp(12), dp(10), dp(12), dp(10))
                                 if (numeric) inputType = android.text.InputType.TYPE_CLASS_NUMBER
+                                visibility = if (visible) View.VISIBLE else View.GONE
+                                settingsCard.addView(this)
+                            }
+                        }
+
+                        fun adminSpinner(title: String, options: List<String>, selectedValue: String, visible: Boolean): android.widget.Spinner {
+                            settingsCard.addView(TextView(this@MainActivity).apply {
+                                text = title; textSize = 11.5f; typeface = android.graphics.Typeface.DEFAULT_BOLD
+                                setTextColor(MUTED); setPadding(0, dp(8), 0, dp(4))
+                                visibility = if (visible) View.VISIBLE else View.GONE
+                            })
+                            return android.widget.Spinner(this@MainActivity).apply {
+                                adapter = android.widget.ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, options)
+                                setSelection(options.indexOf(selectedValue).coerceAtLeast(0))
+                                background = rounded(NETFLIX_ELEVATED, stroke = NETFLIX_BORDER, radius = dp(8).toFloat(), strokeWidth = dp(1))
+                                setPadding(dp(6), dp(4), dp(6), dp(4))
                                 visibility = if (visible) View.VISIBLE else View.GONE
                                 settingsCard.addView(this)
                             }
@@ -5310,29 +5117,10 @@ class MainActivity : AppCompatActivity() {
                         val showFeatures = adminPlaybackCategory == "all" || adminPlaybackCategory == "features"
 
                         val hwModes = listOf("auto", "none", "vaapi", "qsv", "nvenc", "videotoolbox")
-                        val hwLabel = TextView(this@MainActivity).apply {
-                            text = "Hardware Acceleration"; textSize = 11.5f; setTextColor(MUTED); setPadding(0, dp(4), 0, dp(2))
-                            visibility = if (showTranscoding) View.VISIBLE else View.GONE
-                        }
-                        settingsCard.addView(hwLabel)
-                        val hwSpinner = android.widget.Spinner(this@MainActivity).apply {
-                            adapter = android.widget.ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, hwModes)
-                            setSelection(hwModes.indexOf(sObj.optString("hwAccel", "auto")).coerceAtLeast(0))
-                            visibility = if (showTranscoding) View.VISIBLE else View.GONE
-                        }
-                        settingsCard.addView(hwSpinner)
+                        val hwSpinner = adminSpinner("Hardware Acceleration", hwModes, sObj.optString("hwAccel", "auto"), showTranscoding)
 
                         val presets = listOf("ultrafast", "superfast", "veryfast", "faster", "fast", "medium")
-                        settingsCard.addView(TextView(this@MainActivity).apply {
-                            text = "Transcode Preset"; textSize = 11.5f; setTextColor(MUTED); setPadding(0, dp(6), 0, dp(2))
-                            visibility = if (showTranscoding) View.VISIBLE else View.GONE
-                        })
-                        val presetSpinner = android.widget.Spinner(this@MainActivity).apply {
-                            adapter = android.widget.ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, presets)
-                            setSelection(presets.indexOf(sObj.optString("transcodePreset", "veryfast")).coerceAtLeast(0))
-                            visibility = if (showTranscoding) View.VISIBLE else View.GONE
-                        }
-                        settingsCard.addView(presetSpinner)
+                        val presetSpinner = adminSpinner("Transcode Preset", presets, sObj.optString("transcodePreset", "veryfast"), showTranscoding)
 
                         val bitrateInput = adminField("Max Transcode Bitrate (Mbps)", sObj.optInt("maxTranscodeBitrateMbps", 20).toString(), numeric = true, visible = showTranscoding)
                         val defAudioInput = adminField("Default Audio Language", sObj.optString("defaultAudioLanguage", "eng"), visible = showLanguages)
@@ -5340,16 +5128,7 @@ class MainActivity : AppCompatActivity() {
                         val metaLangInput = adminField("Metadata Language", sObj.optString("metadataLanguage", "en-US"), visible = showLanguages)
 
                         val srvSubModes = listOf("default", "forced", "always", "none")
-                        settingsCard.addView(TextView(this@MainActivity).apply {
-                            text = "Server Subtitle Mode"; textSize = 11.5f; setTextColor(MUTED); setPadding(0, dp(6), 0, dp(2))
-                            visibility = if (showLanguages) View.VISIBLE else View.GONE
-                        })
-                        val srvSubSpinner = android.widget.Spinner(this@MainActivity).apply {
-                            adapter = android.widget.ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, srvSubModes)
-                            setSelection(srvSubModes.indexOf(sObj.optString("subtitleMode", "default")).coerceAtLeast(0))
-                            visibility = if (showLanguages) View.VISIBLE else View.GONE
-                        }
-                        settingsCard.addView(srvSubSpinner)
+                        val srvSubSpinner = adminSpinner("Server Subtitle Mode", srvSubModes, sObj.optString("subtitleMode", "default"), showLanguages)
 
                         val toggleSpecs = listOf(
                             "allowDirectPlay" to "Allow Direct Play",
@@ -5362,22 +5141,36 @@ class MainActivity : AppCompatActivity() {
                             "enableSyncPlay" to "SyncPlay (Watch Together)",
                             "enableWatchStats" to "Per-Profile Watch Stats",
                         )
-                        val toggleBoxes = toggleSpecs.associate { (k, labelText) ->
-                            val cb = android.widget.CheckBox(this@MainActivity).apply {
-                                text = labelText
-                                setTextColor(Color.WHITE)
-                                isChecked = sObj.optBoolean(k, k != "enableTrickplay")
+                        if (showFeatures) {
+                            settingsCard.addView(TextView(this@MainActivity).apply {
+                                text = "Feature Toggles"; textSize = 11.5f; typeface = android.graphics.Typeface.DEFAULT_BOLD
+                                setTextColor(MUTED); setPadding(0, dp(12), 0, dp(4))
+                            })
+                        }
+                        val toggleBoxes = toggleSpecs.mapIndexed { idx, (k, labelText) ->
+                            val row = LinearLayout(this@MainActivity).apply {
+                                orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+                                setPadding(0, dp(6), 0, dp(6))
                                 visibility = if (showFeatures) View.VISIBLE else View.GONE
                             }
-                            settingsCard.addView(cb)
-                            k to cb
-                        }
+                            row.addView(TextView(this@MainActivity).apply {
+                                text = labelText; textSize = 13f; setTextColor(Color.WHITE)
+                                layoutParams = LinearLayout.LayoutParams(0, -2, 1f)
+                            })
+                            val sw = android.widget.Switch(this@MainActivity).apply {
+                                isChecked = sObj.optBoolean(k, k != "enableTrickplay")
+                            }
+                            row.addView(sw)
+                            if (idx > 0 && showFeatures) settingsCard.addView(divider())
+                            settingsCard.addView(row)
+                            k to sw
+                        }.toMap()
 
                         if (!showTranscoding && !showLanguages && !showFeatures) {
                             settingsCard.visibility = View.GONE
                         }
 
-                        settingsCard.addView(action("Save Server Settings", primary = true) {
+                        settingsCard.addView(adminBtn("Save Server Settings", primary = true) {
                             lifecycleScope.launch {
                                 val patch = JSONObject()
                                     .put("hwAccel", hwModes[hwSpinner.selectedItemPosition])
@@ -5387,7 +5180,7 @@ class MainActivity : AppCompatActivity() {
                                     .put("defaultSubtitleLanguage", defSubInput.text.toString().trim().ifBlank { "eng" })
                                     .put("metadataLanguage", metaLangInput.text.toString().trim().ifBlank { "en-US" })
                                     .put("subtitleMode", srvSubModes[srvSubSpinner.selectedItemPosition])
-                                toggleBoxes.forEach { (k, cb) -> patch.put(k, cb.isChecked) }
+                                toggleBoxes.forEach { (k, sw) -> patch.put(k, sw.isChecked) }
                                 runCatching {
                                     api.call("native/library", body = JSONObject().put("action", "saveSettings").put("settings", patch))
                                 }.onSuccess {
@@ -5398,9 +5191,9 @@ class MainActivity : AppCompatActivity() {
                                 }
                             }
                         }.apply {
-                            layoutParams = LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(10) }
+                            layoutParams = LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(14) }
                         })
-                        host.addView(settingsCard, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(10) })
+                        host.addView(settingsCard, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(12) })
                     }
                     "maintenance" -> {
                         val nativeData = api.call("native/library", params = mapOf("view" to "maintenance"))
@@ -5411,64 +5204,58 @@ class MainActivity : AppCompatActivity() {
                         val intro = nativeData.optJSONObject("introDetection")
                         val backups = nativeData.objects("backups")
 
-                        val jobsCard = column().apply {
-                            background = rounded(0xFF1A1A1A.toInt(), radius = dp(10).toFloat())
-                            setPadding(dp(14), dp(12), dp(14), dp(12))
-                        }
-                        jobsCard.addView(label("Trickplay, Intro Detection & Caches", 15f, true))
-                        val tpText = if (tp?.optBoolean("running") == true) "Running ${tp.optInt("completed")}/${tp.optInt("total")}" else "Idle"
-                        val introText = if (intro?.optBoolean("running") == true) "Running ${intro.optInt("completed")}/${intro.optInt("total")}" else "Idle"
+                        val tpText = if (tp?.optBoolean("running") == true) "${tp.optInt("completed")}/${tp.optInt("total")}" else "Idle"
+                        val introText = if (intro?.optBoolean("running") == true) "${intro.optInt("completed")}/${intro.optInt("total")}" else "Idle"
                         val cacheMb = ((cache?.optLong("trickplayBytes") ?: 0L) + (cache?.optLong("transcodeBytes") ?: 0L) + (cache?.optLong("subtitleCacheBytes") ?: 0L)) / 1048576L
-                        jobsCard.addView(TextView(this@MainActivity).apply {
-                            text = "Trickplay Backfill: $tpText\nIntro Detection: $introText\nCached Media/Temp: ${cacheMb} MB"
-                            textSize = 12f; setTextColor(MUTED); setPadding(0, dp(4), 0, dp(8))
-                        })
+
+                        host.addView(statRow(listOf(
+                            Triple(tpText, "Trickplay", Color.WHITE),
+                            Triple(introText, "Intros", Color.WHITE),
+                            Triple("${cacheMb} MB", "Temp Cache", Color.WHITE)
+                        )), LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(12) })
+
+                        val jobsCard = adminCard("Background Jobs & Caches", "Generate seek thumbnails, detect show intros, or clear temp caches.")
                         val mRow = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.HORIZONTAL }
-                        mRow.addView(action("Backfill Trickplay", primary = true) {
+                        mRow.addView(adminBtn("Backfill Trickplay", primary = true) {
                             lifecycleScope.launch {
                                 runCatching { api.call("native/library", body = JSONObject().put("action", "backfillTrickplay")) }
                                     .onSuccess { toast("Trickplay backfill started"); adminPanel("maintenance") }
                             }
-                        })
-                        mRow.addView(action("Detect Intros") {
+                        }, LinearLayout.LayoutParams(0, -2, 1f).apply { marginEnd = dp(8) })
+                        mRow.addView(adminBtn("Detect Intros") {
                             lifecycleScope.launch {
                                 runCatching { api.call("native/library", body = JSONObject().put("action", "introDetectionStart")) }
                                     .onSuccess { toast("Intro detection started"); adminPanel("maintenance") }
                             }
-                        }.apply { (layoutParams as? LinearLayout.LayoutParams)?.marginStart = dp(8) })
-                        mRow.addView(action("Prune Caches") {
+                        }, LinearLayout.LayoutParams(0, -2, 1f))
+                        jobsCard.addView(mRow)
+                        jobsCard.addView(adminBtn("Prune Temp Caches") {
                             lifecycleScope.launch {
                                 runCatching { api.call("native/library", body = JSONObject().put("action", "pruneCaches")) }
                                     .onSuccess { toast("Caches pruned"); adminPanel("maintenance") }
                             }
-                        }.apply { (layoutParams as? LinearLayout.LayoutParams)?.marginStart = dp(8) })
-                        jobsCard.addView(mRow)
-                        host.addView(jobsCard, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(10) })
+                        }.apply { layoutParams = LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) } })
+                        host.addView(jobsCard, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(12) })
 
-                        val backupCard = column().apply {
-                            background = rounded(0xFF1A1A1A.toInt(), radius = dp(10).toFloat())
-                            setPadding(dp(14), dp(12), dp(14), dp(12))
-                        }
-                        backupCard.addView(label("SQLite Backups (${backups.size})", 14f, true))
-                        backupCard.addView(action("Create & Verify Backup", primary = true) {
+                        val backupCard = adminCard("SQLite Backups (${backups.size})", "Create and verify database snapshots.")
+                        backupCard.addView(adminBtn("Create & Verify Backup", primary = true) {
                             lifecycleScope.launch {
                                 runCatching { api.call("native/library", body = JSONObject().put("action", "backupCreate")) }
                                     .onSuccess { toast("Backup created and verified"); adminPanel("maintenance") }
                                     .onFailure { toast(it.message ?: "Backup failed") }
                             }
-                        }.apply { setPadding(0, dp(8), 0, dp(8)) })
-                        for (b in backups.take(5)) {
+                        }.apply { layoutParams = LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(10) } })
+                        backups.take(5).forEachIndexed { idx, b ->
+                            if (idx > 0) backupCard.addView(divider())
                             val fname = b.optString("filename")
                             val bRow = LinearLayout(this@MainActivity).apply {
                                 orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
-                                setPadding(0, dp(4), 0, dp(4))
                             }
                             bRow.addView(TextView(this@MainActivity).apply {
-                                text = fname
-                                textSize = 11.5f; setTextColor(Color.WHITE)
+                                text = fname; textSize = 12f; setTextColor(Color.WHITE)
                                 layoutParams = LinearLayout.LayoutParams(0, -2, 1f)
                             })
-                            bRow.addView(action("Verify") {
+                            bRow.addView(adminBtn("Verify") {
                                 lifecycleScope.launch {
                                     runCatching { api.call("native/library", body = JSONObject().put("action", "backupVerify").put("filename", fname)) }
                                         .onSuccess { res ->
@@ -5479,7 +5266,7 @@ class MainActivity : AppCompatActivity() {
                             })
                             backupCard.addView(bRow)
                         }
-                        host.addView(backupCard, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(10) })
+                        host.addView(backupCard, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(12) })
                     }
                     "downloads" -> {
                         while (kotlinx.coroutines.currentCoroutineContext()[kotlinx.coroutines.Job]?.isActive == true &&
@@ -5495,22 +5282,18 @@ class MainActivity : AppCompatActivity() {
                             val sysQueue = mgr?.objects("systemDownloads").orEmpty()
                             val reqItems = req?.objects("items").orEmpty()
 
-                            val summaryCard = column().apply {
-                                background = rounded(0xFF1A1A1A.toInt(), radius = dp(10).toFloat())
-                                setPadding(dp(14), dp(12), dp(14), dp(12))
-                            }
-                            summaryCard.addView(label("Library & Queue Summary", 15f, true))
                             val musicReady = music?.optInt("ready") ?: 0
                             val musicActive = (music?.optInt("queued") ?: 0) + (music?.optInt("searching") ?: 0) +
                                 (music?.optInt("downloading") ?: 0) + (music?.optInt("importing") ?: 0)
                             val musicFailed = music?.optInt("failed") ?: 0
-                            summaryCard.addView(TextView(this@MainActivity).apply {
-                                text = "Torrents: ${torrents.size} • System Queues: ${sysQueue.size}\n" +
-                                    "Music Ready: $musicReady • Active: $musicActive • Failed: $musicFailed\n" +
-                                    "Requested Items: ${reqItems.size}"
-                                textSize = 12f; setTextColor(MUTED); setPadding(0, dp(6), 0, dp(10))
-                            })
-                            val subTabs = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.HORIZONTAL }
+
+                            host.addView(statRow(listOf(
+                                Triple("${torrents.size}", "Torrents", Color.WHITE),
+                                Triple("${sysQueue.size}", "System Queue", Color.WHITE),
+                                Triple("$musicReady/$musicActive", "Music Ready", if (musicFailed > 0) 0xFFFBBF24.toInt() else 0xFF34D399.toInt())
+                            )), LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(12) })
+
+                            val subTabs = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, 0, 0, dp(10)) }
                             subTabs.addView(categoryPill("qBittorrent", active = downloadManagerSubTab == "torrents") {
                                 downloadManagerSubTab = "torrents"; adminPanel("downloads")
                             })
@@ -5518,30 +5301,25 @@ class MainActivity : AppCompatActivity() {
                                 downloadManagerSubTab = "system"; adminPanel("downloads")
                             })
                             subTabs.addView(categoryPill("+ Add Magnet", active = false) { showAddTorrentDialog() })
-                            summaryCard.addView(HorizontalScrollView(this@MainActivity).apply {
-                                isHorizontalScrollBarEnabled = false
-                                addView(subTabs)
+                            host.addView(HorizontalScrollView(this@MainActivity).apply {
+                                isHorizontalScrollBarEnabled = false; addView(subTabs)
                             })
-                            host.addView(summaryCard, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(12) })
 
                             if (mgr != null) {
                                 renderInteractiveDownloadManager(host, mgr) { adminPanel("downloads") }
                             }
 
                             if (reqItems.isNotEmpty()) {
-                                host.addView(label("Recent Requests (${reqItems.size})", 15f, true).apply { setPadding(0, dp(8), 0, dp(6)) })
-                                reqItems.take(10).forEach { item ->
-                                    val row = column().apply {
-                                        background = rounded(0xFF161616.toInt(), radius = dp(8).toFloat())
-                                        setPadding(dp(12), dp(10), dp(12), dp(10))
-                                    }
-                                    row.addView(label(item.optString("title"), 13f, true))
-                                    row.addView(TextView(this@MainActivity).apply {
+                                val reqCard = adminCard("Recent Requests (${reqItems.size})")
+                                reqItems.take(10).forEachIndexed { idx, item ->
+                                    if (idx > 0) reqCard.addView(divider())
+                                    reqCard.addView(label(item.optString("title"), 13f, true))
+                                    reqCard.addView(TextView(this@MainActivity).apply {
                                         text = "${item.optString("type")} • ${item.optString("status")}"
-                                        textSize = 11f; setTextColor(MUTED); setPadding(0, dp(2), 0, 0)
+                                        textSize = 11.5f; setTextColor(MUTED); setPadding(0, dp(2), 0, 0)
                                     })
-                                    host.addView(row, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(6) })
                                 }
+                                host.addView(reqCard, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(10) })
                             }
                             kotlinx.coroutines.delay(4000)
                         }
@@ -5555,29 +5333,31 @@ class MainActivity : AppCompatActivity() {
                         if (screen != "admin-panel" || adminPanelTab != "system") return@launch
                         host.removeAllViews()
 
-                        val pathCard = column().apply {
-                            background = rounded(0xFF1A1A1A.toInt(), radius = dp(10).toFloat())
-                            setPadding(dp(14), dp(12), dp(14), dp(12))
+                        val pathCard = adminCard("Storage Paths & Capabilities")
+                        listOf(
+                            "Downloads" to integrations?.optString("downloadsPath").orEmpty().ifBlank { "Not set" },
+                            "Books" to integrations?.optString("booksPath").orEmpty().ifBlank { "/books" },
+                            "Music" to integrations?.optString("musicPath").orEmpty().ifBlank { "/music" },
+                            "Manage Integrations" to if (caps?.optBoolean("canManageIntegrations") == true) "Enabled" else "Restricted"
+                        ).forEachIndexed { idx, (k, v) ->
+                            if (idx > 0) pathCard.addView(divider())
+                            val r = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+                            r.addView(TextView(this@MainActivity).apply { text = k; textSize = 12.5f; setTextColor(MUTED); layoutParams = LinearLayout.LayoutParams(0, -2, 1f) })
+                            r.addView(TextView(this@MainActivity).apply { text = v; textSize = 12.5f; typeface = android.graphics.Typeface.DEFAULT_BOLD; setTextColor(Color.WHITE) })
+                            pathCard.addView(r)
                         }
-                        pathCard.addView(label("Storage Paths & Capabilities", 15f, true))
-                        pathCard.addView(TextView(this@MainActivity).apply {
-                            text = "Downloads: ${integrations?.optString("downloadsPath").orEmpty().ifBlank { "Not set" }}\n" +
-                                "Books: ${integrations?.optString("booksPath").orEmpty().ifBlank { "/books" }}\n" +
-                                "Music: ${integrations?.optString("musicPath").orEmpty().ifBlank { "/music" }}\n" +
-                                "Manage Integrations: ${caps?.optBoolean("canManageIntegrations") == true}"
-                            textSize = 12f; setTextColor(MUTED); setPadding(0, dp(6), 0, 0)
-                        })
                         host.addView(pathCard, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(12) })
 
                         val accounts = accountsRes?.objects("accounts").orEmpty()
+                        val acctCard = adminCard()
                         val acctHeader = LinearLayout(this@MainActivity).apply {
                             orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
-                            setPadding(0, 0, 0, dp(6))
+                            setPadding(0, 0, 0, dp(8))
                         }
-                        acctHeader.addView(label("Accounts (${accounts.size})", 15f, true).apply {
+                        acctHeader.addView(label("Accounts (${accounts.size})", 15.5f, true).apply {
                             layoutParams = LinearLayout.LayoutParams(0, -2, 1f)
                         })
-                        acctHeader.addView(action("+ Add Account") {
+                        acctHeader.addView(adminBtn("+ Add Account", primary = true) {
                             val form = column().apply { setPadding(dp(20), dp(12), dp(20), dp(12)) }
                             val uField = EditText(this@MainActivity).apply { hint = "Username"; setTextColor(Color.WHITE); setHintTextColor(MUTED); form.addView(this) }
                             val pField = EditText(this@MainActivity).apply { hint = "Password (min 4)"; inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD; setTextColor(Color.WHITE); setHintTextColor(MUTED); form.addView(this) }
@@ -5593,12 +5373,14 @@ class MainActivity : AppCompatActivity() {
                                         } catch (e: Exception) { toast(e.message ?: "Failed to create account") }
                                     }
                                 }.show()
-                        }.apply { textSize = 11.5f; setPadding(dp(10), dp(6), dp(10), dp(6)) })
-                        host.addView(acctHeader)
-                        accounts.forEach { a ->
-                            val row = column().apply {
-                                background = rounded(0xFF161616.toInt(), radius = dp(8).toFloat())
-                                setPadding(dp(12), dp(10), dp(12), dp(10))
+                        })
+                        acctCard.addView(acctHeader)
+                        accounts.forEachIndexed { idx, a ->
+                            if (idx > 0) acctCard.addView(divider())
+                            val row = LinearLayout(this@MainActivity).apply {
+                                orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+                                setPadding(0, dp(4), 0, dp(4))
+                                isClickable = true; isFocusable = true
                                 setOnClickListener {
                                     val opts = arrayOf("Set Password", if (a.optBoolean("isAdmin")) "Demote Admin" else "Make Admin", "Delete Account")
                                     AlertDialog.Builder(this@MainActivity).setTitle(a.optString("displayName")).setItems(opts) { _, which ->
@@ -5624,60 +5406,63 @@ class MainActivity : AppCompatActivity() {
                                     }.show()
                                 }
                             }
-                            row.addView(label("${a.optString("displayName")} (@${a.optString("username")})${if (a.optBoolean("isAdmin")) " • Admin" else ""}", 13f, true))
-                            host.addView(row, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(6) })
+                            row.addView(label("${a.optString("displayName")} (@${a.optString("username")})", 13f, true).apply {
+                                layoutParams = LinearLayout.LayoutParams(0, -2, 1f)
+                            })
+                            if (a.optBoolean("isAdmin")) {
+                                row.addView(badgePill("ADMIN"))
+                            }
+                            acctCard.addView(row)
                         }
+                        host.addView(acctCard, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(12) })
 
                         val profiles = accountsRes?.objects("profiles").takeIf { !it.isNullOrEmpty() } ?: profilesRes?.objects("profiles").orEmpty()
-                        host.addView(label("Profiles (${profiles.size})", 15f, true).apply { setPadding(0, 0, 0, dp(6)) })
-                        profiles.forEach { p ->
+                        val profCard = adminCard("Profiles (${profiles.size})")
+                        profiles.forEachIndexed { idx, p ->
+                            if (idx > 0) profCard.addView(divider())
                             val badges = buildList {
                                 if (p.optBoolean("isAdministrator")) add("Admin")
                                 if (p.optBoolean("isKids")) add("Kids")
                             }.joinToString(" • ").ifBlank { "Standard" }
-                            val row = column().apply {
-                                background = rounded(0xFF161616.toInt(), radius = dp(8).toFloat())
-                                setPadding(dp(12), dp(10), dp(12), dp(10))
-                            }
-                            row.addView(label("${p.optString("name")}  ($badges)", 13f, true))
-                            host.addView(row, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(6) })
+                            val row = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+                            row.addView(label(p.optString("name"), 13f, true).apply { layoutParams = LinearLayout.LayoutParams(0, -2, 1f) })
+                            row.addView(TextView(this@MainActivity).apply { text = badges; textSize = 11.5f; setTextColor(MUTED) })
+                            profCard.addView(row)
                         }
+                        host.addView(profCard, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(12) })
 
                         val sessions = sessionsRes?.objects("sessions").orEmpty()
-                        host.addView(label("Active Playback Sessions (${sessions.size})", 15f, true).apply { setPadding(0, dp(8), 0, dp(6)) })
+                        val sessCard = adminCard("Active Playback Sessions (${sessions.size})")
                         if (sessions.isEmpty()) {
-                            host.addView(TextView(this@MainActivity).apply { text = "No active sessions."; textSize = 12f; setTextColor(MUTED) })
+                            sessCard.addView(TextView(this@MainActivity).apply { text = "No active sessions."; textSize = 12f; setTextColor(MUTED) })
                         } else {
-                            sessions.forEach { s ->
-                                val row = column().apply {
-                                    background = rounded(0xFF161616.toInt(), radius = dp(8).toFloat())
-                                    setPadding(dp(12), dp(10), dp(12), dp(10))
-                                }
-                                row.addView(label("${s.optString("deviceName")} (${s.optString("platform").ifBlank { s.optString("deviceType", "device") }})", 13f, true))
-                                row.addView(TextView(this@MainActivity).apply {
+                            sessions.forEachIndexed { idx, s ->
+                                if (idx > 0) sessCard.addView(divider())
+                                sessCard.addView(label("${s.optString("deviceName")} (${s.optString("platform").ifBlank { s.optString("deviceType", "device") }})", 13f, true))
+                                sessCard.addView(TextView(this@MainActivity).apply {
                                     text = s.optString("title").ifBlank { if (s.optBoolean("isPlaying")) "playing" else "idle" }
-                                    textSize = 11f; setTextColor(MUTED); setPadding(0, dp(2), 0, dp(6))
+                                    textSize = 11.5f; setTextColor(MUTED); setPadding(0, dp(2), 0, dp(8))
                                 })
                                 val cmdRow = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.HORIZONTAL }
                                 val targetId = s.optString("deviceId")
-                                cmdRow.addView(action("Play/Pause") {
+                                cmdRow.addView(adminBtn("Play/Pause") {
                                     lifecycleScope.launch {
                                         runCatching { api.call("sessions/command", body = JSONObject().put("targetDeviceId", targetId).put("type", "togglePlayPause")) }
                                             .onSuccess { toast("Sent Play/Pause") }
                                             .onFailure { toast("Command failed") }
                                     }
-                                })
-                                cmdRow.addView(action("Stop") {
+                                }, LinearLayout.LayoutParams(0, -2, 1f).apply { marginEnd = dp(8) })
+                                cmdRow.addView(adminBtn("Stop") {
                                     lifecycleScope.launch {
                                         runCatching { api.call("sessions/command", body = JSONObject().put("targetDeviceId", targetId).put("type", "stop")) }
                                             .onSuccess { toast("Sent Stop"); adminPanel("system") }
                                             .onFailure { toast("Command failed") }
                                     }
-                                }.apply { (layoutParams as? LinearLayout.LayoutParams)?.marginStart = dp(8) })
-                                row.addView(cmdRow)
-                                host.addView(row, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(6) })
+                                }, LinearLayout.LayoutParams(0, -2, 1f))
+                                sessCard.addView(cmdRow)
                             }
                         }
+                        host.addView(sessCard, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(12) })
                     }
                 }
             } catch (e: Exception) {
@@ -5847,23 +5632,21 @@ class MainActivity : AppCompatActivity() {
         currentTab = "youtube"; screen = "youtube"
         shell()
 
-        if (isTelevision()) {
-            val pillRow = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                setPadding(gutter, dp(10), gutter, dp(12))
-            }
-            pillRow.addView(categoryPill("All", active = youtubeSubTab == "home") { youtubeSubTab = "home"; loadYouTube() })
-            pillRow.addView(categoryPill("Subscriptions", active = youtubeSubTab == "subscriptions") { youtubeSubTab = "subscriptions"; loadYouTube() })
-            pillRow.addView(categoryPill("Queue", active = youtubeSubTab == "queue") { youtubeSubTab = "queue"; loadYouTube() })
-            pillRow.addView(categoryPill("NAS Archive", active = youtubeSubTab == "archive") { youtubeSubTab = "archive"; loadYouTube() })
-            pillRow.addView(categoryPill("Search", active = youtubeSubTab == "search") { youtubeSubTab = "search"; loadYouTube() })
-            pillRow.addView(categoryPill("Account", active = false) { openYouTubeAuthDialog() })
-
-            content.addView(HorizontalScrollView(this).apply {
-                isHorizontalScrollBarEnabled = false
-                addView(pillRow)
-            })
+        val pillRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(gutter, dp(10), gutter, dp(12))
         }
+        pillRow.addView(categoryPill("All", active = youtubeSubTab == "home") { youtubeSubTab = "home"; loadYouTube() })
+        pillRow.addView(categoryPill("Subscriptions", active = youtubeSubTab == "subscriptions") { youtubeSubTab = "subscriptions"; loadYouTube() })
+        pillRow.addView(categoryPill("Queue", active = youtubeSubTab == "queue") { youtubeSubTab = "queue"; loadYouTube() })
+        pillRow.addView(categoryPill("NAS Archive", active = youtubeSubTab == "archive") { youtubeSubTab = "archive"; loadYouTube() })
+        pillRow.addView(categoryPill("Search", active = youtubeSubTab == "search") { youtubeSubTab = "search"; loadYouTube() })
+        pillRow.addView(categoryPill("Account", active = false) { openYouTubeAuthDialog() })
+
+        content.addView(HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+            addView(pillRow)
+        })
 
         when (youtubeSubTab) {
             "home" -> renderYouTubeHome()
@@ -6698,19 +6481,17 @@ class MainActivity : AppCompatActivity() {
         currentTab = "books"; screen = "books"
         shell()
 
-        if (isTelevision()) {
-            val pillRow = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                setPadding(gutter, dp(10), gutter, dp(12))
-            }
-            pillRow.addView(categoryPill("Bookshelf", active = booksSubTab == "shelf") { booksSubTab = "shelf"; loadBooks() })
-            pillRow.addView(categoryPill("Search & Request", active = booksSubTab == "discover") { booksSubTab = "discover"; loadBooks() })
-            pillRow.addView(categoryPill("Downloads", active = booksSubTab == "downloads") { booksSubTab = "downloads"; loadBooks() })
-            content.addView(HorizontalScrollView(this).apply {
-                isHorizontalScrollBarEnabled = false
-                addView(pillRow)
-            })
+        val pillRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(gutter, dp(10), gutter, dp(12))
         }
+        pillRow.addView(categoryPill("Bookshelf", active = booksSubTab == "shelf") { booksSubTab = "shelf"; loadBooks() })
+        pillRow.addView(categoryPill("Search & Request", active = booksSubTab == "discover") { booksSubTab = "discover"; loadBooks() })
+        pillRow.addView(categoryPill("Downloads", active = booksSubTab == "downloads") { booksSubTab = "downloads"; loadBooks() })
+        content.addView(HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+            addView(pillRow)
+        })
 
         when (booksSubTab) {
             "discover" -> renderBooksDiscover()

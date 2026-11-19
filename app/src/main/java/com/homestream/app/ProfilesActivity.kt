@@ -174,6 +174,34 @@ class ProfilesActivity : AppCompatActivity() {
                     setTextColor(MUTED); gravity = Gravity.CENTER; setPadding(0, dp(12), 0, 0)
                 })
                 if ((list?.length() ?: 0) == 0) page.addView(label("No profiles yet. Add your first profile to get started.", 15f))
+
+                val footer = column().apply {
+                    gravity = Gravity.CENTER_HORIZONTAL
+                    setPadding(0, dp(24), 0, dp(16))
+                }
+                fun footerButton(labelText: String, onClick: () -> Unit) = Button(this@ProfilesActivity).apply {
+                    text = labelText
+                    textSize = 13.5f
+                    typeface = android.graphics.Typeface.DEFAULT_BOLD
+                    setTextColor(Color.WHITE)
+                    isAllCaps = false
+                    background = rounded(NETFLIX_SURFACE, stroke = NETFLIX_BORDER, radius = dp(8).toFloat(), strokeWidth = dp(1))
+                    setPadding(dp(24), dp(10), dp(24), dp(10))
+                    focusableCard(NETFLIX_SURFACE)
+                    setOnClickListener { onClick() }
+                }
+                if (settings.isAdmin) {
+                    footer.addView(footerButton("Admin Settings") {
+                        setResult(RESULT_OK, android.content.Intent().putExtra("action", "admin"))
+                        finish()
+                    }, LinearLayout.LayoutParams(dp(220), -2).apply { bottomMargin = dp(10) })
+                }
+                footer.addView(footerButton("Connection") {
+                    setResult(RESULT_OK, android.content.Intent().putExtra("action", "connection"))
+                    finish()
+                }, LinearLayout.LayoutParams(dp(220), -2))
+                page.addView(footer)
+
                 if (isTelevision()) page.post {
                     val targets = ArrayList<View>(); page.addFocusables(targets, View.FOCUS_FORWARD)
                     targets.firstOrNull()?.requestFocus()
@@ -290,10 +318,43 @@ class ProfilesActivity : AppCompatActivity() {
         form.addView(error)
         val dialog = AlertDialog.Builder(this).setTitle(if (profile == null) "Add profile" else "Edit profile")
             .setView(ScrollView(this).apply { addView(form) }).setPositiveButton(if (profile == null) "Create profile" else "Save", null)
-            .setNegativeButton("Cancel", null).create()
+            .setNegativeButton("Cancel", null)
+            .apply {
+                if (profile != null && canManage) setNeutralButton("Delete profile", null)
+            }.create()
         var saveJob: kotlinx.coroutines.Job? = null
         dialog.setOnDismissListener { saveJob?.cancel() }
         dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_NEUTRAL)?.let { delBtn ->
+                delBtn.setTextColor(0xFFFF6B6B.toInt())
+                delBtn.setOnClickListener {
+                    val profileId = profile?.optString("id").orEmpty()
+                    if (profileId.isBlank()) return@setOnClickListener
+                    AlertDialog.Builder(this)
+                        .setTitle("Delete ${profile?.optString("name").orEmpty()}?")
+                        .setMessage("This will permanently remove this profile and its watch history.")
+                        .setNegativeButton("Cancel", null)
+                        .setPositiveButton("Delete") { _, _ ->
+                            delBtn.isEnabled = false
+                            error.text = ""
+                            saveJob = lifecycleScope.launch {
+                                try {
+                                    api.call("profiles", body = JSONObject()
+                                        .put("action", "delete")
+                                        .put("profileId", profileId)
+                                        .put("parentPin", parentPin))
+                                    if (api.refreshProfilePolicy()) clearCastIdle(this@ProfilesActivity)
+                                    setResult(Activity.RESULT_OK)
+                                    Toast.makeText(this@ProfilesActivity, "Profile deleted", Toast.LENGTH_LONG).show()
+                                    saveJob = null; dialog.dismiss(); refresh()
+                                } catch (e: Exception) {
+                                    if (e is CancellationException) throw e
+                                    error.text = e.message ?: "Could not delete profile"
+                                } finally { delBtn.isEnabled = true }
+                            }
+                        }.show()
+                }
+            }
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
                 val displayName = name.text.toString().trim()
                 if (displayName.isBlank() || displayName.length > 64) { name.error = "Enter a name of 1–64 characters"; return@setOnClickListener }
