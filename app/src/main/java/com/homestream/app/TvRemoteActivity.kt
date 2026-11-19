@@ -274,7 +274,8 @@ class TvRemoteActivity : AppCompatActivity() {
                     activeSession = null
                     renderState("Not on home network")
                 } else {
-                    availableTvs = snapshot.tvDevices
+                    availableTvs = (snapshot.tvDevices + snapshot.sessions.filter { it.deviceType == "web" })
+                        .distinctBy { it.deviceId }
                     if (selectedDeviceId.isBlank() || availableTvs.none { it.deviceId == selectedDeviceId }) {
                         selectedDeviceId = availableTvs.firstOrNull { !it.isIdle }?.deviceId
                             ?: availableTvs.firstOrNull()?.deviceId.orEmpty()

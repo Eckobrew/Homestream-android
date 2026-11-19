@@ -616,7 +616,7 @@ class MainActivity : AppCompatActivity() {
             }
             visibility = View.GONE
             setOnClickListener {
-                val targetId = activeBarSession?.takeIf { it.isTv }?.deviceId
+                val targetId = activeBarSession?.takeIf { it.isTv || it.deviceType == "web" }?.deviceId
                     ?: latestSnapshot.tvDevices.firstOrNull()?.deviceId
                 startActivity(Intent(this@MainActivity, TvRemoteActivity::class.java).apply {
                     if (!targetId.isNullOrBlank()) putExtra("deviceId", targetId)
@@ -641,7 +641,7 @@ class MainActivity : AppCompatActivity() {
                     updateNowPlayingBar()
                 } else {
                     val session = activeBarSession ?: return@setOnClickListener
-                    if (session.isTv) {
+                    if (session.isTv || session.deviceType == "web") {
                         lifecycleScope.launch {
                             PlaybackSessions.sendCommand(this@MainActivity, session.deviceId, "togglePlayPause")
                         }
@@ -664,7 +664,7 @@ class MainActivity : AppCompatActivity() {
                     updateNowPlayingBar()
                 } else {
                     val session = activeBarSession ?: return@setOnClickListener
-                    if (session.isTv) {
+                    if (session.isTv || session.deviceType == "web") {
                         lifecycleScope.launch {
                             if (session.mediaType == "video" && !session.canSkipNext) {
                                 PlaybackSessions.sendCommand(this@MainActivity, session.deviceId, "seekBy", deltaMs = 30_000L)
@@ -758,7 +758,7 @@ class MainActivity : AppCompatActivity() {
                 setColor(RED)
             }
             nowPlayingPlayBtn?.imageTintList = ColorStateList.valueOf(Color.WHITE)
-            val controllable = networkSession.isTv
+            val controllable = networkSession.isTv || networkSession.deviceType == "web"
             nowPlayingPlayBtn?.visibility = if (controllable) View.VISIBLE else View.GONE
             nowPlayingPlayBtn?.setImageResource(if (networkSession.isPlaying) R.drawable.ic_pause else R.drawable.ic_play_arrow)
             nowPlayingNextBtn?.visibility = if (controllable && (networkSession.canSkipNext || networkSession.mediaType == "video")) View.VISIBLE else View.GONE
