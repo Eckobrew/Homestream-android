@@ -811,7 +811,7 @@ class MainActivity : AppCompatActivity() {
                 if (settings.isKids) toast("Books is disabled for Kids profiles") else loadBooks()
             },
             BottomNavItem("Settings", R.drawable.nav_settings, screen == "admin-panel") {
-                openTrackPreferencesDialog()
+                if (settings.canUseProfiles) profiles() else openTrackPreferencesDialog()
             }
         )
 
@@ -958,7 +958,7 @@ class MainActivity : AppCompatActivity() {
             "Movies" to { loadTab("movies") },
             "TV Shows" to { loadTab("series") },
             "Music" to { if (settings.isKids) toast("Music is disabled for Kids profiles") else loadTab("music") },
-            "Settings" to { openTrackPreferencesDialog() }
+            "Settings" to { if (settings.canUseProfiles) profiles() else openTrackPreferencesDialog() }
         )
 
         tvTabs.forEach { (title, click) ->
