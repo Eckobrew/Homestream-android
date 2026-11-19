@@ -480,9 +480,6 @@ class MainActivity : AppCompatActivity() {
 
         if (!settings.isKids) header.addView(iconButton("Music player", R.drawable.nav_music) { musicControls() })
 
-        // Profile switcher button
-        if (settings.canUseProfiles) header.addView(iconButton("Profile", R.drawable.nav_profile) { profiles() })
-
         mainContainer.addView(header)
 
         // Netflix-style quick category chips under the header on video browse screens
