@@ -112,7 +112,8 @@ class PlayerActivity : AppCompatActivity() {
     private var episodes = EpisodeQueue()
     private var episodeJob: Job? = null
     private var titleColumn: LinearLayout? = null
-    private var queueBtn: TextView? = null
+    private var queueBtn: LinearLayout? = null
+    private var queueLabel: TextView? = null
     private val subtitleAppearance by lazy { SubtitleAppearance(this) }
     private val playbackPrefs by lazy { getSharedPreferences("playback", MODE_PRIVATE) }
     private var autoplay: Boolean
@@ -486,23 +487,6 @@ class PlayerActivity : AppCompatActivity() {
             bar.addView(badge, LinearLayout.LayoutParams(-2, -2).apply { marginEnd = dp(8) })
         }
 
-        // Episodes / Mix Playlist button
-        val qBtn = TextView(this).apply {
-            visibility = if (episodes.items.isNotEmpty()) View.VISIBLE else View.GONE
-            text = if (media.source == "youtube") "Mix (${episodes.items.size})" else "Episodes"
-            textSize = 11f
-            typeface = android.graphics.Typeface.DEFAULT_BOLD
-            setTextColor(Color.WHITE)
-            background = rounded(0x44000000.toInt(), radius = dp(14).toFloat())
-            setPadding(dp(12), dp(8), dp(12), dp(8))
-            isClickable = true
-            isFocusable = true
-            contentDescription = if (media.source == "youtube") "Mix Playlist" else "Episodes"
-            setOnClickListener { showEpisodeQueue() }
-        }
-        queueBtn = qBtn
-        bar.addView(qBtn, LinearLayout.LayoutParams(-2, -2).apply { marginEnd = dp(8) })
-
         // Sleek circular Cast button
         if (!media.isDownload) {
             val castBtn = castButton(this)
@@ -525,9 +509,40 @@ class PlayerActivity : AppCompatActivity() {
             setOnClickListener { changeEpisode(1) }
         }
         updateEpisodeNavigation()
+        // Bottom-left Netflix-style Episodes / Mix button with 3-line menu icon
+        val qLabel = TextView(this).apply {
+            text = if (media.source == "youtube") "Mix (${episodes.items.size})" else "Episodes"
+            textSize = 13f
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
+            setTextColor(Color.WHITE)
+        }
+        queueLabel = qLabel
+        val qBtn = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            visibility = if (episodes.items.isNotEmpty()) View.VISIBLE else View.GONE
+            background = rounded(0xCC141414.toInt(), stroke = 0x44FFFFFF, radius = dp(8).toFloat(), strokeWidth = dp(1))
+            setPadding(dp(14), dp(8), dp(16), dp(8))
+            isClickable = true
+            isFocusable = true
+            contentDescription = if (media.source == "youtube") "Mix Playlist" else "Episodes"
+            addView(ImageView(this@PlayerActivity).apply {
+                setImageResource(R.drawable.ic_menu)
+                imageTintList = ColorStateList.valueOf(Color.WHITE)
+            }, LinearLayout.LayoutParams(dp(18), dp(18)).apply { marginEnd = dp(8) })
+            addView(qLabel)
+            setOnClickListener { showEpisodeQueue() }
+        }
+        queueBtn = qBtn
+        frame.addView(qBtn, FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM or Gravity.START).apply {
+            marginStart = dp(20); bottomMargin = dp(88)
+        })
+
         frame.addView(overlay, FrameLayout.LayoutParams(-1, -2, Gravity.TOP))
         playerView.setControllerVisibilityListener(PlayerView.ControllerVisibilityListener { visible ->
-            overlay.visibility = if (visible == View.VISIBLE || remote != null) View.VISIBLE else View.GONE
+            val showOverlay = visible == View.VISIBLE || remote != null
+            overlay.visibility = if (showOverlay) View.VISIBLE else View.GONE
+            qBtn.visibility = if (showOverlay && episodes.items.isNotEmpty()) View.VISIBLE else View.GONE
             updateEpisodeNavigation()
             if (visible == View.VISIBLE) focusPlaybackControl()
         })
@@ -1468,11 +1483,12 @@ class PlayerActivity : AppCompatActivity() {
 
     private fun updateEpisodeControls() {
         updateEpisodeNavigation()
+        val hasQueue = episodes.items.isNotEmpty()
         queueBtn?.apply {
-            visibility = if (episodes.items.isNotEmpty()) View.VISIBLE else View.GONE
-            text = if (media.source == "youtube") "Mix (${episodes.items.size})" else "Episodes"
+            visibility = if (hasQueue && (playerView.isControllerFullyVisible || remote != null)) View.VISIBLE else View.GONE
             contentDescription = if (media.source == "youtube") "Mix Playlist" else "Episodes"
         }
+        queueLabel?.text = if (media.source == "youtube") "Mix (${episodes.items.size})" else "Episodes"
         titleColumn?.apply {
             removeAllViews()
             val series = media.json.optString("seriesName").ifBlank { media.json.optString("seriesTitle") }
@@ -1519,21 +1535,163 @@ class PlayerActivity : AppCompatActivity() {
     private fun showEpisodeQueue() {
         if (episodes.items.isEmpty()) { Toast.makeText(this, "No queue available.", Toast.LENGTH_SHORT).show(); return }
         val isYouTube = media.source == "youtube"
-        val labels = episodes.items.mapIndexed { idx, item ->
-            val active = if (item.playbackId == currentPlaybackId) "▶ " else ""
-            if (isYouTube) {
-                val ch = item.json.optString("channelTitle").ifBlank { item.json.optString("seriesName") }
-                val sub = if (ch.isNotBlank()) " · $ch" else ""
-                "$active${idx + 1}. ${item.title}$sub"
-            } else {
-                "$active S${item.json.optInt("seasonNumber", 1)} E${item.json.optInt("episodeNumber", 1)} · ${item.title}"
+        val dialog = android.app.Dialog(this, android.R.style.Theme_Black_NoTitleBar_Fullscreen)
+        val root = column().apply {
+            setBackgroundColor(INK)
+            setPadding(dp(20), dp(16), dp(20), dp(16))
+        }
+
+        // Netflix-style header bar
+        val header = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, 0, 0, dp(12))
+        }
+        header.addView(label(if (isYouTube) "Mix Playlist" else "Episodes", 22f, true), LinearLayout.LayoutParams(0, -2, 1f))
+        val closeBtn = ImageView(this).apply {
+            setImageResource(R.drawable.ic_close)
+            imageTintList = ColorStateList.valueOf(Color.WHITE)
+            background = rounded(0x28FFFFFF, radius = dp(18).toFloat())
+            setPadding(dp(8), dp(8), dp(8), dp(8))
+            isClickable = true; isFocusable = true
+            contentDescription = "Close"
+            setOnClickListener { dialog.dismiss() }
+        }
+        header.addView(closeBtn, LinearLayout.LayoutParams(dp(36), dp(36)))
+        root.addView(header)
+
+        // Season pills for multi-season series
+        val seasonsList = if (isYouTube) listOf(1) else episodes.items.map { it.json.optInt("seasonNumber", 1) }.distinct().sorted()
+        val currentSeason = if (isYouTube) 1 else media.json.optInt("seasonNumber", seasonsList.firstOrNull() ?: 1)
+        var selectedSeason = if (currentSeason in seasonsList) currentSeason else (seasonsList.firstOrNull() ?: 1)
+
+        val seasonPills = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, 0, 0, dp(12)) }
+        val listHost = column()
+
+        fun renderList() {
+            if (!isYouTube && seasonsList.size > 1) {
+                seasonPills.removeAllViews()
+                seasonsList.forEach { sNum ->
+                    val active = sNum == selectedSeason
+                    seasonPills.addView(TextView(this).apply {
+                        text = "Season $sNum"
+                        textSize = 12.5f
+                        typeface = android.graphics.Typeface.DEFAULT_BOLD
+                        setTextColor(if (active) Color.BLACK else Color.WHITE)
+                        background = rounded(if (active) Color.WHITE else 0x26FFFFFF, radius = dp(16).toFloat())
+                        setPadding(dp(14), dp(7), dp(14), dp(7))
+                        isClickable = true; isFocusable = true
+                        layoutParams = LinearLayout.LayoutParams(-2, -2).apply { marginEnd = dp(8) }
+                        setOnClickListener { selectedSeason = sNum; renderList() }
+                    })
+                }
             }
-        }.toTypedArray()
-        androidx.appcompat.app.AlertDialog.Builder(this)
-            .setTitle(if (isYouTube) "Mix Playlist" else "Episodes")
-            .setItems(labels) { _, index -> selectEpisode(episodes.items[index]) }
-            .setNegativeButton("Close", null)
-            .show()
+
+            listHost.removeAllViews()
+            val visibleItems = if (isYouTube) episodes.items else episodes.items.filter { it.json.optInt("seasonNumber", 1) == selectedSeason }
+            visibleItems.forEachIndexed { idx, ep ->
+                val isCurrent = ep.playbackId == currentPlaybackId
+                val card = column().apply {
+                    focusableCard(if (isCurrent) 0xFF221214.toInt() else NETFLIX_SURFACE)
+                    if (isCurrent) {
+                        background = rounded(0xFF221214.toInt(), stroke = RED, radius = dp(8).toFloat(), strokeWidth = dp(1))
+                    }
+                    setPadding(dp(10), dp(10), dp(10), dp(10))
+                    layoutParams = LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) }
+                    setOnClickListener {
+                        dialog.dismiss()
+                        selectEpisode(ep)
+                    }
+                }
+
+                val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+                val thumbBox = FrameLayout(this).apply {
+                    background = rounded(0xFF222222.toInt(), radius = dp(6).toFloat())
+                    clipToOutline = true
+                }
+                val thumbImg = ImageView(this).apply {
+                    scaleType = ImageView.ScaleType.CENTER_CROP
+                    val art = ep.poster.ifBlank { ep.backdrop }.ifBlank { media.backdrop }
+                    coil.Coil.imageLoader(this@PlayerActivity).enqueue(
+                        coil.request.ImageRequest.Builder(this@PlayerActivity)
+                            .data(api.absolute(art))
+                            .target(this)
+                            .error(R.drawable.ic_homestream)
+                            .crossfade(true)
+                            .build()
+                    )
+                }
+                thumbBox.addView(thumbImg, FrameLayout.LayoutParams(-1, -1))
+                thumbBox.addView(ImageView(this).apply {
+                    setImageResource(R.drawable.ic_play_arrow)
+                    imageTintList = ColorStateList.valueOf(Color.WHITE)
+                    background = GradientDrawable().apply {
+                        shape = GradientDrawable.OVAL
+                        setColor(if (isCurrent) RED else 0x99000000.toInt())
+                        setStroke(dp(1), 0xAAFFFFFF.toInt())
+                    }
+                    setPadding(dp(5), dp(5), dp(5), dp(5))
+                }, FrameLayout.LayoutParams(dp(28), dp(28), Gravity.CENTER))
+
+                val total = ep.json.optLong("totalDurationTicks")
+                val percent = if (ep.json.optBoolean("played")) 100 else if (total > 0)
+                    ((ep.json.optLong("playbackPositionTicks").toDouble() / total) * 100).toInt().coerceIn(0, 100)
+                else ep.json.optInt("progressPercent").coerceIn(0, 100)
+                if (percent > 0) {
+                    thumbBox.addView(android.widget.ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+                        max = 100; progress = percent
+                        progressTintList = ColorStateList.valueOf(RED)
+                        progressBackgroundTintList = ColorStateList.valueOf(0x44FFFFFF)
+                    }, FrameLayout.LayoutParams(-1, dp(3), Gravity.BOTTOM))
+                }
+                row.addView(thumbBox, LinearLayout.LayoutParams(dp(120), dp(68)))
+
+                val info = column().apply {
+                    layoutParams = LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = dp(12) }
+                }
+                val prefix = if (isYouTube) "${idx + 1}. " else "${ep.json.optInt("episodeNumber", idx + 1)}. "
+                info.addView(TextView(this).apply {
+                    text = prefix + ep.title
+                    textSize = 14f
+                    typeface = android.graphics.Typeface.DEFAULT_BOLD
+                    setTextColor(if (isCurrent) Color.WHITE else 0xFFE5E5E5.toInt())
+                    maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
+                })
+                val subText = if (isYouTube) {
+                    ep.json.optString("channelTitle").ifBlank { ep.json.optString("seriesName") }
+                } else {
+                    val mins = ep.json.optInt("durationMinutes").takeIf { it > 0 }
+                    if (mins != null) "${mins}m" else ""
+                }
+                if (subText.isNotBlank()) {
+                    info.addView(TextView(this).apply {
+                        text = if (isCurrent) "$subText • Playing" else subText
+                        textSize = 11.5f
+                        setTextColor(if (isCurrent) RED else MUTED)
+                        setPadding(0, dp(2), 0, 0)
+                    })
+                }
+                if (!isYouTube && ep.overview.isNotBlank()) {
+                    info.addView(TextView(this).apply {
+                        text = ep.overview
+                        textSize = 11.5f; setTextColor(MUTED)
+                        maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.END
+                        setPadding(0, dp(3), 0, 0)
+                    })
+                }
+                row.addView(info)
+                card.addView(row)
+                listHost.addView(card)
+            }
+        }
+
+        if (!isYouTube && seasonsList.size > 1) {
+            root.addView(android.widget.HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(seasonPills) })
+        }
+        root.addView(android.widget.ScrollView(this).apply { addView(listHost) }, LinearLayout.LayoutParams(-1, 0, 1f))
+        renderList()
+        dialog.setContentView(root)
+        dialog.show()
     }
 
     private fun seekWithRemote(offsetMs: Long) {
