@@ -508,38 +508,29 @@ class PlayerActivity : AppCompatActivity() {
             setOnClickListener { changeEpisode(1) }
         }
         updateEpisodeNavigation()
-        // Icon-only 3-line Episodes / Mix button placed right next to Media3's settings button
+        // Icon-only 3-line Episodes / Mix button positioned on the bottom bar next to Media3's settings button
         val qBtn = android.widget.ImageButton(this).apply {
             visibility = if (episodes.items.isNotEmpty()) View.VISIBLE else View.GONE
             setImageResource(R.drawable.ic_menu)
             imageTintList = ColorStateList.valueOf(Color.WHITE)
-            background = null
+            background = rounded(0x55000000, radius = dp(18).toFloat())
             scaleType = ImageView.ScaleType.CENTER_INSIDE
+            setPadding(dp(8), dp(8), dp(8), dp(8))
             isClickable = true
             isFocusable = true
             contentDescription = if (media.source == "youtube") "Mix Playlist" else "Episodes"
             setOnClickListener { showEpisodeQueue() }
         }
         queueBtn = qBtn
-        val settingsBtn = playerView.findViewById<View>(androidx.media3.ui.R.id.exo_settings)
-        val controlsRow = settingsBtn?.parent as? android.view.ViewGroup
-        if (controlsRow != null) {
-            val idx = controlsRow.indexOfChild(settingsBtn)
-            val lp = settingsBtn.layoutParams ?: android.view.ViewGroup.LayoutParams(dp(44), dp(44))
-            controlsRow.addView(qBtn, idx.coerceAtLeast(0), lp)
-        } else {
-            frame.addView(qBtn, FrameLayout.LayoutParams(dp(44), dp(44), Gravity.BOTTOM or Gravity.END).apply {
-                marginEnd = dp(64); bottomMargin = dp(24)
-            })
-        }
+        frame.addView(qBtn, FrameLayout.LayoutParams(dp(36), dp(36), Gravity.BOTTOM or Gravity.END).apply {
+            marginEnd = dp(104); bottomMargin = dp(18)
+        })
 
         frame.addView(overlay, FrameLayout.LayoutParams(-1, -2, Gravity.TOP))
         playerView.setControllerVisibilityListener(PlayerView.ControllerVisibilityListener { visible ->
             val showOverlay = visible == View.VISIBLE || remote != null
             overlay.visibility = if (showOverlay) View.VISIBLE else View.GONE
-            if (controlsRow == null) {
-                qBtn.visibility = if (showOverlay && episodes.items.isNotEmpty()) View.VISIBLE else View.GONE
-            }
+            qBtn.visibility = if (showOverlay && episodes.items.isNotEmpty()) View.VISIBLE else View.GONE
             updateEpisodeNavigation()
             if (visible == View.VISIBLE) focusPlaybackControl()
         })
