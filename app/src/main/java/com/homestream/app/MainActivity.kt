@@ -2866,6 +2866,30 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun play(item: Media, fromBeginning: Boolean = false) {
+        if (item.source == "youtube" && item.json.optBoolean("isMix") && item.json.optString("mixPlaylistId").isNotBlank()) {
+            val listId = item.json.optString("mixPlaylistId")
+            val seedId = item.json.optString("videoId").ifBlank { item.id.removePrefix("yt-") }
+            toast("Loading YouTube Mix…")
+            lifecycleScope.launch {
+                val mixItems = runCatching {
+                    val res = api.call("youtube/mix", mapOf("listId" to listId, "seedId" to seedId))
+                    val arr = res.optJSONArray("items") ?: org.json.JSONArray()
+                    (0 until arr.length()).map { youtubeItemToMedia(arr.getJSONObject(it)) }
+                }.getOrDefault(emptyList())
+                val launchItem = if (mixItems.isNotEmpty()) {
+                    val queueArr = org.json.JSONArray().apply { mixItems.forEach { put(it.json) } }
+                    Media(JSONObject(mixItems.first().json.toString()).put("mixQueue", queueArr))
+                } else {
+                    Media(JSONObject(item.json.toString()).put("isMix", false))
+                }
+                stopService(Intent(this@MainActivity, MusicService::class.java))
+                playbackWasLaunched = true
+                startActivity(Intent(this@MainActivity, PlayerActivity::class.java)
+                    .putExtra("media", launchItem.json.toString())
+                    .putExtra("fromBeginning", fromBeginning))
+            }
+            return
+        }
         stopService(Intent(this, MusicService::class.java))
         playbackWasLaunched = true
         startActivity(Intent(this, PlayerActivity::class.java)
@@ -5756,7 +5780,9 @@ class MainActivity : AppCompatActivity() {
         val channelTitle = obj.optString("channelTitle").ifBlank { obj.optString("channelName") }
         val durationFormatted = obj.optString("durationFormatted")
         val durationSeconds = obj.optInt("durationSeconds")
-        val durText = if (durationFormatted.isNotBlank()) durationFormatted else if (durationSeconds > 0) {
+        val isMix = obj.optBoolean("isMix")
+        val mixPlaylistId = obj.optString("mixPlaylistId")
+        val durText = if (isMix) "Mix" else if (durationFormatted.isNotBlank()) durationFormatted else if (durationSeconds > 0) {
             val h = durationSeconds / 3600
             val m = (durationSeconds % 3600) / 60
             val s = durationSeconds % 60
@@ -5793,6 +5819,8 @@ class MainActivity : AppCompatActivity() {
             put("playbackPositionTicks", posSec * 10_000_000L)
             put("progressPercent", progressPercent)
             put("isAvailableForPlayback", true)
+            if (isMix) put("isMix", true)
+            if (mixPlaylistId.isNotBlank()) put("mixPlaylistId", mixPlaylistId)
         }
         return Media(json)
     }

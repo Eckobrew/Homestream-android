@@ -112,6 +112,7 @@ class PlayerActivity : AppCompatActivity() {
     private var episodes = EpisodeQueue()
     private var episodeJob: Job? = null
     private var titleColumn: LinearLayout? = null
+    private var queueBtn: TextView? = null
     private val subtitleAppearance by lazy { SubtitleAppearance(this) }
     private val playbackPrefs by lazy { getSharedPreferences("playback", MODE_PRIVATE) }
     private var autoplay: Boolean
@@ -293,6 +294,10 @@ class PlayerActivity : AppCompatActivity() {
         androidx.core.content.ContextCompat.registerReceiver(this, musicStarted,
             android.content.IntentFilter("$packageName.MUSIC_STARTED"), androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED)
         media = runCatching { Media(JSONObject(savedInstanceState?.getString("media") ?: intent.getStringExtra("media") ?: "")) }.getOrElse { finish(); return }
+        media.json.optJSONArray("mixQueue")?.let { arr ->
+            val list = (0 until arr.length()).map { Media(arr.getJSONObject(it)) }
+            if (list.isNotEmpty()) episodes = EpisodeQueue(list)
+        }
         isStreamingDownload = intent.getBooleanExtra("isStreamingDownload", false) || media.json.optBoolean("isStreamingDownload")
         knownDurationMs = ticksToMs(media.json.optLong("totalDurationTicks"))
         currentPlaybackId = media.playbackId
@@ -480,6 +485,23 @@ class PlayerActivity : AppCompatActivity() {
             modeBadge = badge
             bar.addView(badge, LinearLayout.LayoutParams(-2, -2).apply { marginEnd = dp(8) })
         }
+
+        // Episodes / Mix Playlist button
+        val qBtn = TextView(this).apply {
+            visibility = if (episodes.items.isNotEmpty()) View.VISIBLE else View.GONE
+            text = if (media.source == "youtube") "Mix (${episodes.items.size})" else "Episodes"
+            textSize = 11f
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
+            setTextColor(Color.WHITE)
+            background = rounded(0x44000000.toInt(), radius = dp(14).toFloat())
+            setPadding(dp(12), dp(8), dp(12), dp(8))
+            isClickable = true
+            isFocusable = true
+            contentDescription = if (media.source == "youtube") "Mix Playlist" else "Episodes"
+            setOnClickListener { showEpisodeQueue() }
+        }
+        queueBtn = qBtn
+        bar.addView(qBtn, LinearLayout.LayoutParams(-2, -2).apply { marginEnd = dp(8) })
 
         // Sleek circular Cast button
         if (!media.isDownload) {
@@ -1446,6 +1468,11 @@ class PlayerActivity : AppCompatActivity() {
 
     private fun updateEpisodeControls() {
         updateEpisodeNavigation()
+        queueBtn?.apply {
+            visibility = if (episodes.items.isNotEmpty()) View.VISIBLE else View.GONE
+            text = if (media.source == "youtube") "Mix (${episodes.items.size})" else "Episodes"
+            contentDescription = if (media.source == "youtube") "Mix Playlist" else "Episodes"
+        }
         titleColumn?.apply {
             removeAllViews()
             val series = media.json.optString("seriesName").ifBlank { media.json.optString("seriesTitle") }
@@ -1490,13 +1517,23 @@ class PlayerActivity : AppCompatActivity() {
     }
 
     private fun showEpisodeQueue() {
-        if (episodes.items.isEmpty()) { Toast.makeText(this, "No episode queue available.", Toast.LENGTH_SHORT).show(); return }
-        val labels = episodes.items.map { item ->
+        if (episodes.items.isEmpty()) { Toast.makeText(this, "No queue available.", Toast.LENGTH_SHORT).show(); return }
+        val isYouTube = media.source == "youtube"
+        val labels = episodes.items.mapIndexed { idx, item ->
             val active = if (item.playbackId == currentPlaybackId) "▶ " else ""
-            "$active S${item.json.optInt("seasonNumber", 1)} E${item.json.optInt("episodeNumber", 1)} · ${item.title}"
+            if (isYouTube) {
+                val ch = item.json.optString("channelTitle").ifBlank { item.json.optString("seriesName") }
+                val sub = if (ch.isNotBlank()) " · $ch" else ""
+                "$active${idx + 1}. ${item.title}$sub"
+            } else {
+                "$active S${item.json.optInt("seasonNumber", 1)} E${item.json.optInt("episodeNumber", 1)} · ${item.title}"
+            }
         }.toTypedArray()
-        androidx.appcompat.app.AlertDialog.Builder(this).setTitle("Episodes")
-            .setItems(labels) { _, index -> selectEpisode(episodes.items[index]) }.setNegativeButton("Close", null).show()
+        androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle(if (isYouTube) "Mix Playlist" else "Episodes")
+            .setItems(labels) { _, index -> selectEpisode(episodes.items[index]) }
+            .setNegativeButton("Close", null)
+            .show()
     }
 
     private fun seekWithRemote(offsetMs: Long) {
