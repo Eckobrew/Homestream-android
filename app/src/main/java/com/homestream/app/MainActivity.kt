@@ -5903,8 +5903,10 @@ class MainActivity : AppCompatActivity() {
     private fun openYouTubeAuthDialog() {
         lifecycleScope.launch {
             val auth = runCatching { api.call("youtube/auth") }.getOrNull()
-            val isAuth = auth?.optBoolean("authenticated") == true
-            val profileName = auth?.optString("profileName").orEmpty().ifBlank { settings.profile }
+            val isAuth = auth?.optBoolean("connected") == true || auth?.optBoolean("authenticated") == true
+            val profileName = auth?.optString("accountName").orEmpty()
+                .ifBlank { auth?.optString("profileName").orEmpty() }
+                .ifBlank { settings.profileName.ifBlank { settings.profile } }
 
             val builder = AlertDialog.Builder(this@MainActivity)
             builder.setTitle("YouTube Account (${if (isAuth) "Connected" else "Not Connected"})")
