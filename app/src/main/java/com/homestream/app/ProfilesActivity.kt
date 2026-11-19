@@ -339,17 +339,20 @@ class ProfilesActivity : AppCompatActivity() {
                             error.text = ""
                             saveJob = lifecycleScope.launch {
                                 try {
-                                    api.call("profiles", body = JSONObject()
+                                    val deleteBody = JSONObject()
                                         .put("action", "delete")
                                         .put("profileId", profileId)
-                                        .put("parentPin", parentPin))
+                                    if (parentPin.isNotBlank()) deleteBody.put("parentPin", parentPin)
+                                    api.call("profiles", body = deleteBody)
                                     if (api.refreshProfilePolicy()) clearCastIdle(this@ProfilesActivity)
                                     setResult(Activity.RESULT_OK)
                                     Toast.makeText(this@ProfilesActivity, "Profile deleted", Toast.LENGTH_LONG).show()
                                     saveJob = null; dialog.dismiss(); refresh()
                                 } catch (e: Exception) {
                                     if (e is CancellationException) throw e
-                                    error.text = e.message ?: "Could not delete profile"
+                                    val msg = e.message ?: "Could not delete profile"
+                                    error.text = msg
+                                    Toast.makeText(this@ProfilesActivity, msg, Toast.LENGTH_LONG).show()
                                 } finally { delBtn.isEnabled = true }
                             }
                         }.show()
@@ -363,8 +366,9 @@ class ProfilesActivity : AppCompatActivity() {
                 if (kids.isChecked && !parentPinConfigured && (!effectivePin.matches(Regex("[0-9]{4,8}")) || effectivePin != confirmPin.text.toString())) {
                     error.text = "Enter matching parent PINs of 4–8 digits"; return@setOnClickListener
                 }
-                val body = JSONObject().put("isKids", kids.isChecked).put("kidsDateOfBirth", birthDate).put("parentPin", effectivePin).put("action", if (profile == null) "create" else "update")
+                val body = JSONObject().put("isKids", kids.isChecked).put("kidsDateOfBirth", birthDate).put("action", if (profile == null) "create" else "update")
                     .put("name", displayName).put("avatarId", chosen).put("mode", "native")
+                if (effectivePin.isNotBlank()) body.put("parentPin", effectivePin)
                 profile?.optString("id")?.let { body.put("profileId", it) }
                 val button = dialog.getButton(AlertDialog.BUTTON_POSITIVE)
                 button.isEnabled = false; error.text = ""
