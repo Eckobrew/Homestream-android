@@ -1624,7 +1624,7 @@ class PlayerActivity : AppCompatActivity() {
                 }
                 val thumbImg = ImageView(this).apply {
                     scaleType = ImageView.ScaleType.CENTER_CROP
-                    val art = ep.poster.ifBlank { ep.backdrop }.ifBlank { media.backdrop }
+                    val art = ep.json.optString("thumbnailUrl").ifBlank { ep.poster }.ifBlank { ep.backdrop }.ifBlank { media.backdrop }
                     coil.Coil.imageLoader(this@PlayerActivity).enqueue(
                         coil.request.ImageRequest.Builder(this@PlayerActivity)
                             .data(api.absolute(art))
