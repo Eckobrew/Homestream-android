@@ -34,58 +34,68 @@ class MusicPlayerActivity : AppCompatActivity() {
         if (ServerSettings(this).isKids) { finish(); return }
         val television = isTelevision()
         val wide = television || resources.configuration.screenWidthDp >= 620
-        val gutter = dp(if (television) 48 else 20)
-        val root = column().apply { setBackgroundColor(INK) }
+        val gutter = dp(if (television) 48 else 22)
+        val root = column().apply {
+            background = android.graphics.drawable.GradientDrawable(
+                android.graphics.drawable.GradientDrawable.Orientation.TOP_BOTTOM,
+                intArrayOf(0xFF1E3A2B.toInt(), SPOTIFY_BG, 0xFF0A0A0A.toInt())
+            )
+        }
         val top = LinearLayout(this).apply {
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(gutter, dp(6), gutter, dp(6))
+            setPadding(gutter, dp(10), gutter, dp(6))
         }
         top.addView(control("Back", R.drawable.ic_arrow_back) { finish() })
-        top.addView(label("HOMESTREAM", 20f, true).apply {
-            setTextColor(RED); letterSpacing = 0.08f; setPadding(dp(12), 0, 0, 0)
-        }, LinearLayout.LayoutParams(0, -2, 1f))
+        val headerTitles = column().apply { gravity = Gravity.CENTER_HORIZONTAL }
+        headerTitles.addView(label("PLAYING FROM LIBRARY", 10.5f, true).apply {
+            setTextColor(SPOTIFY_GREEN_BRIGHT); letterSpacing = 0.12f; gravity = Gravity.CENTER
+        })
+        val headerAlbum = label("Music Player", 12.5f, true).apply {
+            setTextColor(Color.WHITE); maxLines = 1; ellipsize = TextUtils.TruncateAt.END; gravity = Gravity.CENTER
+        }
+        headerTitles.addView(headerAlbum)
+        top.addView(headerTitles, LinearLayout.LayoutParams(0, -2, 1f))
+        top.addView(android.view.View(this), LinearLayout.LayoutParams(dp(44), dp(44)))
         root.addView(top)
 
-        val body = column().apply { setPadding(gutter, dp(12), gutter, dp(28)) }
+        val body = column().apply { setPadding(gutter, dp(10), gutter, dp(28)) }
         val viewport = ScrollView(this).apply { clipToPadding = false; addView(body) }
         root.addView(viewport, LinearLayout.LayoutParams(-1, 0, 1f))
         val featured = LinearLayout(this).apply {
             orientation = if (wide) LinearLayout.HORIZONTAL else LinearLayout.VERTICAL
             gravity = Gravity.CENTER_VERTICAL
-            background = rounded(0xFF141414.toInt(), radius = dp(12).toFloat())
-            setPadding(dp(16), dp(16), dp(16), dp(16))
+            setPadding(dp(4), dp(8), dp(4), dp(12))
         }
         body.addView(featured, LinearLayout.LayoutParams(-1, -2))
-        val coverSize = dp(if (wide) 240 else (resources.configuration.screenWidthDp - 84).coerceIn(120, 280))
-        val cover = LibraryArtwork(this)
+        val coverSize = dp(if (wide) 240 else (resources.configuration.screenWidthDp - 64).coerceIn(220, 310))
+        val cover = LibraryArtwork(this).apply { elevation = dp(16).toFloat() }
         featured.addView(cover, LinearLayout.LayoutParams(coverSize, coverSize).apply {
             gravity = Gravity.CENTER_HORIZONTAL
-            if (wide) marginEnd = dp(24) else bottomMargin = dp(16)
+            if (wide) marginEnd = dp(28) else bottomMargin = dp(24)
         })
         val panel = column()
         featured.addView(panel, if (wide) LinearLayout.LayoutParams(0, -2, 1f) else LinearLayout.LayoutParams(-1, -2))
-        val SPOTIFY_GREEN = 0xFF1DB954.toInt()
-        val SPOTIFY_GREEN_LIGHT = 0xFF1ED760.toInt()
 
-        panel.addView(label("MUSIC", 11f, true).apply { setTextColor(SPOTIFY_GREEN); letterSpacing = 0.12f })
-        val title = label("Nothing playing", if (wide) 28f else 24f, true).apply {
-            maxLines = 2; ellipsize = TextUtils.TruncateAt.END; setPadding(0, dp(4), 0, 0)
+        val title = label("Nothing playing", if (wide) 26f else 22f, true).apply {
+            maxLines = 2; ellipsize = TextUtils.TruncateAt.END; setPadding(0, dp(2), 0, 0)
         }
         panel.addView(title)
-        val subtitle = label("Choose an album or track to begin listening", 14f).apply { setTextColor(MUTED); setPadding(0, dp(4), 0, dp(12)) }
+        val subtitle = label("Choose an album or track to begin listening", 14.5f).apply {
+            setTextColor(MUTED); setPadding(0, dp(4), 0, dp(16)); maxLines = 1; ellipsize = TextUtils.TruncateAt.END
+        }
         panel.addView(subtitle)
 
         val timeline = SeekBar(this).apply {
             max = 1000
             contentDescription = "Playback position"
-            progressTintList = ColorStateList.valueOf(SPOTIFY_GREEN)
-            progressBackgroundTintList = ColorStateList.valueOf(0xFF333333.toInt())
-            thumbTintList = ColorStateList.valueOf(SPOTIFY_GREEN)
+            progressTintList = ColorStateList.valueOf(SPOTIFY_GREEN_BRIGHT)
+            progressBackgroundTintList = ColorStateList.valueOf(0x33FFFFFF)
+            thumbTintList = ColorStateList.valueOf(Color.WHITE)
         }
-        panel.addView(timeline, LinearLayout.LayoutParams(-1, dp(38)))
-        val times = LinearLayout(this).apply { setPadding(dp(6), 0, dp(6), 0) }
-        val elapsed = label("0:00", 12f).apply { setTextColor(MUTED) }
-        val duration = label("0:00", 12f).apply { setTextColor(MUTED) }
+        panel.addView(timeline, LinearLayout.LayoutParams(-1, dp(34)))
+        val times = LinearLayout(this).apply { setPadding(dp(4), 0, dp(4), dp(4)) }
+        val elapsed = label("0:00", 11.5f).apply { setTextColor(MUTED) }
+        val duration = label("0:00", 11.5f).apply { setTextColor(MUTED) }
         times.addView(elapsed, LinearLayout.LayoutParams(0, -2, 1f)); times.addView(duration)
         panel.addView(times)
         var tracking = false
@@ -148,6 +158,7 @@ class MusicPlayerActivity : AppCompatActivity() {
             val url = metadata?.artworkUri?.toString()
             if (url != artwork) { artwork = url; cover.show(url) }
             title.text = metadata?.title ?: "Nothing playing"
+            headerAlbum.text = metadata?.albumTitle?.toString()?.ifBlank { null } ?: "Music Library"
             subtitle.text = MusicService.playbackError ?: if (metadata == null) "Choose a song from Music" else
                 listOfNotNull(metadata.artist, metadata.albumTitle).filter { it.isNotBlank() }.joinToString(" • ")
             val length = player?.duration?.coerceAtLeast(0) ?: 0L
@@ -208,18 +219,17 @@ class MusicPlayerActivity : AppCompatActivity() {
     }
 
     private fun control(label: String, icon: Int, primary: Boolean = false, click: () -> Unit) = ImageButton(this).apply {
-        val SPOTIFY_GREEN = 0xFF1DB954.toInt()
-        val surface = if (primary) SPOTIFY_GREEN else 0xFF242424.toInt()
+        val surface = if (primary) Color.WHITE else Color.TRANSPARENT
         contentDescription = label
         setImageResource(icon); setColorFilter(if (primary) Color.BLACK else Color.WHITE)
-        val radius = if (primary) dp(28).toFloat() else dp(12).toFloat()
+        val radius = dp(32).toFloat()
         background = StateListDrawable().apply {
-            addState(intArrayOf(android.R.attr.state_focused), rounded(if (primary) 0xFF1ED760.toInt() else 0xFF3E3E3E.toInt(), if (primary) Color.WHITE else SPOTIFY_GREEN, radius))
+            addState(intArrayOf(android.R.attr.state_focused), rounded(if (primary) SPOTIFY_GREEN_BRIGHT else 0x33FFFFFF, if (primary) SPOTIFY_GREEN else Color.WHITE, radius))
             addState(intArrayOf(android.R.attr.state_pressed), rounded(SPOTIFY_GREEN, radius = radius))
             addState(intArrayOf(), rounded(surface, radius = radius))
         }
-        val size = dp(if (primary) 56 else 44)
-        layoutParams = LinearLayout.LayoutParams(size, size).apply { marginStart = dp(6); marginEnd = dp(6) }
+        val size = dp(if (primary) 64 else 44)
+        layoutParams = LinearLayout.LayoutParams(size, size).apply { marginStart = dp(8); marginEnd = dp(8) }
         setOnClickListener { click() }
     }
 

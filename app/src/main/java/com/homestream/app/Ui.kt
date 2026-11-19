@@ -17,6 +17,20 @@ import android.widget.TextView
 const val RED = 0xFFE50914.toInt()
 const val INK = 0xFF080808.toInt()
 const val MUTED = 0xFFB3B3B3.toInt()
+
+// Netflix video theme tokens
+const val NETFLIX_BG = 0xFF080808.toInt()
+const val NETFLIX_SURFACE = 0xFF141414.toInt()
+const val NETFLIX_ELEVATED = 0xFF202020.toInt()
+const val NETFLIX_BORDER = 0x28FFFFFF
+
+// Spotify music theme tokens
+const val SPOTIFY_GREEN = 0xFF1DB954.toInt()
+const val SPOTIFY_GREEN_BRIGHT = 0xFF1ED760.toInt()
+const val SPOTIFY_BG = 0xFF121212.toInt()
+const val SPOTIFY_SURFACE = 0xFF181818.toInt()
+const val SPOTIFY_ELEVATED = 0xFF242424.toInt()
+const val SPOTIFY_HIGHLIGHT = 0xFF2A2A2A.toInt()
 fun Context.dp(n: Int) = (n * resources.displayMetrics.density).toInt()
 fun Context.isTelevision() = (getSystemService(Context.UI_MODE_SERVICE) as UiModeManager).currentModeType == Configuration.UI_MODE_TYPE_TELEVISION
 fun Context.column() = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
@@ -24,8 +38,8 @@ fun Context.label(value: String, size: Float = 16f, bold: Boolean = false) = Tex
     text = value; textSize = size; setTextColor(Color.WHITE)
     if (bold) setTypeface(typeface, Typeface.BOLD)
 }
-fun rounded(color: Int, stroke: Int = Color.TRANSPARENT, radius: Float = 10f) = GradientDrawable().apply {
-    setColor(color); cornerRadius = radius; setStroke(4, stroke)
+fun rounded(color: Int, stroke: Int = Color.TRANSPARENT, radius: Float = 10f, strokeWidth: Int = 4) = GradientDrawable().apply {
+    setColor(color); cornerRadius = radius; setStroke(strokeWidth, stroke)
 }
 fun Context.badgePill(value: String) = TextView(this).apply {
     text = value; textSize = 11f; setTextColor(Color.WHITE)

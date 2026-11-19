@@ -407,13 +407,14 @@ class MainActivity : AppCompatActivity() {
                 supportFragmentManager.beginTransaction().remove(it).commitNow()
             }
         }
-        root = FrameLayout(this).apply { setBackgroundColor(INK) }
+        val pageBg = if (screen == "music") SPOTIFY_BG else INK
+        root = FrameLayout(this).apply { setBackgroundColor(pageBg) }
         ViewCompat.setOnApplyWindowInsetsListener(root) { view, insets ->
             val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
             view.setPadding(bars.left, bars.top, bars.right, bars.bottom)
             insets
         }
-        mainContainer = column().apply { setBackgroundColor(INK) }
+        mainContainer = column().apply { setBackgroundColor(pageBg) }
         content = column().apply { setPadding(0, 0, 0, dp(if (isTelevision()) 24 else 90)) } // phone floating navigation / TV safe bottom
 
         if (isTelevision()) televisionShell() else phoneShell()
@@ -488,6 +489,38 @@ class MainActivity : AppCompatActivity() {
         if (settings.canUseProfiles) header.addView(iconButton("Profile", R.drawable.nav_profile) { profiles() })
 
         mainContainer.addView(header)
+
+        // Netflix-style quick category chips under the header on video browse screens
+        if (screen in listOf("home", "movies", "series")) {
+            val chipRow = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(gutter, dp(2), gutter, dp(8))
+            }
+            fun netflixChip(labelText: String, active: Boolean, onClick: () -> Unit) = TextView(this).apply {
+                text = labelText
+                textSize = 12.5f
+                typeface = android.graphics.Typeface.DEFAULT_BOLD
+                setTextColor(if (active) Color.BLACK else Color.WHITE)
+                background = rounded(
+                    if (active) Color.WHITE else 0x1AFFFFFF,
+                    stroke = if (active) Color.WHITE else 0x55FFFFFF,
+                    radius = dp(18).toFloat(),
+                    strokeWidth = dp(1)
+                )
+                setPadding(dp(14), dp(6), dp(14), dp(6))
+                layoutParams = LinearLayout.LayoutParams(-2, -2).apply { marginEnd = dp(8) }
+                setOnClickListener { onClick() }
+            }
+            chipRow.addView(netflixChip("TV Shows", screen == "series") { loadTab("series") })
+            chipRow.addView(netflixChip("Movies", screen == "movies") { loadTab("movies") })
+            chipRow.addView(netflixChip("Categories ▾", false) { showCategoriesMenu() })
+            chipRow.addView(netflixChip("My List", false) { myHomeStream() })
+            mainContainer.addView(HorizontalScrollView(this).apply {
+                isHorizontalScrollBarEnabled = false
+                addView(chipRow)
+            })
+        }
 
         // 3. Scrollable content
         mainContainer.addView(browseViewport(),
@@ -685,6 +718,16 @@ class MainActivity : AppCompatActivity() {
             nowPlayingSubtitle?.text = meta.artist?.toString().orEmpty().ifBlank { meta.albumTitle?.toString().orEmpty() }
             val artUri = meta.artworkUri?.toString().orEmpty()
             if (artUri.isNotBlank()) nowPlayingArt?.load(artUri) else nowPlayingArt?.setImageDrawable(null)
+            bar.background = GradientDrawable().apply {
+                setColor(0xF5192B21.toInt())
+                cornerRadius = dp(14).toFloat()
+                setStroke(dp(1), 0x551DB954)
+            }
+            nowPlayingPlayBtn?.background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(SPOTIFY_GREEN)
+            }
+            nowPlayingPlayBtn?.imageTintList = ColorStateList.valueOf(Color.BLACK)
             nowPlayingPlayBtn?.visibility = View.VISIBLE
             nowPlayingPlayBtn?.setImageResource(if (localPlayer.isPlaying) R.drawable.ic_pause else R.drawable.ic_play_arrow)
             nowPlayingNextBtn?.visibility = if (localPlayer.hasNextMediaItem()) View.VISIBLE else View.GONE
@@ -703,6 +746,16 @@ class MainActivity : AppCompatActivity() {
             } else {
                 nowPlayingArt?.setImageDrawable(null)
             }
+            bar.background = GradientDrawable().apply {
+                setColor(0xF21A1A1A.toInt())
+                cornerRadius = dp(18).toFloat()
+                setStroke(dp(1), 0x33FFFFFF)
+            }
+            nowPlayingPlayBtn?.background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(RED)
+            }
+            nowPlayingPlayBtn?.imageTintList = ColorStateList.valueOf(Color.WHITE)
             val controllable = networkSession.isTv
             nowPlayingPlayBtn?.visibility = if (controllable) View.VISIBLE else View.GONE
             nowPlayingPlayBtn?.setImageResource(if (networkSession.isPlaying) R.drawable.ic_pause else R.drawable.ic_play_arrow)
@@ -1474,66 +1527,112 @@ class MainActivity : AppCompatActivity() {
         val frame = FrameLayout(this).apply {
             id = R.id.featured_card
             clipToOutline = true
-            background = rounded(0xFF1E1E1E.toInt(), radius = dp(12).toFloat())
+            elevation = dp(10).toFloat()
+            background = rounded(NETFLIX_SURFACE, stroke = 0x33FFFFFF, radius = dp(14).toFloat(), strokeWidth = dp(1))
         }
 
-        // 1. High-Res 16:9 Backdrop Image (preventing awkward portrait zoom/crops like Fallout)
+        // 1. High-Res Artwork
         val image = ImageView(this).apply {
             scaleType = ImageView.ScaleType.CENTER_CROP
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-            load(api.absolute(item.backdrop.ifBlank { item.poster })) {
+            load(api.absolute(item.poster.ifBlank { item.backdrop })) {
                 crossfade(true); error(R.drawable.ic_homestream)
             }
         }
         frame.addView(image, FrameLayout.LayoutParams(-1, -1))
 
-        // 2. Vertical Netflix scrim (dark bottom gradient)
-        val scrim = View(this).apply {
+        // 2. Subtle top vignette + rich Netflix bottom scrim
+        frame.addView(View(this).apply {
             background = GradientDrawable(
                 GradientDrawable.Orientation.TOP_BOTTOM,
-                intArrayOf(0x00141414, 0x44141414, 0xCC141414.toInt(), INK)
+                intArrayOf(0x66000000, 0x00000000, 0x66080808, 0xE60A0A0A.toInt(), INK)
             )
-        }
-        frame.addView(scrim, FrameLayout.LayoutParams(-1, -1))
+        }, FrameLayout.LayoutParams(-1, -1))
 
         // 3. Information Overlay
         val infoCol = column().apply {
-            gravity = Gravity.BOTTOM; setPadding(dp(16), dp(16), dp(16), dp(14))
+            gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
+            setPadding(dp(16), dp(16), dp(16), dp(14))
         }
+
+        // Netflix-style eyebrow ("H  S E R I E S" / "H  F I L M" / "Y O U T U B E")
+        val eyebrowRow = LinearLayout(this).apply {
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, 0, 0, dp(4))
+        }
+        eyebrowRow.addView(TextView(this).apply {
+            text = "H"
+            textSize = 14f
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
+            setTextColor(RED)
+            setPadding(0, 0, dp(6), 0)
+        })
+        val eyebrowLabel = when {
+            item.source == "youtube" -> "Y O U T U B E"
+            item.type == "Series" || item.type == "Episode" -> "S E R I E S"
+            else -> "F I L M"
+        }
+        eyebrowRow.addView(TextView(this).apply {
+            text = eyebrowLabel
+            textSize = 10.5f
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
+            letterSpacing = 0.22f
+            setTextColor(0xFFE5E5E5.toInt())
+        })
+        infoCol.addView(eyebrowRow)
 
         // Title
         val titleView = TextView(this).apply {
-            text = item.title; textSize = 24f
+            text = item.title; textSize = 25f
             typeface = android.graphics.Typeface.DEFAULT_BOLD; setTextColor(Color.WHITE)
+            gravity = Gravity.CENTER
             maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.END
         }
         infoCol.addView(titleView)
 
-        // Metadata Pills row
+        // Genre tags (e.g. Mystery • Sci-Fi • Drama) or metadata pills
+        val genresArr = item.json.optJSONArray("genres")
+        val genres = (0 until minOf(3, genresArr?.length() ?: 0)).mapNotNull {
+            genresArr?.optString(it)?.takeIf { g -> g.isNotBlank() }
+        }
         val metaRow = LinearLayout(this).apply {
-            gravity = Gravity.CENTER_VERTICAL; setPadding(0, dp(6), 0, dp(10))
+            gravity = Gravity.CENTER; setPadding(0, dp(6), 0, dp(10))
         }
-        if (item.source == "youtube") {
-            metaRow.addView(badgePill("YOUTUBE"))
-        } else if (item.json.optString("rating").isNotBlank()) {
-            metaRow.addView(badgePill(item.json.optString("rating")))
-        }
-        val year = item.json.optString("year").takeUnless { it == "0" }.orEmpty()
-        if (year.isNotBlank()) {
+        if (genres.isNotEmpty()) {
             metaRow.addView(TextView(this).apply {
-                text = "  •  $year"; textSize = 11.5f; setTextColor(MUTED)
+                text = genres.joinToString("  •  ")
+                textSize = 12f
+                typeface = android.graphics.Typeface.DEFAULT_BOLD
+                setTextColor(0xFFE5E5E5.toInt())
+                maxLines = 1
+                ellipsize = android.text.TextUtils.TruncateAt.END
             })
-        }
-        val res = item.json.optString("resolution")
-        if (res.isNotBlank()) {
-            metaRow.addView(TextView(this).apply {
-                text = "  •  $res"; textSize = 11.5f; setTextColor(0xFF10B981.toInt())
-            })
+        } else {
+            if (item.source == "youtube") {
+                metaRow.addView(badgePill("YOUTUBE"))
+            } else if (item.json.optString("rating").isNotBlank()) {
+                metaRow.addView(badgePill(item.json.optString("rating")))
+            }
+            val year = item.json.optString("year").takeUnless { it == "0" }.orEmpty()
+            if (year.isNotBlank()) {
+                metaRow.addView(TextView(this).apply {
+                    text = "  •  $year"; textSize = 11.5f; setTextColor(MUTED)
+                })
+            }
+            val res = item.json.optString("resolution")
+            if (res.isNotBlank()) {
+                metaRow.addView(TextView(this).apply {
+                    text = "  •  $res"; textSize = 11.5f; setTextColor(0xFF10B981.toInt())
+                })
+            }
         }
         infoCol.addView(metaRow)
 
         if (showActions) {
-            val btnRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+            val btnRow = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
 
             val canPlay = item.isAvailableForPlayback
             val comingSoon = if (!canPlay) comingSoonLabel(item) else null
@@ -1544,7 +1643,7 @@ class MainActivity : AppCompatActivity() {
                     item.resumeMs > 0 -> "▶  Resume Stream"
                     else -> "▶  Stream"
                 }
-                textSize = 13.5f; typeface = android.graphics.Typeface.DEFAULT_BOLD
+                textSize = 14f; typeface = android.graphics.Typeface.DEFAULT_BOLD
                 setTextColor(when {
                     comingSoon != null -> MUTED
                     canPlay -> Color.BLACK
@@ -1554,23 +1653,24 @@ class MainActivity : AppCompatActivity() {
                     comingSoon != null -> 0xFF262626.toInt()
                     canPlay -> Color.WHITE
                     else -> RED
-                }, radius = dp(8).toFloat())
+                }, radius = dp(6).toFloat())
                 isEnabled = comingSoon == null
-                minHeight = dp(40); minimumHeight = dp(40)
+                minHeight = dp(42); minimumHeight = dp(42)
                 setPadding(dp(16), 0, dp(16), 0)
                 setOnClickListener {
                     if (canPlay) play(item) else if (comingSoon == null) streamMedia(item)
                 }
             }
-            btnRow.addView(playBtn, LinearLayout.LayoutParams(-2, dp(40)).apply { marginEnd = dp(10) })
+            btnRow.addView(playBtn, LinearLayout.LayoutParams(0, dp(42), 1f).apply { marginEnd = dp(8) })
 
             // Translucent My List Button
             val list = Watchlist(this, settings)
             val listBtn = Button(this).apply {
-                text = if (list.contains(item)) "✓  My List" else "+  My List"; textSize = 13.5f
+                text = if (list.contains(item)) "✓  My List" else "+  My List"; textSize = 14f
+                typeface = android.graphics.Typeface.DEFAULT_BOLD
                 setTextColor(Color.WHITE); isAllCaps = false
-                background = rounded(0x55FFFFFF.toInt(), radius = dp(8).toFloat())
-                minHeight = dp(40); minimumHeight = dp(40)
+                background = rounded(0x3DFFFFFF, radius = dp(6).toFloat())
+                minHeight = dp(42); minimumHeight = dp(42)
                 setPadding(dp(14), 0, dp(14), 0)
                 setOnClickListener {
                     lifecycleScope.launch {
@@ -1579,20 +1679,38 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
             }
-            btnRow.addView(listBtn, LinearLayout.LayoutParams(-2, dp(40)).apply { marginEnd = dp(10) })
+            btnRow.addView(listBtn, LinearLayout.LayoutParams(0, dp(42), 1f).apply { marginEnd = dp(8) })
 
-            // Info Button
+            // Compact Info Button
             val infoBtn = Button(this).apply {
-                text = "ⓘ  Info"; textSize = 13.5f; setTextColor(Color.WHITE); isAllCaps = false
-                background = rounded(0x44FFFFFF.toInt(), radius = dp(8).toFloat())
-                minHeight = dp(40); minimumHeight = dp(40)
-                setPadding(dp(14), 0, dp(14), 0)
+                text = "ⓘ"; textSize = 16f; setTextColor(Color.WHITE); isAllCaps = false
+                background = rounded(0x3DFFFFFF, radius = dp(6).toFloat())
+                minHeight = dp(42); minimumHeight = dp(42)
+                setPadding(0, 0, 0, 0)
+                contentDescription = "More Info"
                 setOnClickListener {
                     if (item.source == "youtube") showYouTubeItemDialog(item) else details(item)
                 }
             }
-            btnRow.addView(infoBtn, LinearLayout.LayoutParams(-2, dp(40)))
-            infoCol.addView(btnRow)
+            btnRow.addView(infoBtn, LinearLayout.LayoutParams(dp(44), dp(42)))
+            infoCol.addView(btnRow, LinearLayout.LayoutParams(-1, -2))
+        }
+
+        // Rotation dots when cycling hero items
+        if (heroItems.size > 1 && screen == "home") {
+            val dots = LinearLayout(this).apply {
+                gravity = Gravity.CENTER
+                setPadding(0, dp(10), 0, 0)
+            }
+            heroItems.indices.forEach { idx ->
+                val active = idx == currentHeroIndex
+                dots.addView(View(this).apply {
+                    background = rounded(if (active) Color.WHITE else 0x55FFFFFF, radius = dp(3).toFloat())
+                }, LinearLayout.LayoutParams(dp(if (active) 14 else 6), dp(4)).apply {
+                    marginStart = dp(3); marginEnd = dp(3)
+                })
+            }
+            infoCol.addView(dots)
         }
 
         frame.addView(infoCol, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
@@ -1663,12 +1781,22 @@ class MainActivity : AppCompatActivity() {
 
     private fun mediaRow(title: String, items: List<Media>, isContinueWatching: Boolean = false, parent: LinearLayout = content) {
         if (items.isEmpty()) return
-        parent.addView(label(title, 20f, true).apply { setPadding(gutter, dp(22), gutter, dp(8)); setTag(R.id.browse_key, "heading:$title"); setTag(R.id.browse_signature, title) })
-        val row = LinearLayout(this).apply { setPadding(gutter, dp(6), gutter, dp(10)); clipChildren = false }
+        val isTopTen = title.contains("Top 10", ignoreCase = true)
+        parent.addView(label(title, 18f, true).apply {
+            setPadding(gutter, dp(18), gutter, dp(8))
+            setTag(R.id.browse_key, "heading:$title"); setTag(R.id.browse_signature, title)
+        })
+        val row = LinearLayout(this).apply { setPadding(gutter, dp(4), gutter, dp(10)); clipChildren = false }
 
-        items.forEach { item ->
+        items.forEachIndexed { index, item ->
             val card = column().apply {
-                setPadding(dp(4), dp(4), dp(4), dp(6)); focusableCard()
+                if (isTelevision()) {
+                    setPadding(dp(4), dp(4), dp(4), dp(6))
+                    focusableCard(Color.TRANSPARENT)
+                } else {
+                    isFocusable = true; isClickable = true
+                    setPadding(0, 0, 0, dp(2))
+                }
                 contentDescription = "${item.title}, ${item.type}, ${item.metadata}"
                 setTag(R.id.browse_key, "media:${item.id}"); setTag(R.id.browse_signature, item.json.toString())
                 val focusStyle = onFocusChangeListener
@@ -1697,7 +1825,7 @@ class MainActivity : AppCompatActivity() {
             }
 
             val posterContainer = FrameLayout(this).apply {
-                background = rounded(0xFF222222.toInt(), radius = dp(6).toFloat())
+                background = rounded(NETFLIX_SURFACE, radius = dp(6).toFloat())
                 clipToOutline = true
             }
 
@@ -1710,8 +1838,38 @@ class MainActivity : AppCompatActivity() {
             }
             posterContainer.addView(posterImg, FrameLayout.LayoutParams(-1, -1))
 
-            // Duration badge for YouTube cards (e.g. "45:12")
+            // Centered Play circle on Continue Watching cards (Netflix mobile style)
             val isYouTube = item.source == "youtube"
+            if (isContinueWatching && !isYouTube) {
+                val playCircle = ImageView(this).apply {
+                    setImageResource(R.drawable.ic_play_arrow)
+                    imageTintList = ColorStateList.valueOf(Color.WHITE)
+                    background = GradientDrawable().apply {
+                        shape = GradientDrawable.OVAL
+                        setColor(0x99000000.toInt())
+                        setStroke(dp(2), 0xCCFFFFFF.toInt())
+                    }
+                    setPadding(dp(8), dp(8), dp(8), dp(8))
+                }
+                posterContainer.addView(playCircle, FrameLayout.LayoutParams(dp(40), dp(40), Gravity.CENTER))
+            }
+
+            // 4K / HDR micro-badge on standard Netflix posters
+            val res = item.json.optString("resolution")
+            if (!isYouTube && !isContinueWatching && res.contains("4K", ignoreCase = true)) {
+                posterContainer.addView(TextView(this).apply {
+                    text = "4K"
+                    textSize = 8.5f
+                    typeface = android.graphics.Typeface.DEFAULT_BOLD
+                    setTextColor(Color.WHITE)
+                    background = rounded(0xB3000000.toInt(), stroke = 0x55FFFFFF, radius = dp(3).toFloat(), strokeWidth = 1)
+                    setPadding(dp(4), dp(1), dp(4), dp(1))
+                }, FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.END).apply {
+                    setMargins(0, dp(5), dp(5), 0)
+                })
+            }
+
+            // Duration badge for YouTube cards (e.g. "45:12")
             val durBadge = if (isYouTube) item.json.optString("metadata").substringAfterLast("• ").trim().takeIf { it.isNotBlank() } else null
             if (durBadge != null) {
                 val badgeView = TextView(this).apply {
@@ -1733,19 +1891,50 @@ class MainActivity : AppCompatActivity() {
                 val pBar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
                     max = 100; progress = progressVal.toInt()
                     progressTintList = ColorStateList.valueOf(RED)
+                    progressBackgroundTintList = ColorStateList.valueOf(0x55FFFFFF)
                 }
-                posterContainer.addView(pBar, FrameLayout.LayoutParams(-1, dp(4), Gravity.BOTTOM))
+                posterContainer.addView(pBar, FrameLayout.LayoutParams(-1, dp(3), Gravity.BOTTOM))
             }
 
-            val cardWidth = dp(if (isTelevision()) (if (isYouTube || isContinueWatching) 220 else 200) else if (isYouTube || isContinueWatching) 180 else 115)
-            val cardHeight = dp(if (isTelevision()) (if (isYouTube || isContinueWatching) 124 else 115) else if (isYouTube || isContinueWatching) 101 else 165)
-            card.addView(posterContainer, LinearLayout.LayoutParams(cardWidth, cardHeight))
+            val cardWidth = dp(if (isTelevision()) (if (isYouTube || isContinueWatching) 220 else 200) else if (isYouTube || isContinueWatching) 176 else 112)
+            val cardHeight = dp(if (isTelevision()) (if (isYouTube || isContinueWatching) 124 else 115) else if (isYouTube || isContinueWatching) 99 else 166)
 
-            // Card title under poster
-            card.addView(label((if (item.json.optBoolean("played")) "✓ " else "") + item.title, if (isTelevision()) 12.5f else 11f, bold = true).apply {
-                maxLines = if (isYouTube) 2 else 1; ellipsize = android.text.TextUtils.TruncateAt.END
-                setPadding(dp(2), dp(5), dp(2), 0)
-            })
+            if (isTopTen && !isTelevision() && index < 10) {
+                // Netflix Top 10 overlapping rank badge
+                val rankWrap = FrameLayout(this).apply { clipChildren = false }
+                rankWrap.addView(posterContainer, FrameLayout.LayoutParams(cardWidth, cardHeight, Gravity.END))
+                rankWrap.addView(TextView(this).apply {
+                    text = "${index + 1}"
+                    textSize = 46f
+                    typeface = android.graphics.Typeface.DEFAULT_BOLD
+                    setTextColor(0xF2FFFFFF.toInt())
+                    setShadowLayer(dp(6).toFloat(), 0f, dp(2).toFloat(), Color.BLACK)
+                }, FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM or Gravity.START).apply {
+                    setMargins(dp(2), 0, 0, -dp(6))
+                })
+                card.addView(rankWrap, LinearLayout.LayoutParams(cardWidth + dp(18), cardHeight))
+            } else {
+                card.addView(posterContainer, LinearLayout.LayoutParams(cardWidth, cardHeight))
+            }
+
+            // Card title under poster (clean Netflix style: Continue Watching / YouTube / TV always show title; phone posters show title cleanly)
+            if (isContinueWatching && !isYouTube && !isTelevision()) {
+                val footer = LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    background = rounded(NETFLIX_SURFACE, radius = dp(4).toFloat())
+                    setPadding(dp(8), dp(6), dp(6), dp(6))
+                }
+                footer.addView(label((if (item.json.optBoolean("played")) "✓ " else "") + item.title, 11.5f, bold = true).apply {
+                    maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
+                }, LinearLayout.LayoutParams(0, -2, 1f))
+                card.addView(footer, LinearLayout.LayoutParams(cardWidth, -2).apply { topMargin = dp(2) })
+            } else {
+                card.addView(label((if (item.json.optBoolean("played")) "✓ " else "") + item.title, if (isTelevision()) 12.5f else 11f, bold = true).apply {
+                    maxLines = if (isYouTube) 2 else 1; ellipsize = android.text.TextUtils.TruncateAt.END
+                    setPadding(dp(2), dp(5), dp(2), 0)
+                })
+            }
 
             // Subtitle for YouTube (channel title)
             val subText = if (isYouTube) item.json.optString("seriesName").ifBlank { item.json.optString("channelTitle") } else ""
@@ -1756,7 +1945,8 @@ class MainActivity : AppCompatActivity() {
                 })
             }
 
-            row.addView(card, LinearLayout.LayoutParams(cardWidth + card.paddingLeft + card.paddingRight, -2).apply { setMargins(0, 0, dp(10), 0) })
+            val totalWidth = (if (isTopTen && !isTelevision() && index < 10) cardWidth + dp(18) else cardWidth) + card.paddingLeft + card.paddingRight
+            row.addView(card, LinearLayout.LayoutParams(totalWidth, -2).apply { setMargins(0, 0, dp(8), 0) })
         }
 
         parent.addView(HorizontalScrollView(this).apply {
@@ -1797,6 +1987,12 @@ class MainActivity : AppCompatActivity() {
                 }
             }
             headerArea.addView(backdropView, FrameLayout.LayoutParams(-1, -1))
+            headerArea.addView(View(this).apply {
+                background = GradientDrawable(
+                    GradientDrawable.Orientation.TOP_BOTTOM,
+                    intArrayOf(0x00080808, 0x33080808, INK)
+                )
+            }, FrameLayout.LayoutParams(-1, dp(90), Gravity.BOTTOM))
 
             // Stream trailer preview via yt-dlp proxy using native ExoPlayer (zero YouTube iframe/WebView)
             val trailerKey = full.trailerKey.ifBlank {
@@ -1959,21 +2155,24 @@ class MainActivity : AppCompatActivity() {
 
         fun updateTabs() {
             tabHeader.removeAllViews()
-            val t1 = TextView(this).apply {
-                text = tab1Title; textSize = 14f; typeface = android.graphics.Typeface.DEFAULT_BOLD
-                setTextColor(if (selectedTab == 0) Color.WHITE else MUTED)
-                setPadding(0, dp(8), dp(20), dp(8))
-                setOnClickListener { selectedTab = 0; updateTabs(); if (isTelevision()) tabHeader.getChildAt(0)?.requestFocus() }
+            fun makeTab(title: String, index: Int): LinearLayout {
+                val active = selectedTab == index
+                return column().apply {
+                    setPadding(0, 0, dp(24), 0)
+                    if (isTelevision()) focusableCard(Color.TRANSPARENT)
+                    addView(View(this@MainActivity).apply {
+                        setBackgroundColor(if (active) RED else Color.TRANSPARENT)
+                    }, LinearLayout.LayoutParams(-1, dp(3)))
+                    addView(TextView(this@MainActivity).apply {
+                        text = title; textSize = 14f; typeface = android.graphics.Typeface.DEFAULT_BOLD
+                        setTextColor(if (active) Color.WHITE else MUTED)
+                        setPadding(0, dp(10), 0, dp(10))
+                    })
+                    setOnClickListener { selectedTab = index; updateTabs(); if (isTelevision()) tabHeader.getChildAt(index)?.requestFocus() }
+                }
             }
-            val t2 = TextView(this).apply {
-                text = tab2Title; textSize = 14f; typeface = android.graphics.Typeface.DEFAULT_BOLD
-                setTextColor(if (selectedTab == 1) Color.WHITE else MUTED)
-                setPadding(dp(10), dp(8), dp(20), dp(8))
-                setOnClickListener { selectedTab = 1; updateTabs(); if (isTelevision()) tabHeader.getChildAt(1)?.requestFocus() }
-            }
-            if (isTelevision()) { t1.focusableCard(); t2.focusableCard() }
-            tabHeader.addView(t1)
-            tabHeader.addView(t2)
+            tabHeader.addView(makeTab(tab1Title, 0))
+            tabHeader.addView(makeTab(tab2Title, 1))
 
             subContent.removeAllViews()
             if (selectedTab == 0) {
@@ -2039,9 +2238,8 @@ class MainActivity : AppCompatActivity() {
             episodes.forEach { ep ->
                 val canPlayEp = ep.isAvailableForPlayback
                 val epCard = column().apply {
-                    background = rounded(0x11FFFFFF.toInt(), radius = dp(8).toFloat())
+                    focusableCard(NETFLIX_SURFACE)
                     setPadding(dp(10), dp(10), dp(10), dp(10))
-                    focusableCard()
                     setOnClickListener {
                         if (canPlayEp) {
                             play(Media(JSONObject(ep.json.toString()).put("seriesId", full.playbackId).put("seriesName", full.title)))
@@ -2055,7 +2253,7 @@ class MainActivity : AppCompatActivity() {
                     orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
                 }
 
-                // 16:9 Episode Thumbnail with duration badge and play icon
+                // 16:9 Episode Thumbnail with duration badge, play icon, and flush progress bar
                 val thumbBox = FrameLayout(this).apply {
                     background = rounded(0xFF222222.toInt(), radius = dp(6).toFloat())
                     clipToOutline = true
@@ -2072,10 +2270,19 @@ class MainActivity : AppCompatActivity() {
                 // Play icon overlay
                 val playOverlay = ImageView(this).apply {
                     setImageResource(R.drawable.ic_play_arrow)
-                    background = rounded(if (canPlayEp) 0x88000000.toInt() else 0xCCE50914.toInt(), radius = dp(14).toFloat())
-                    setPadding(dp(4), dp(4), dp(4), dp(4))
+                    background = GradientDrawable().apply {
+                        shape = GradientDrawable.OVAL
+                        setColor(if (canPlayEp) 0x99000000.toInt() else 0xCCE50914.toInt())
+                        setStroke(dp(1), 0xAAFFFFFF.toInt())
+                    }
+                    setPadding(dp(5), dp(5), dp(5), dp(5))
                 }
-                thumbBox.addView(playOverlay, FrameLayout.LayoutParams(dp(28), dp(28), Gravity.CENTER))
+                thumbBox.addView(playOverlay, FrameLayout.LayoutParams(dp(30), dp(30), Gravity.CENTER))
+
+                val total = ep.json.optLong("totalDurationTicks")
+                val percent = if (ep.json.optBoolean("played")) 100 else if (total > 0)
+                    ((ep.json.optLong("playbackPositionTicks").toDouble() / total) * 100).toInt().coerceIn(0, 100)
+                    else ep.json.optInt("progressPercent").coerceIn(0, 100)
 
                 val duration = ep.json.optInt("durationMinutes").takeIf { it > 0 } ?: 45
                 val durBadge = TextView(this).apply {
@@ -2084,10 +2291,19 @@ class MainActivity : AppCompatActivity() {
                     setPadding(dp(4), dp(1), dp(4), dp(1))
                 }
                 thumbBox.addView(durBadge, FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM or Gravity.END).apply {
-                    setMargins(0, 0, dp(4), dp(4))
+                    setMargins(0, 0, dp(4), if (percent > 0) dp(6) else dp(4))
                 })
 
-                topRow.addView(thumbBox, LinearLayout.LayoutParams(dp(125), dp(72)))
+                if (percent > 0) {
+                    thumbBox.addView(ProgressBar(this@MainActivity, null, android.R.attr.progressBarStyleHorizontal).apply {
+                        max = 100; progress = percent
+                        progressTintList = ColorStateList.valueOf(RED)
+                        progressBackgroundTintList = ColorStateList.valueOf(0x44FFFFFF)
+                        isFocusable = false; contentDescription = "$percent percent watched"
+                    }, FrameLayout.LayoutParams(-1, dp(3), Gravity.BOTTOM))
+                }
+
+                topRow.addView(thumbBox, LinearLayout.LayoutParams(dp(128), dp(72)))
 
                 // Episode Number, Title, Overview
                 val titleCol = column().apply {
@@ -2122,19 +2338,6 @@ class MainActivity : AppCompatActivity() {
                 }
 
                 epCard.addView(topRow, LinearLayout.LayoutParams(-1, -2))
-                val total = ep.json.optLong("totalDurationTicks")
-                val percent = if (ep.json.optBoolean("played")) 100 else if (total > 0)
-                    ((ep.json.optLong("playbackPositionTicks").toDouble() / total) * 100).toInt().coerceIn(0, 100)
-                    else ep.json.optInt("progressPercent").coerceIn(0, 100)
-                epCard.addView(ProgressBar(this@MainActivity, null, android.R.attr.progressBarStyleHorizontal).apply {
-                    max = 100; progress = percent
-                    progressTintList = ColorStateList.valueOf(RED)
-                    progressBackgroundTintList = ColorStateList.valueOf(0x44FFFFFF)
-                    isFocusable = false; contentDescription = "$percent percent watched"
-                }, LinearLayout.LayoutParams(-1, dp(4)).apply { topMargin = dp(10) })
-                epCard.addView(label(if (percent == 100) "Watched" else "$percent% watched", 10.5f).apply {
-                    setTextColor(MUTED); setPadding(0, dp(4), 0, 0)
-                })
                 episodesContainer.addView(epCard, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
             }
         }
@@ -3436,27 +3639,46 @@ class MainActivity : AppCompatActivity() {
             val timeGreeting = if (hour in 5..11) "Good morning" else if (hour in 12..17) "Good afternoon" else "Good evening"
             val userProfile = settings.profileName.ifBlank { "Nathan" }
 
+            val heroHeader = column().apply {
+                background = GradientDrawable(
+                    GradientDrawable.Orientation.TOP_BOTTOM,
+                    intArrayOf(0xFF1E3B2B.toInt(), SPOTIFY_BG)
+                )
+                setPadding(gutter, dp(12), gutter, dp(8))
+            }
+
             val titleBar = LinearLayout(this).apply {
-                gravity = Gravity.CENTER_VERTICAL; setPadding(gutter, dp(12), gutter, dp(4))
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(0, 0, 0, dp(6))
             }
             val titleCol = column().apply { layoutParams = LinearLayout.LayoutParams(0, -2, 1f) }
             titleCol.addView(label("$timeGreeting, $userProfile", 24f, true))
             titleCol.addView(TextView(this).apply {
-                text = "Music Hub • Per-Profile Library"
+                text = "Music Library"
                 textSize = 12f
-                setTextColor(SPOTIFY_GREEN)
+                setTextColor(SPOTIFY_GREEN_BRIGHT)
                 typeface = android.graphics.Typeface.DEFAULT_BOLD
                 setPadding(0, dp(2), 0, 0)
             })
             titleBar.addView(titleCol)
-            content.addView(titleBar)
-
-            content.addView(LinearLayout(this).apply {
-                gravity = Gravity.CENTER_VERTICAL
-                setPadding(gutter, dp(4), gutter, dp(4))
-                addView(musicImportIndicator(), LinearLayout.LayoutParams(0, -2, 1f))
-                addView(action("Download collection") { downloadMusic("HomeStream Music.zip") })
+            titleBar.addView(TextView(this).apply {
+                text = "Download ZIP"
+                textSize = 11.5f
+                typeface = android.graphics.Typeface.DEFAULT_BOLD
+                setTextColor(Color.WHITE)
+                background = rounded(0x26FFFFFF, stroke = 0x33FFFFFF, radius = dp(16).toFloat(), strokeWidth = dp(1))
+                setPadding(dp(12), dp(6), dp(12), dp(6))
+                setOnClickListener { downloadMusic("HomeStream Music.zip") }
             })
+            heroHeader.addView(titleBar)
+
+            heroHeader.addView(LinearLayout(this).apply {
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(0, dp(2), 0, dp(4))
+                addView(musicImportIndicator(), LinearLayout.LayoutParams(0, -2, 1f))
+            })
+            content.addView(heroHeader)
+
             if (isTelevision()) {
                 hubFilters(listOf("albums" to "Albums", "artists" to "Artists", "songs" to "Songs", "playlists" to "Playlists"), musicCategory) {
                     musicCategory = it; musicArtist = null; selectedPlaylistId = null; mediaHub(tab)
@@ -3494,8 +3716,10 @@ class MainActivity : AppCompatActivity() {
             setText(if (tab == "music") musicQuery else hubQuery)
         }
         input.background = android.graphics.drawable.StateListDrawable().apply {
-            addState(intArrayOf(android.R.attr.state_focused), rounded(0xFF222222.toInt(), if (music) SPOTIFY_GREEN else 0xFF777777.toInt(), dp(12).toFloat()))
-            addState(intArrayOf(), rounded(0xFF1D1D1D.toInt(), radius = dp(12).toFloat()))
+            val radius = dp(if (music) 24 else 12).toFloat()
+            val bg = if (music) SPOTIFY_ELEVATED else 0xFF1D1D1D.toInt()
+            addState(intArrayOf(android.R.attr.state_focused), rounded(0xFF2C2C2C.toInt(), if (music) SPOTIFY_GREEN else 0xFF777777.toInt(), radius))
+            addState(intArrayOf(), rounded(bg, radius = radius))
         }
         input.setCompoundDrawablesWithIntrinsicBounds(R.drawable.nav_search, 0, 0, 0)
         input.compoundDrawableTintList = ColorStateList.valueOf(if (music) SPOTIFY_GREEN else MUTED)
@@ -3573,7 +3797,7 @@ class MainActivity : AppCompatActivity() {
                                 val artists = musicAlbums.groupBy { it.artist }.toSortedMap(String.CASE_INSENSITIVE_ORDER)
                                 val selected = musicArtist
                                 if (selected == null) artworkGrid(staged, artists.map { (artist, albums) ->
-                                    ArtworkTile(artist, "${albums.size} ${if (albums.size == 1) "album" else "albums"}", albumArtwork(albums.first())) {
+                                    ArtworkTile(artist, "${albums.size} ${if (albums.size == 1) "album" else "albums"}", albumArtwork(albums.first()), circular = true) {
                                         musicArtist = artist; mediaHub("music")
                                     }
                                 }) else {
@@ -3644,53 +3868,67 @@ class MainActivity : AppCompatActivity() {
                 val data = api.call("music/album", mapOf("albumId" to album.id))
                 val current = MusicAlbum(data.getJSONObject("album"))
                 val tracks = data.objects("tracks").map(::MusicTrack)
-                val form = column().apply { setPadding(dp(20), dp(16), dp(20), dp(16)) }
-                val albumHeader = LinearLayout(this@MainActivity).apply {
-                    gravity = Gravity.CENTER_VERTICAL; setPadding(0, 0, 0, dp(14))
+                val form = column().apply {
+                    background = GradientDrawable(
+                        GradientDrawable.Orientation.TOP_BOTTOM,
+                        intArrayOf(0xFF1E3A2B.toInt(), SPOTIFY_BG, SPOTIFY_BG)
+                    )
+                    setPadding(dp(20), dp(20), dp(20), dp(16))
                 }
-                albumHeader.addView(LibraryArtwork(this@MainActivity).apply { show(albumArtwork(current)) }, LinearLayout.LayoutParams(dp(96), dp(96)))
-                albumHeader.addView(column().apply {
-                    setPadding(dp(14), 0, 0, 0)
-                    addView(label(current.title, 18f, true))
-                    addView(label(current.artist, 14f).apply { setTextColor(SPOTIFY_GREEN); typeface = android.graphics.Typeface.DEFAULT_BOLD; setPadding(0, dp(2), 0, 0) })
-                    addView(label("${releaseLabel(current.json.optString("releaseDate").ifBlank { current.json.optString("year") })} • ${tracks.size.takeIf { it > 0 } ?: current.trackCount} tracks", 12f).apply { setTextColor(MUTED); setPadding(0, dp(2), 0, 0) })
-                }, LinearLayout.LayoutParams(0, -2, 1f))
+                val albumHeader = column().apply {
+                    gravity = Gravity.CENTER_HORIZONTAL; setPadding(0, 0, 0, dp(16))
+                }
+                albumHeader.addView(LibraryArtwork(this@MainActivity).apply {
+                    elevation = dp(12).toFloat()
+                    show(albumArtwork(current))
+                }, LinearLayout.LayoutParams(dp(168), dp(168)).apply { bottomMargin = dp(14) })
+                albumHeader.addView(label(current.title, 20f, true).apply {
+                    gravity = Gravity.CENTER_HORIZONTAL
+                })
+                albumHeader.addView(label(current.artist, 14f, true).apply {
+                    setTextColor(SPOTIFY_GREEN_BRIGHT); setPadding(0, dp(4), 0, 0)
+                    gravity = Gravity.CENTER_HORIZONTAL
+                })
+                albumHeader.addView(label("${releaseLabel(current.json.optString("releaseDate").ifBlank { current.json.optString("year") })} • ${tracks.size.takeIf { it > 0 } ?: current.trackCount} tracks", 12f).apply {
+                    setTextColor(MUTED); setPadding(0, dp(2), 0, 0)
+                    gravity = Gravity.CENTER_HORIZONTAL
+                })
                 form.addView(albumHeader)
 
                 val dialog = AlertDialog.Builder(this@MainActivity)
-                    .setView(ScrollView(this@MainActivity).apply { addView(form) })
+                    .setView(ScrollView(this@MainActivity).apply {
+                        setBackgroundColor(SPOTIFY_BG)
+                        addView(form)
+                    })
                     .setNegativeButton("Close", null)
                     .create()
 
-                // Actions row
+                // Spotify-style Actions row
                 if (current.inLibrary && tracks.isNotEmpty()) {
-                    // Big green Spotify Play button
-                    val playBtn = Button(this@MainActivity).apply {
-                        text = "▶  Play Album"
-                        textSize = 14f
-                        typeface = android.graphics.Typeface.DEFAULT_BOLD
-                        setTextColor(Color.BLACK)
-                        isAllCaps = false
-                        background = rounded(SPOTIFY_GREEN, radius = dp(24).toFloat())
-                        minHeight = dp(44); minimumHeight = dp(44)
-                        setOnClickListener {
-                            dialog.dismiss()
-                            startMusicTracks(tracks, current, 0)
-                        }
+                    val actionBar = LinearLayout(this@MainActivity).apply {
+                        orientation = LinearLayout.HORIZONTAL
+                        gravity = Gravity.CENTER_VERTICAL
+                        setPadding(0, 0, 0, dp(16))
                     }
-                    form.addView(playBtn, LinearLayout.LayoutParams(-1, dp(44)).apply { bottomMargin = dp(8) })
-
-                    form.addView(action("Download album ZIP") {
-                        downloadMusic("${current.artist} - ${current.title}.zip", "albumId" to current.id)
+                    val leftActions = LinearLayout(this@MainActivity).apply {
+                        orientation = LinearLayout.HORIZONTAL
+                        gravity = Gravity.CENTER_VERTICAL
+                    }
+                    leftActions.addView(TextView(this@MainActivity).apply {
+                        text = "⬇ ZIP"
+                        textSize = 12f; typeface = android.graphics.Typeface.DEFAULT_BOLD
+                        setTextColor(Color.WHITE)
+                        background = rounded(SPOTIFY_ELEVATED, radius = dp(18).toFloat())
+                        setPadding(dp(14), dp(8), dp(14), dp(8))
+                        layoutParams = LinearLayout.LayoutParams(-2, -2).apply { marginEnd = dp(8) }
+                        setOnClickListener { downloadMusic("${current.artist} - ${current.title}.zip", "albumId" to current.id) }
                     })
-
-                    val removeBtn = Button(this@MainActivity).apply {
-                        text = "Remove from My Profile"
+                    leftActions.addView(TextView(this@MainActivity).apply {
+                        text = "Remove"
                         textSize = 12f
                         setTextColor(MUTED)
-                        isAllCaps = false
-                        background = rounded(0x22FFFFFF.toInt(), radius = dp(8).toFloat())
-                        minHeight = dp(36); minimumHeight = dp(36)
+                        background = rounded(0x18FFFFFF, radius = dp(18).toFloat())
+                        setPadding(dp(14), dp(8), dp(14), dp(8))
                         setOnClickListener {
                             dialog.dismiss()
                             lifecycleScope.launch {
@@ -3703,8 +3941,24 @@ class MainActivity : AppCompatActivity() {
                                 }
                             }
                         }
+                    })
+                    actionBar.addView(leftActions, LinearLayout.LayoutParams(0, -2, 1f))
+
+                    val playBtn = ImageButton(this@MainActivity).apply {
+                        setImageResource(R.drawable.ic_play_arrow)
+                        imageTintList = ColorStateList.valueOf(Color.BLACK)
+                        contentDescription = "Play Album"
+                        background = GradientDrawable().apply {
+                            shape = GradientDrawable.OVAL
+                            setColor(SPOTIFY_GREEN)
+                        }
+                        setOnClickListener {
+                            dialog.dismiss()
+                            startMusicTracks(tracks, current, 0)
+                        }
                     }
-                    form.addView(removeBtn, LinearLayout.LayoutParams(-1, dp(36)).apply { bottomMargin = dp(14) })
+                    actionBar.addView(playBtn, LinearLayout.LayoutParams(dp(52), dp(52)))
+                    form.addView(actionBar)
                 } else if (current.isDownloaded && !current.inLibrary) {
                     val addBtn = Button(this@MainActivity).apply {
                         text = "+ Add to My Profile (Instant)"
@@ -4022,9 +4276,9 @@ class MainActivity : AppCompatActivity() {
 
         return LinearLayout(this).apply {
             gravity = Gravity.CENTER_VERTICAL
-            minimumHeight = dp(56)
+            minimumHeight = dp(58)
             setPadding(dp(12), dp(8), dp(12), dp(8))
-            focusableCard(if (track.isReady) 0xFF202020.toInt() else 0xFF181818.toInt())
+            focusableCard(if (track.isReady) SPOTIFY_SURFACE else 0xFF141414.toInt())
 
             addView(label((index + 1).toString(), 13f, true).apply {
                 setTextColor(if (track.isReady) Color.WHITE else MUTED)
@@ -6531,8 +6785,8 @@ class MainActivity : AppCompatActivity() {
         val card = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            background = rounded(0x18FFFFFF.toInt(), radius = dp(10).toFloat())
-            setPadding(dp(10), dp(10), dp(10), dp(10))
+            background = rounded(NETFLIX_SURFACE, stroke = NETFLIX_BORDER, radius = dp(10).toFloat(), strokeWidth = dp(1))
+            setPadding(dp(12), dp(10), dp(12), dp(10))
             layoutParams = LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) }
         }
 
