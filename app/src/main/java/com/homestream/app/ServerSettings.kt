@@ -29,7 +29,7 @@ class ServerSettings(context: Context, private val keyProvider: (() -> SecretKey
 
     var externalUrl: String
         get() = prefs.getString("externalUrl", "").orEmpty().ifBlank {
-            if (authType == "jellyfin" || authType == "remote") prefs.getString("url", "").orEmpty() else ""
+            if (authType == "remote") prefs.getString("url", "").orEmpty() else ""
         }
         set(value) { prefs.edit().putString("externalUrl", value.trim().trimEnd('/')).apply() }
 

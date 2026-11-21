@@ -36,40 +36,7 @@ object NetworkDiscovery {
                 }
             }
 
-            // 2. UDP Broadcast discovery on port 7359 (Jellyfin/HomeStream discovery protocol)
-            launch {
-                try {
-                    val socket = DatagramSocket().apply {
-                        soTimeout = 2000
-                        broadcast = true
-                    }
-                    val message = "who is JellyfinServer?".toByteArray()
-                    val packet = DatagramPacket(message, message.size, InetAddress.getByName("255.255.255.255"), 7359)
-                    socket.send(packet)
-
-                    val buffer = ByteArray(2048)
-                    val recvPacket = DatagramPacket(buffer, buffer.size)
-                    val endTime = System.currentTimeMillis() + 2500
-                    while (System.currentTimeMillis() < endTime && isActive) {
-                        try {
-                            socket.receive(recvPacket)
-                            val resp = String(recvPacket.data, 0, recvPacket.length)
-                            val json = JSONObject(resp)
-                            val addr = json.optString("Address").ifBlank { recvPacket.address.hostAddress }
-                            val serverName = json.optString("Name", "HomeStream Media Server")
-                            if (!addr.isNullOrBlank()) {
-                                val cleanHost = addr.replace("http://", "").replace("https://", "").split(':')[0]
-                                probeServer("http://$cleanHost:3000", cleanHost, onServerFound, seenUrls, serverName)
-                            }
-                        } catch (_: SocketTimeoutException) {
-                            break
-                        } catch (_: Exception) {}
-                    }
-                    socket.close()
-                } catch (_: Exception) {}
-            }
-
-            // 3. Scan the local Wi-Fi subnet (e.g. 192.168.1.x) in fast parallel batches
+            // 2. Scan the local Wi-Fi subnet (e.g. 192.168.1.x) in fast parallel batches
             val localSubnets = getLocalSubnets()
             for (subnet in localSubnets) {
                 // Scan 1 to 254 in parallel batches of 32

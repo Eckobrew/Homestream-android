@@ -19,7 +19,7 @@ data class Media(val json: JSONObject) {
     val backdrop: String get() = json.optString("backdropUrl")
         .ifBlank { json.optString("backdrop") }
         .ifBlank { poster }
-    val playbackId: String get() = json.optString("jellyfinId").ifBlank { id }
+    val playbackId: String get() = json.optString("nativeId").ifBlank { id }
     val downloadUrl: String get() = json.optString("downloadStreamUrl").ifBlank { json.optString("videoStreamUrl") }
     val isDownload: Boolean get() = (json.optBoolean("isDownloading") || json.optString("source") == "youtube" || downloadUrl.contains("/youtube/")) && downloadUrl.isNotBlank()
     val isVirtual: Boolean get() = json.optString("locationType") == "Virtual"
@@ -31,8 +31,8 @@ data class Media(val json: JSONObject) {
     val source: String get() = json.optString("source")
     val playable: Boolean get() = source == "youtube" || (json.optString("source") != "demo" && !isVirtual &&
         (isDownload || json.optString("status") == "available" || json.optString("status") == "partially_available" ||
-            json.optString("jellyfinId").isNotBlank() || (type == "Episode" && !id.startsWith("seerr-") && !id.startsWith("tmdb-"))))
-    val isAvailableForPlayback: Boolean get() = source == "youtube" || (!isVirtual && (isDownload || (playable && !isRequested && ((!id.startsWith("seerr-") && !id.startsWith("tmdb-")) || json.optString("jellyfinId").isNotBlank() || playableEpisodeId.isNotBlank()))))
+            json.optString("nativeId").isNotBlank() || (type == "Episode" && !id.startsWith("tmdb-"))))
+    val isAvailableForPlayback: Boolean get() = source == "youtube" || (!isVirtual && (isDownload || (playable && !isRequested && (!id.startsWith("tmdb-") || json.optString("nativeId").isNotBlank() || playableEpisodeId.isNotBlank()))))
     val metadata: String get() = listOf(json.optString("year").takeUnless { it == "0" }.orEmpty(),
         json.optString("rating"), json.optString("resolution"),
         json.optInt("durationMinutes").takeIf { it > 0 }?.let { "$it min" }.orEmpty()).filter { it.isNotBlank() }.joinToString("  •  ")

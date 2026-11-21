@@ -2145,7 +2145,7 @@ class MainActivity : AppCompatActivity() {
                 scaleType = ImageView.ScaleType.CENTER_CROP
                 load(api.absolute(item.poster)) { error(R.drawable.ic_homestream) }
             }, FrameLayout.LayoutParams(-1, -1))
-            if (!item.playable && (item.id.startsWith("seerr-") || item.id.startsWith("tmdb-") || item.source == "seerr" || item.source == "tmdb")) poster.addView(label("Request", 9f, true).apply {
+            if (!item.playable && (item.id.startsWith("tmdb-") || item.source == "tmdb")) poster.addView(label("Request", 9f, true).apply {
                 background = rounded(RED); setPadding(dp(5), dp(2), dp(5), dp(2))
             }, FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.START).apply { setMargins(dp(4), dp(4), 0, 0) })
             card.addView(poster, LinearLayout.LayoutParams(-1, dp(145))); posterAspect(poster)
@@ -2494,7 +2494,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun requestMediaTitle(media: Media, onSuccess: (() -> Unit)? = null) {
         val tmdb = if (media.tmdbId > 0) media.tmdbId else {
-            val strId = media.id.replace("^(?:seerr|tmdb)-(?:movie-|tv-)?".toRegex(), "")
+            val strId = media.id.replace("^tmdb-(?:movie-|tv-)?".toRegex(), "")
             strId.toIntOrNull() ?: 0
         }
         if (tmdb <= 0) {
@@ -2604,8 +2604,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun streamMedia(item: Media, parent: Media? = null) {
         val tmdb = if (item.tmdbId > 0) item.tmdbId else if (parent != null && parent.tmdbId > 0) parent.tmdbId else {
-            val rawId = (if (item.id.startsWith("seerr-") || item.id.startsWith("tmdb-")) item.id else parent?.id ?: item.id)
-                .replace("^(?:seerr|tmdb)-(?:movie-|tv-)?".toRegex(), "")
+            val rawId = (if (item.id.startsWith("tmdb-")) item.id else parent?.id ?: item.id)
+                .replace("^tmdb-(?:movie-|tv-)?".toRegex(), "")
             rawId.toIntOrNull() ?: 0
         }
         val isTv = item.type == "Series" || item.type == "Episode" || (parent != null && parent.type == "Series")
@@ -2815,7 +2815,7 @@ class MainActivity : AppCompatActivity() {
             text = "Local Server: ${currentLocal.ifBlank { "Not configured" }}"; textSize = 12f; setTextColor(Color.WHITE)
         })
         val authStatus = if (settings.authType == "device") "Device Pairing Token (Keystore secured)"
-            else if (settings.authType == "account" || settings.authType == "jellyfin") "HomeStream Account Authentication" else "Pre-shared Mobile Token"
+            else if (settings.authType == "account") "HomeStream Account Authentication" else "Pre-shared Mobile Token"
         infoBox.addView(TextView(this).apply {
             text = "Authentication: $authStatus"; textSize = 11f; setTextColor(0xFF10B981.toInt()); setPadding(0, dp(4), 0, dp(2))
         })
@@ -2860,7 +2860,7 @@ class MainActivity : AppCompatActivity() {
         dialog.show()
     }
 
-    private fun openJellyfinLoginDialog(
+    private fun openAccountLoginDialog(
         prefilledUrl: String = "",
         discoveredLocalUrl: String = "",
         discoveredName: String = ""
@@ -3181,7 +3181,7 @@ class MainActivity : AppCompatActivity() {
                 val entered = manualUrlInput.text.toString().trim().trimEnd('/')
                 if (entered.isBlank()) { manualUrlInput.error = "Enter a server URL"; return@setOnClickListener }
                 connectionDialog?.dismiss()
-                openJellyfinLoginDialog(prefilledUrl = entered)
+                openAccountLoginDialog(prefilledUrl = entered)
             }
         }
         manualRow.addView(manualUrlInput, LinearLayout.LayoutParams(0, -2, 1f).apply { marginEnd = dp(8) })
@@ -3194,7 +3194,7 @@ class MainActivity : AppCompatActivity() {
             setTextColor(Color.WHITE); isAllCaps = false
             background = rounded(0x28FFFFFF.toInt(), radius = dp(8).toFloat())
             minHeight = dp(40); minimumHeight = dp(40)
-            setOnClickListener { connectionDialog?.dismiss(); openJellyfinLoginDialog() }
+            setOnClickListener { connectionDialog?.dismiss(); openAccountLoginDialog() }
         }
         form.addView(externalLoginBtn, LinearLayout.LayoutParams(-1, dp(40)).apply { bottomMargin = dp(10) })
 
@@ -3250,7 +3250,7 @@ class MainActivity : AppCompatActivity() {
                     setOnClickListener {
                         discoveryJob?.cancel()
                         dialog.dismiss()
-                        openJellyfinLoginDialog(
+                        openAccountLoginDialog(
                             prefilledUrl = s.url,
                             discoveredLocalUrl = s.url,
                             discoveredName = s.name
@@ -5678,7 +5678,7 @@ class MainActivity : AppCompatActivity() {
         val json = JSONObject().apply {
             put("id", "yt-$vid")
             put("videoId", vid)
-            put("jellyfinId", "yt-$vid")
+            put("nativeId", "yt-$vid")
             put("playbackId", "yt-$vid")
             put("title", title)
             put("name", title)

@@ -54,13 +54,13 @@ class MainActivityTest {
             val extButton = allButtons.firstOrNull { it.text.toString().contains("External Server") }
             assertNotNull("Setup dialog must have an External Server option", extButton)
             extButton!!.performClick()
-            val jellyfinDialog = ShadowDialog.getLatestDialog()
-            assertNotNull(jellyfinDialog)
-            assertTrue(jellyfinDialog.isShowing)
-            val extInputs = descendants(jellyfinDialog.window!!.decorView).filterIsInstance<EditText>()
+            val nativeDialog = ShadowDialog.getLatestDialog()
+            assertNotNull(nativeDialog)
+            assertTrue(nativeDialog.isShowing)
+            val extInputs = descendants(nativeDialog.window!!.decorView).filterIsInstance<EditText>()
             // External URL, Username, Password
             assertTrue(extInputs.size >= 3)
-            jellyfinDialog.dismiss()
+            nativeDialog.dismiss()
             dialog.dismiss()
         }
     }

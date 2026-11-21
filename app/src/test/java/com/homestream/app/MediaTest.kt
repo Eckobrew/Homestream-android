@@ -12,7 +12,6 @@ class MediaTest {
         assertTrue(msToTicks(Long.MAX_VALUE) > 0)
     }
     @Test fun unavailableDiscoveryEpisodesCannotPlay() {
-        assertFalse(Media(JSONObject("""{"id":"seerr-ep-42-1-1","name":"Pilot"}""")).playable)
         assertFalse(Media(JSONObject("""{"id":"tmdb-ep-42-1-1","name":"Pilot"}""")).playable)
         assertFalse(Media(JSONObject("""{"id":"demo","source":"demo","status":"available"}""")).playable)
     }
@@ -22,22 +21,17 @@ class MediaTest {
         assertTrue(media.isDownload)
         assertEquals("/api/stream/download?hash=abc", media.downloadUrl)
     }
-    @Test fun jellyfinEpisodesUseCorrectPlaybackIdAndPosition() {
-        val media = Media(JSONObject("""{"id":"episode","jellyfinId":"jellyfin-id","name":"Pilot","playbackPositionTicks":1234500000}"""))
+    @Test fun nativeEpisodesUseCorrectPlaybackIdAndPosition() {
+        val media = Media(JSONObject("""{"id":"episode","nativeId":"native-id","name":"Pilot","playbackPositionTicks":1234500000}"""))
         assertTrue(media.playable)
-        assertEquals("jellyfin-id", media.playbackId)
+        assertEquals("native-id", media.playbackId)
         assertEquals(123450L, media.resumeMs)
         assertEquals("Pilot", media.title)
     }
-    @Test fun discoveryTitlesMatchedToJellyfinCanPlay() {
-        val matched = Media(JSONObject("""{"id":"seerr-movie-42","type":"Movie","status":"available","source":"jellyfin","jellyfinId":"real-file"}"""))
+    @Test fun discoveryTitlesMatchedToNativeCanPlay() {
+        val matched = Media(JSONObject("""{"id":"tmdb-movie-42","type":"Movie","status":"available","source":"native","nativeId":"real-file"}"""))
         assertTrue(matched.isAvailableForPlayback)
         assertEquals("real-file", matched.playbackId)
-        assertFalse(Media(JSONObject("""{"id":"seerr-movie-42","type":"Movie","status":"available"}""")).isAvailableForPlayback)
-
-        val tmdbMatched = Media(JSONObject("""{"id":"tmdb-movie-42","type":"Movie","status":"available","source":"jellyfin","jellyfinId":"real-file"}"""))
-        assertTrue(tmdbMatched.isAvailableForPlayback)
-        assertEquals("real-file", tmdbMatched.playbackId)
         assertFalse(Media(JSONObject("""{"id":"tmdb-movie-42","type":"Movie","status":"available"}""")).isAvailableForPlayback)
     }
 }

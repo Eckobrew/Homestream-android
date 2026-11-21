@@ -627,7 +627,7 @@ class PlayerActivity : AppCompatActivity() {
         val sTitle = intent.getStringExtra("seriesTitle")?.ifBlank { null } ?: media.json.optString("seriesName").ifBlank { media.title }
 
         val tmdb = intent.getIntExtra("tmdbId", 0).takeIf { it > 0 } ?: if (media.tmdbId > 0) media.tmdbId else {
-            val match = Regex("""^(?:seerr|tmdb)-(?:movie-|tv-|ep-)?(\d+)(?:-\d+-\d+)?$""").find(media.id)
+            val match = Regex("""^tmdb-(?:movie-|tv-|ep-)?(\d+)(?:-\d+-\d+)?$""").find(media.id)
             match?.groupValues?.get(1)?.toIntOrNull() ?: 0
         }
 
@@ -663,7 +663,7 @@ class PlayerActivity : AppCompatActivity() {
         val isTv = intent.getStringExtra("mediaType") == "tv" || media.type == "Series" || media.type == "Episode"
         val season = intent.getIntExtra("season", 0).takeIf { it > 0 } ?: media.json.optInt("seasonNumber", 1).coerceAtLeast(1)
         val tmdb = intent.getIntExtra("tmdbId", 0).takeIf { it > 0 } ?: media.tmdbId.takeIf { it > 0 }
-            ?: Regex("""^(?:seerr|tmdb)-(?:movie-|tv-|ep-)?(\d+)(?:-\d+-\d+)?$""").find(media.id)?.groupValues?.get(1)?.toIntOrNull()
+            ?: Regex("""^tmdb-(?:movie-|tv-|ep-)?(\d+)(?:-\d+-\d+)?$""").find(media.id)?.groupValues?.get(1)?.toIntOrNull()
         if (tmdb == null || tmdb <= 0) { showMessage("This title has no TMDB identifier."); return }
         negotiation?.cancel()
         negotiation = lifecycleScope.launch {
@@ -857,16 +857,16 @@ class PlayerActivity : AppCompatActivity() {
     private suspend fun resolvePlaybackId(): String {
         if (media.isDownload) return media.playbackId
         if (media.type in listOf("Series", "Season") && media.playableEpisodeId.isNotBlank()) return media.playableEpisodeId
-        if (media.type !in listOf("Series", "Season") && !media.playbackId.startsWith("seerr-") && !media.playbackId.startsWith("tmdb-")) return media.playbackId
+        if (media.type !in listOf("Series", "Season") && !media.playbackId.startsWith("tmdb-")) return media.playbackId
         val item = api.call("media/${Uri.encode(media.id)}").optJSONObject("item") ?: return media.playbackId
         item.optString("playableEpisodeId").takeIf { it.isNotBlank() }?.let { return it }
-        if (media.type !in listOf("Series", "Season")) item.optString("jellyfinId").takeIf { it.isNotBlank() }?.let { return it }
+        if (media.type !in listOf("Series", "Season")) item.optString("nativeId").takeIf { it.isNotBlank() }?.let { return it }
         val seasons = item.optJSONArray("seasons") ?: return media.playbackId
         for (i in 0 until seasons.length()) {
             val episodes = seasons.getJSONObject(i).optJSONArray("episodes") ?: continue
             for (j in 0 until episodes.length()) {
                 val episode = Media(episodes.getJSONObject(j))
-                if (episode.isAvailableForPlayback && !episode.playbackId.startsWith("seerr-") && !episode.playbackId.startsWith("tmdb-")) return episode.playbackId
+                if (episode.isAvailableForPlayback && !episode.playbackId.startsWith("tmdb-")) return episode.playbackId
             }
         }
         return media.playbackId
@@ -908,7 +908,7 @@ class PlayerActivity : AppCompatActivity() {
             try {
                 val targetId = resolvePlaybackId()
 
-                if (targetId.startsWith("seerr-") || targetId.startsWith("tmdb-") || media.isVirtual) {
+                if (targetId.startsWith("tmdb-") || media.isVirtual) {
                     startStreamingTorrentPipeline()
                     return@launch
                 }
@@ -1370,7 +1370,7 @@ class PlayerActivity : AppCompatActivity() {
         val epNum = intent.getIntExtra("episode", 0).takeIf { it > 0 } ?: item.json.optInt("episodeNumber", 1).coerceAtLeast(1)
         val sTitle = intent.getStringExtra("seriesTitle")?.ifBlank { null } ?: item.title
         val tmdb = intent.getIntExtra("tmdbId", 0).takeIf { it > 0 } ?: if (item.tmdbId > 0) item.tmdbId else {
-            val match = Regex("""^(?:seerr|tmdb)-(?:movie-|tv-|ep-)?(\d+)(?:-\d+-\d+)?$""").find(item.id)
+            val match = Regex("""^tmdb-(?:movie-|tv-|ep-)?(\d+)(?:-\d+-\d+)?$""").find(item.id)
             match?.groupValues?.get(1)?.toIntOrNull() ?: 0
         }
 
@@ -1430,7 +1430,7 @@ class PlayerActivity : AppCompatActivity() {
             } })
             .setStreamType(MediaInfo.STREAM_TYPE_BUFFERED).setMetadata(metadata).setMediaTracks(tracks)
             .setCustomData(JSONObject().put("itemId", id)
-                .put("streamItemId", if (tmdb > 0 && (isStreamingDownload || id.startsWith("tmdb-") || id.startsWith("seerr-"))) {
+                .put("streamItemId", if (tmdb > 0 && (isStreamingDownload || id.startsWith("tmdb-"))) {
                     if (isTv) "tmdb-ep-$tmdb-$sNum-$epNum" else "tmdb-movie-$tmdb"
                 } else id).put("loadId", java.util.UUID.randomUUID().toString()).put("media", item.json).put("playback", JSONObject(stream.toString()).apply {
                 put("transport", stream.optString("transport").ifBlank { if (Uri.parse(stream.optString("streamUrl")).path.orEmpty().endsWith(".m3u8", ignoreCase = true)) "HLS" else "file" })
@@ -2108,7 +2108,7 @@ class PlayerActivity : AppCompatActivity() {
         val recordedAt = System.currentTimeMillis()
         val paused = client?.isPaused ?: (player?.isPlaying == false)
         val launcherItem = episodes.items.firstOrNull { it.playbackId == activeId } ?: media
-        val launcherMedia = Media(JSONObject(launcherItem.json.toString()).put("id", activeId).put("jellyfinId", activeId))
+        val launcherMedia = Media(JSONObject(launcherItem.json.toString()).put("id", activeId).put("nativeId", activeId))
         val launcherDuration = knownDurationMs.takeIf { it > 0 } ?: player?.duration?.takeIf { it > 0 }
             ?: ticksToMs(launcherMedia.json.optLong("totalDurationTicks"))
         val launcherScope = if (isTelevision()) WatchNext.scope(ServerSettings(this)) else ""

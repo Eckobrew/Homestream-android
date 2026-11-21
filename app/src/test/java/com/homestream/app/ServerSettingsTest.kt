@@ -58,21 +58,21 @@ class ServerSettingsTest {
     }
 
     @Test
-    fun externalJellyfinLoginSavesCorrectTypeAndCredentials() {
+    fun externalAccountLoginSavesCorrectTypeAndCredentials() {
         val externalUrl = "https://homeflix.eckonet.uk"
-        val jfToken = "jellyfin_auth_token_xyz"
+        val accountToken = "account_auth_token_xyz"
         settings.saveServer(
             local = "",
             external = externalUrl,
-            token = jfToken,
-            type = "jellyfin",
+            token = accountToken,
+            type = "account",
             name = "Nathan"
         )
 
         assertEquals("", settings.localUrl)
         assertEquals(externalUrl, settings.externalUrl)
-        assertEquals(jfToken, settings.token)
-        assertEquals("jellyfin", settings.authType)
+        assertEquals(accountToken, settings.token)
+        assertEquals("account", settings.authType)
         assertEquals("Nathan", settings.serverName)
         assertEquals(externalUrl, settings.effectiveUrl)
     }
@@ -129,7 +129,7 @@ class ServerSettingsTest {
     }
 
     @Test fun manualPairingClearsPreviousExternalServer() {
-        settings.saveServer("", "https://old.example", "token123", "jellyfin")
+        settings.saveServer("", "https://old.example", "token123", "account")
         settings.save("http://new.local:3000", "newtoken")
         assertEquals("", settings.externalUrl)
         assertEquals("device", settings.authType)

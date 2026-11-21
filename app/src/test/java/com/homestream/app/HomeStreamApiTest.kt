@@ -151,21 +151,21 @@ class HomeStreamApiTest {
         val api = HomeStreamApi(settings("https://home.example:8443"))
         assertTrue(api.isServerUrl("/api/mobile/v1/stream"))
         assertTrue(api.isServerUrl("https://home.example:8443/api/stream"))
-        assertFalse(api.isServerUrl("https://jellyfin.example/api/stream/video"))
+        assertFalse(api.isServerUrl("https://native.example/api/stream/video"))
         assertFalse(api.isServerUrl("http://home.example:8443/api/stream"))
         assertFalse(api.isServerUrl("https://home.example:9443/api/stream"))
     }
     @Test fun mediaRedirectsDoNotForwardHouseholdCredentials() {
         MockWebServer().use { server ->
-            MockWebServer().use { jellyfin ->
-                server.enqueue(MockResponse().setResponseCode(302).setHeader("Location", jellyfin.url("/video")))
-                jellyfin.enqueue(MockResponse().setBody("video"))
+            MockWebServer().use { native ->
+                server.enqueue(MockResponse().setResponseCode(302).setHeader("Location", native.url("/video")))
+                native.enqueue(MockResponse().setBody("video"))
                 val api = HomeStreamApi(settings(server.url("/").toString()))
                 api.mediaClient().newCall(okhttp3.Request.Builder().url(server.url("/stream")).build()).execute().use {
                     assertEquals("video", it.body!!.string())
                 }
                 assertEquals("Bearer $token", server.takeRequest().getHeader("Authorization"))
-                assertNull(jellyfin.takeRequest().getHeader("Authorization"))
+                assertNull(native.takeRequest().getHeader("Authorization"))
             }
         }
     }
