@@ -272,6 +272,198 @@ class PlayerActivity : AppCompatActivity() {
 
     private var castingPresentation = false
     private lateinit var playbackRoot: FrameLayout
+    private var postPlayOverlay: FrameLayout? = null
+    private var postPlayTrailerPlayer: ExoPlayer? = null
+
+    private fun hidePostPlayOverlay() {
+        postPlayTrailerPlayer?.release()
+        postPlayTrailerPlayer = null
+        postPlayOverlay?.let { playbackRoot.removeView(it) }
+        postPlayOverlay = null
+    }
+
+    private fun showPostPlayOverlay() {
+        if (isFinishing || isDestroyed) return
+        hidePostPlayOverlay()
+        playerView.hideController()
+
+        val overlay = FrameLayout(this).apply {
+            setBackgroundColor(Color.BLACK)
+            isClickable = true
+            isFocusable = true
+        }
+        val trailerView = PlayerView(this).apply {
+            useController = false
+            resizeMode = androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+        }
+        overlay.addView(trailerView, FrameLayout.LayoutParams(-1, -1))
+
+        val scrim = View(this).apply {
+            background = GradientDrawable(
+                GradientDrawable.Orientation.TOP_BOTTOM,
+                intArrayOf(0xCC000000.toInt(), 0x55000000, 0xF2000000.toInt()),
+            )
+        }
+        overlay.addView(scrim, FrameLayout.LayoutParams(-1, -1))
+
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(24), dp(20), dp(24), dp(20))
+        }
+
+        val topRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        val titleCol = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val upNextLabel = TextView(this).apply {
+            text = "UP NEXT"
+            setTextColor(0xFFB3B3B3.toInt())
+            textSize = 11f
+            letterSpacing = 0.14f
+        }
+        val headingView = TextView(this).apply {
+            text = "More Like ${media.title}"
+            setTextColor(Color.WHITE)
+            textSize = 20f
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
+        }
+        titleCol.addView(upNextLabel)
+        titleCol.addView(headingView)
+        topRow.addView(titleCol, LinearLayout.LayoutParams(0, -2, 1f))
+
+        val replayBtn = TextView(this).apply {
+            text = "Replay"
+            setTextColor(Color.WHITE)
+            textSize = 13f
+            setPadding(dp(16), dp(9), dp(16), dp(9))
+            background = GradientDrawable().apply {
+                setColor(0xCC262626.toInt())
+                cornerRadius = dp(8).toFloat()
+            }
+            setOnClickListener {
+                hidePostPlayOverlay()
+                player?.seekTo(0)
+                player?.play()
+            }
+        }
+        val closeBtn = TextView(this).apply {
+            text = "Close"
+            setTextColor(Color.WHITE)
+            textSize = 13f
+            setPadding(dp(16), dp(9), dp(16), dp(9))
+            background = GradientDrawable().apply {
+                setColor(0xFFDC2626.toInt())
+                cornerRadius = dp(8).toFloat()
+            }
+            setOnClickListener {
+                hidePostPlayOverlay()
+                finish()
+            }
+        }
+        topRow.addView(replayBtn, LinearLayout.LayoutParams(-2, -2).apply { marginEnd = dp(10) })
+        topRow.addView(closeBtn, LinearLayout.LayoutParams(-2, -2))
+        content.addView(topRow, LinearLayout.LayoutParams(-1, -2))
+
+        content.addView(View(this), LinearLayout.LayoutParams(-1, 0, 1f))
+
+        val moreLabel = TextView(this).apply {
+            text = "MORE LIKE THIS"
+            setTextColor(0xFFB3B3B3.toInt())
+            textSize = 11f
+            letterSpacing = 0.12f
+            setPadding(0, 0, 0, dp(8))
+        }
+        val recRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val recScroll = android.widget.HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+            addView(recRow)
+        }
+        content.addView(moreLabel)
+        content.addView(recScroll, LinearLayout.LayoutParams(-1, -2))
+
+        overlay.addView(content, FrameLayout.LayoutParams(-1, -1))
+        playbackRoot.addView(overlay, FrameLayout.LayoutParams(-1, -1))
+        postPlayOverlay = overlay
+
+        lifecycleScope.launch {
+            val recs = runCatching {
+                api.call("media/${Uri.encode(media.id)}/recommendations").mediaList("items").take(10)
+            }.getOrDefault(emptyList())
+            if (postPlayOverlay !== overlay || recs.isEmpty()) return@launch
+
+            headingView.text = recs.first().title
+            recs.forEach { rec ->
+                val card = FrameLayout(this@PlayerActivity).apply {
+                    background = GradientDrawable().apply {
+                        setColor(0xFF171717.toInt())
+                        cornerRadius = dp(8).toFloat()
+                        setStroke(dp(1), 0xFF333333.toInt())
+                    }
+                    clipToOutline = true
+                    setOnClickListener {
+                        hidePostPlayOverlay()
+                        startActivity(
+                            android.content.Intent(this@PlayerActivity, PlayerActivity::class.java)
+                                .putExtra("mediaId", rec.id)
+                                .putExtra("mediaType", if (rec.type == "Series") "tv" else "movie"),
+                        )
+                        finish()
+                    }
+                }
+                val cardScrim = LinearLayout(this@PlayerActivity).apply {
+                    orientation = LinearLayout.VERTICAL
+                    gravity = Gravity.BOTTOM
+                    setPadding(dp(8), dp(8), dp(8), dp(8))
+                    background = GradientDrawable(
+                        GradientDrawable.Orientation.TOP_BOTTOM,
+                        intArrayOf(0x00000000, 0xE6000000.toInt()),
+                    )
+                }
+                cardScrim.addView(TextView(this@PlayerActivity).apply {
+                    text = rec.title
+                    setTextColor(Color.WHITE)
+                    textSize = 12f
+                    setTypeface(typeface, android.graphics.Typeface.BOLD)
+                    maxLines = 1
+                    ellipsize = android.text.TextUtils.TruncateAt.END
+                })
+                cardScrim.addView(TextView(this@PlayerActivity).apply {
+                    text = "Play now"
+                    setTextColor(0xFFD4D4D4.toInt())
+                    textSize = 10f
+                    maxLines = 1
+                })
+                card.addView(cardScrim, FrameLayout.LayoutParams(-1, -1))
+                recRow.addView(card, LinearLayout.LayoutParams(dp(136), dp(136)).apply { marginEnd = dp(10) })
+            }
+
+            val lead = recs.first()
+            val q = "title=${Uri.encode(lead.title)}&type=${if (lead.type == "Series") "tv" else "movie"}" +
+                if (lead.tmdbId > 0) "&tmdbId=${lead.tmdbId}" else ""
+            val trKey = runCatching {
+                val resp = api.call("trailer?$q")
+                resp.optJSONObject("trailer")?.optString("key")?.takeIf { it.isNotBlank() }
+                    ?: resp.optString("trailerKey").takeIf { it.isNotBlank() }
+                    ?: resp.optString("key").takeIf { it.isNotBlank() }
+            }.getOrNull()
+
+            if (postPlayOverlay === overlay && !trKey.isNullOrBlank()) {
+                val streamUrl = "${ServerSettings(this@PlayerActivity).baseUrl.trimEnd('/')}/api/v1/youtube/stream-video?videoId=${Uri.encode(trKey)}"
+                val exo = ExoPlayer.Builder(this@PlayerActivity).build().apply {
+                    volume = 0f
+                    repeatMode = Player.REPEAT_MODE_ONE
+                    setMediaItem(MediaItem.fromUri(streamUrl))
+                    prepare()
+                    playWhenReady = true
+                }
+                trailerView.player = exo
+                postPlayTrailerPlayer = exo
+            }
+        }
+    }
 
     private fun setPlaybackPresentation(casting: Boolean) {
         castingPresentation = casting
@@ -1094,7 +1286,14 @@ class PlayerActivity : AppCompatActivity() {
                                 val totalDur = knownDurationMs.takeIf { it > 0 }
                                     ?: ((if (isTranscodingStream) hlsStartOffsetMs else 0L) + exo.duration.coerceAtLeast(0))
                                 position = totalDur; report(true)
-                                if (autoplay) changeEpisode(1, automatic = true)
+                                if (autoplay) {
+                                    changeEpisode(1, automatic = true)
+                                } else {
+                                    lifecycleScope.launch {
+                                        loadEpisodeContextNow()
+                                        if (episodes.next(currentPlaybackId) == null) showPostPlayOverlay()
+                                    }
+                                }
                             }
                         }
                         override fun onIsPlayingChanged(isPlaying: Boolean) {
@@ -1504,7 +1703,11 @@ class PlayerActivity : AppCompatActivity() {
             loadEpisodeContextNow()
             val next = if (direction > 0) episodes.next(currentPlaybackId) else episodes.previous(currentPlaybackId)
             if (next == null) {
-                if (!automatic) Toast.makeText(this@PlayerActivity, "No further available episode.", Toast.LENGTH_SHORT).show()
+                if (automatic) {
+                    showPostPlayOverlay()
+                } else {
+                    Toast.makeText(this@PlayerActivity, "No further available episode.", Toast.LENGTH_SHORT).show()
+                }
                 return@launch
             }
             selectEpisode(next)
