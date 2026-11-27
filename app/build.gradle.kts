@@ -12,8 +12,8 @@ android {
         minSdk = 26
         targetSdk = 35
         buildConfigField("String", "CAST_RECEIVER_APP_ID", "\"$customCastReceiverId\"")
-        versionCode = 16
-        versionName = "1.0.1"
+        versionCode = 17
+        versionName = "1.1"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     val releaseStorePath = providers.gradleProperty("HOMESTREAM_KEYSTORE_PATH").orNull ?: System.getenv("HOMESTREAM_KEYSTORE_PATH")
